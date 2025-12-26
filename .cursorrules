@@ -1,6 +1,6 @@
 # GitHub Copilot Instructions
 
 ## Environment Setup
-- Always run code using the virtual environment named 'kaya_chatbot' located in the `kaya_chatbot/` directory
+- Always run code using the virtual environment named 'kaya_chatbot' located in the `kaya_chatbot_env/` directory
 - Ensure the virtual environment is activated before executing any Python scripts or commands
 - Always install Python packages within the 'kaya_chatbot' virtual environment«
