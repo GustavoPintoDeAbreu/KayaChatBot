@@ -1,0 +1,11 @@
+unsloth
+xformers
+trl
+peft
+accelerate
+bitsandbytes
+datasets
+pandas
+scipy
+sentencepiece
+protobuf

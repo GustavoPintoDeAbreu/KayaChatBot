@@ -1,0 +1,73 @@
+# Kaya ChatBot Fine-Tuning Configuration
+
+# Data Processing Settings
+data:
+  input_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\wpp\\WhatsApp Chat with Kaya 👀 - gugu.txt"
+  output_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\processed_chat.jsonl"
+  
+  # Token-based chunking settings
+  max_tokens_per_chunk: 2048  # Keep chunks smaller than max_seq_length for safety
+  overlap_tokens: 256  # Overlap between chunks for continuity
+  
+  # Data split
+  train_test_split: 0.9  # 90% train, 10% validation
+  
+  # Persona settings
+  system_prompt: "You are Kaya, an AI member of this group chat who has read all the conversation history. You can answer questions about what people said, their interests, inside jokes, and group dynamics. Always be helpful and accurate based on the chat history."
+
+# Model Settings
+model:
+  model_id: "unsloth/llama-3-8b-Instruct-bnb-4bit"
+  max_seq_length: 4096  # Maximum context length
+  load_in_4bit: true
+  
+  # LoRA settings
+  lora_r: 16
+  lora_alpha: 16
+  lora_dropout: 0
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training Settings
+training:
+  output_dir: "C:\\Users\\guga\\Desktop\\KayaChatBot\\models\\kaya_v1"
+  
+  # Training hyperparameters
+  max_steps: 500  # Increased from 60 for better training
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4  # Effective batch size = 2 * 4 = 8
+  
+  learning_rate: 0.0002  # 2e-4
+  warmup_steps: 50
+  weight_decay: 0.01
+  
+  # Optimization
+  optim: "adamw_8bit"
+  lr_scheduler_type: "cosine"  # Changed from linear for better convergence
+  
+  # Logging and checkpointing
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 50  # Evaluate every 50 steps
+  
+  # Mixed precision
+  fp16: false  # Will be auto-detected
+  bf16: false  # Will be auto-detected
+  
+  # Other
+  seed: 3407
+  dataset_num_proc: 2
+  packing: false
+
+# Inference Settings
+inference:
+  max_new_tokens: 256
+  temperature: 0.7
+  top_p: 0.9
+  repetition_penalty: 1.1
