@@ -157,11 +157,21 @@ class KayaTrainer:
             print(f"   • Validation samples: {len(eval_dataset)}")
         print()
 
+        # Formatting function to extract pre-formatted text from dataset
+        def formatting_func(examples):
+            """Extract the formatted_text field from batched examples."""
+            # Handle both single example and batched examples
+            if isinstance(examples["formatted_text"], list):
+                return examples["formatted_text"]
+            else:
+                return [examples["formatted_text"]]
+
         trainer = SFTTrainer(
             model=self.model,
             tokenizer=self.tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            formatting_func=formatting_func,
             dataset_text_field="formatted_text",
             max_seq_length=self.max_seq_length,
             dataset_num_proc=config.get("dataset_num_proc", 2),

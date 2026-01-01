@@ -1,0 +1,45 @@
+services:
+  kaya-chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kaya-chatbot:latest
+    container_name: kaya-chatbot
+    
+    # Enable single GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # Mount volumes (Windows paths mapped to Linux paths)
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./src:/app/src:ro
+      - ./config.docker.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro  # Mount .env file
+    
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    
+    # Environment variables for GPU and caching
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models/.cache
+      - TRANSFORMERS_CACHE=/app/models/.cache
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+    
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    
+    working_dir: /app
+    
+    # Runtime configuration
+    runtime: nvidia
