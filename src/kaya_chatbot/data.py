@@ -1,8 +1,12 @@
 import re
 import os
+import json
+import random
 from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 from transformers import AutoTokenizer
+from datetime import datetime
+from pathlib import Path
 
 
 @dataclass
@@ -43,15 +47,16 @@ class WhatsAppReader:
         # Remove mentions (@\u2068...\u2069)
         text = re.sub(r"@\u2068.*?\u2069", "", text)
 
-        # Remove emojis (optional, keeping for now as they add context,
-        # but user previously asked to remove. I will keep them for "persona"
-        # unless strictly requested to remove again, but the previous notebook removed them.
-        # I'll add a flag or just stick to the previous logic for consistency.)
-        # The previous logic: text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
-        # I will comment it out for now to allow more expression, but can be enabled.
-        # text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
-
-        return text.strip()
+        text = text.strip()
+        
+        # Filter out very short messages (< 3 words) unless they contain substance
+        word_count = len(text.split())
+        if word_count < 3 and text.lower() not in ['lol', 'ahah', 'ahahah', 'ok', 'ya', 'sim', 'não', 'nao']:
+            # Allow common short responses but filter random short stuff
+            if word_count == 1:
+                return None
+        
+        return text
 
     def read(self) -> List[ChatMessage]:
         """Reads the file and returns a list of ChatMessage objects."""
@@ -124,6 +129,110 @@ class WhatsAppReader:
         return messages
 
 
+class InstagramReader:
+    """
+    Reads and cleans Instagram JSON export files.
+    Filters out noise (attachment spam, likes, shared posts) and extracts real conversations.
+    """
+
+    def __init__(self, json_path: str):
+        self.json_path = json_path
+        # Patterns to identify noise
+        self.attachment_pattern = re.compile(r".*sent an attachment\.$", re.IGNORECASE)
+        self.liked_pattern = re.compile(r".*liked a message$", re.IGNORECASE)
+        self.unsent_pattern = re.compile(r".*unsent .*", re.IGNORECASE)
+
+    def _decode_unicode(self, text: str) -> str:
+        """Decode unicode escape sequences like \\u00c3\\u00a3 -> ã"""
+        if not text:
+            return text
+        # Instagram JSON sometimes has double-encoded unicode
+        try:
+            # Try to encode as latin1 then decode as utf8 (common Instagram encoding issue)
+            return text.encode('latin1').decode('utf8')
+        except:
+            return text
+
+    def _clean_text(self, text: str) -> Optional[str]:
+        """Clean and filter Instagram message text."""
+        if not text or not text.strip():
+            return None
+        
+        text = text.strip()
+        
+        # Skip attachment notifications
+        if self.attachment_pattern.match(text):
+            return None
+        
+        # Skip "liked a message" actions
+        if self.liked_pattern.match(text):
+            return None
+        
+        # Skip unsent messages
+        if self.unsent_pattern.match(text):
+            return None
+        
+        # Remove Instagram URLs (usually shared content, not conversation)
+        text = re.sub(r'https?://(?:www\.)?instagram\.com/\S+', '', text)
+        text = re.sub(r'https?://\S+', '', text)  # Remove other URLs too
+        
+        text = text.strip()
+        
+        # Filter very short messages (likely just reactions or noise)
+        if len(text) < 3:
+            return None
+        
+        # Decode unicode escapes
+        text = self._decode_unicode(text)
+        
+        return text
+
+    def read(self) -> List[ChatMessage]:
+        """Reads Instagram JSON and returns list of ChatMessage objects."""
+        if not os.path.exists(self.json_path):
+            raise FileNotFoundError(f"File not found: {self.json_path}")
+        
+        with open(self.json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        messages = []
+        
+        # Extract participants (for reference, though we'll use sender_name from messages)
+        participants = data.get('participants', [])
+        
+        # Process messages
+        for msg in data.get('messages', []):
+            # Skip messages without content
+            if 'content' not in msg:
+                # Check if there's share_text we can use
+                if 'share' in msg and 'share_text' in msg['share']:
+                    content = msg['share'].get('share_text', '')
+                else:
+                    continue
+            else:
+                content = msg['content']
+            
+            # Clean the content
+            cleaned_content = self._clean_text(content)
+            if not cleaned_content:
+                continue
+            
+            # Extract sender
+            sender = msg.get('sender_name', 'Unknown')
+            
+            # Convert timestamp (milliseconds since epoch) to readable date
+            timestamp_ms = msg.get('timestamp_ms', 0)
+            if timestamp_ms:
+                date_obj = datetime.fromtimestamp(timestamp_ms / 1000)
+                date_str = date_obj.strftime('%m/%d/%y, %H:%M')
+            else:
+                date_str = 'Unknown'
+            
+            messages.append(ChatMessage(date_str, sender, cleaned_content))
+        
+        return messages
+
+
 class ConversationFormatter:
     """
     Formats chat messages for LLM training with token-based chunking.
@@ -158,6 +267,7 @@ class ConversationFormatter:
         """
         Creates instruction-formatted chunks based on token count.
         Format: System prompt + chat history chunk.
+        Now merges consecutive messages from the same sender.
 
         Args:
             system_prompt: The system instruction for the model.
@@ -165,10 +275,33 @@ class ConversationFormatter:
             overlap_tokens: Overlap between chunks for continuity.
         """
         dataset = []
-
-        # Build the full conversation text first
+        
+        # Merge consecutive messages from same sender
+        merged_messages = []
+        if self.messages:
+            current_sender = self.messages[0].sender
+            current_content = [self.messages[0].content]
+            current_date = self.messages[0].date
+            
+            for msg in self.messages[1:]:
+                if msg.sender == current_sender:
+                    # Same sender, merge
+                    current_content.append(msg.content)
+                else:
+                    # Different sender, save and start new
+                    merged_text = " ".join(current_content)
+                    merged_messages.append(ChatMessage(current_date, current_sender, merged_text))
+                    current_sender = msg.sender
+                    current_content = [msg.content]
+                    current_date = msg.date
+            
+            # Add last message
+            merged_text = " ".join(current_content)
+            merged_messages.append(ChatMessage(current_date, current_sender, merged_text))
+        
+        # Build the full conversation text from merged messages
         full_conversation = ""
-        for msg in self.messages:
+        for msg in merged_messages:
             full_conversation += f"{msg.sender}: {msg.content}\n"
 
         # Calculate token budget (reserve space for system prompt and formatting)
@@ -183,7 +316,7 @@ class ConversationFormatter:
         current_chunk = []
         current_tokens = 0
 
-        for msg in self.messages:
+        for msg in merged_messages:
             msg_text = f"{msg.sender}: {msg.content}\n"
             msg_tokens = self._count_tokens(msg_text)
 
@@ -247,3 +380,282 @@ class ConversationFormatter:
             formatted += f"<|start_header_id|>assistant<|end_header_id|>\n\n"
             formatted += f"{data_entry['text']}<|eot_id|>"
             return formatted
+
+
+class SyntheticDatasetMerger:
+    """
+    Merges Kaya-specific and general Portuguese synthetic datasets.
+    Applies ShareGPT formatting, shuffles, and splits train/validation.
+    """
+
+    def __init__(
+        self,
+        kaya_file: str = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_kaya.jsonl",
+        portuguese_file: str = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_portuguese.jsonl",
+        output_train: str = "C:/Users/guga/Desktop/KayaChatBot/data/train_synthetic.jsonl",
+        output_val: str = "C:/Users/guga/Desktop/KayaChatBot/data/val_synthetic.jsonl",
+        train_split: float = 0.9,
+        kaya_ratio: float = 0.8,  # Target ratio of Kaya data (0.0-1.0)
+    ):
+        self.kaya_file = Path(kaya_file)
+        self.portuguese_file = Path(portuguese_file)
+        self.output_train = Path(output_train)
+        self.output_val = Path(output_val)
+        self.train_split = train_split
+        self.kaya_ratio = kaya_ratio
+        self.tokenizer = None
+        
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
+            )
+        except:
+            print("Warning: Could not load tokenizer for chat template.")
+
+    def load_conversations(self, file_path: Path) -> List[Dict]:
+        """Load conversations from JSONL file."""
+        conversations = []
+        
+        if not file_path.exists():
+            print(f"⚠️  File not found: {file_path}")
+            return conversations
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    conv = json.loads(line)
+                    conversations.append(conv)
+                except Exception as e:
+                    print(f"⚠️  Error parsing line: {e}")
+                    continue
+        
+        return conversations
+
+    def clean_filler_words(self, text: str) -> str:
+        """
+        Clean excessive filler words from responses.
+        - Remove filler words from the start of responses
+        - Limit to max 1 occurrence of each filler per response
+        """
+        import re
+        
+        # Define filler patterns (case-insensitive)
+        fillers = ['ahahah', 'ahah', 'ahahha', 'wtf', 'lmao', 'lol']
+        
+        # Remove fillers from the very start of the text (with optional punctuation)
+        for filler in fillers:
+            # Match filler at start with optional comma/space
+            text = re.sub(rf'^{filler}[,\s]*', '', text, flags=re.IGNORECASE)
+        
+        # Limit each filler to max 1 occurrence
+        for filler in fillers:
+            # Find all occurrences
+            pattern = re.compile(rf'\b{filler}\b', flags=re.IGNORECASE)
+            matches = list(pattern.finditer(text))
+            
+            # If more than 1, keep only the last one (usually most natural)
+            if len(matches) > 1:
+                # Remove all but the last
+                for match in matches[:-1]:
+                    # Replace with space to avoid word concatenation
+                    start, end = match.span()
+                    text = text[:start] + ' ' * (end - start) + text[end:]
+        
+        # Clean up extra spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+
+    def format_conversation(self, conversation: Dict) -> Optional[str]:
+        """Format a conversation using Llama-3.1 chat template."""
+        
+        # Extract conversation turns
+        turns = conversation.get('conversations', [])
+        
+        if not turns or len(turns) < 2:
+            return None
+        
+        # Get system prompt - USE KAYA PERSONALITY PROMPT FOR ALL KAYA DATA
+        source = conversation.get('source', '')
+        if source == 'synthetic_kaya':
+            # Inject Kaya personality system prompt for all Kaya conversations
+            system_prompt = "You are a member of a Portuguese WhatsApp group. You speak informal European Portuguese with slang. You know the history of the group members. Use short, realistic WhatsApp messages."
+        else:
+            # Use provided system prompt for Portuguese instruction data
+            system_prompt = conversation.get('system', '')
+        
+        # Build messages for chat template
+        messages = []
+        
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        
+        # Add conversation turns
+        for turn in turns:
+            role = turn.get('role', '')
+            content = turn.get('content', '')
+            
+            if not content:
+                continue
+            
+            # Apply filler word cleaning to assistant responses
+            if role in ['assistant', 'gpt', 'bot']:
+                content = self.clean_filler_words(content)
+            
+            # Map role names
+            if role in ['user', 'human']:
+                messages.append({"role": "user", "content": content})
+            elif role in ['assistant', 'gpt', 'bot']:
+                messages.append({"role": "assistant", "content": content})
+        
+        # Validate: must have at least one user and one assistant message
+        has_user = any(m['role'] == 'user' for m in messages)
+        has_assistant = any(m['role'] == 'assistant' for m in messages)
+        
+        if not (has_user and has_assistant):
+            return None
+        
+        # Apply chat template
+        if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
+            try:
+                formatted = self.tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False,
+                    add_generation_prompt=False
+                )
+                return formatted
+            except Exception as e:
+                print(f"⚠️  Error applying chat template: {e}")
+                return None
+        else:
+            # Manual fallback for Llama-3.1 format
+            formatted = "<|begin_of_text|>"
+            
+            for msg in messages:
+                role = msg['role']
+                content = msg['content']
+                
+                formatted += f"<|start_header_id|>{role}<|end_header_id|>\n\n"
+                formatted += f"{content}<|eot_id|>"
+            
+            return formatted
+
+    def merge_and_split(self) -> tuple[int, int]:
+        """Merge datasets, apply formatting, shuffle, and split."""
+        
+        print("=" * 60)
+        print("🔄 MERGING SYNTHETIC DATASETS")
+        print("=" * 60)
+        
+        # Load Kaya-specific data
+        print(f"\n📂 Loading Kaya-specific data from {self.kaya_file.name}...")
+        kaya_conversations = self.load_conversations(self.kaya_file)
+        print(f"✅ Loaded {len(kaya_conversations)} Kaya conversations")
+        
+        # Load general Portuguese data
+        print(f"\n📂 Loading Portuguese data from {self.portuguese_file.name}...")
+        portuguese_conversations = self.load_conversations(self.portuguese_file)
+        print(f"✅ Loaded {len(portuguese_conversations)} Portuguese conversations")
+                # Apply ratio sampling to balance Kaya vs Portuguese
+        print(f"\n🎯 Applying ratio: {self.kaya_ratio*100:.0f}% Kaya / {(1-self.kaya_ratio)*100:.0f}% Portuguese")
+        
+        # Use all Kaya data (it's precious!)
+        kaya_count = len(kaya_conversations)
+        
+        # Calculate how many Portuguese examples we need for the target ratio
+        # Formula: kaya_count / total = kaya_ratio
+        # So: total = kaya_count / kaya_ratio
+        # And: portuguese_count = total - kaya_count
+        if self.kaya_ratio > 0 and kaya_count > 0:
+            target_total = int(kaya_count / self.kaya_ratio)
+            portuguese_needed = target_total - kaya_count
+            
+            # Sample Portuguese data to match ratio
+            if portuguese_needed < len(portuguese_conversations):
+                import random
+                random.seed(3407)
+                portuguese_conversations = random.sample(portuguese_conversations, portuguese_needed)
+                print(f"   🎲 Sampled {portuguese_needed} Portuguese examples (from {len(self.load_conversations(self.portuguese_file))} available)")
+            else:
+                print(f"   ⚠️  Using all {len(portuguese_conversations)} Portuguese examples (needed {portuguese_needed})")
+                # Combine all conversations
+        all_conversations = kaya_conversations + portuguese_conversations
+        print(f"\n📊 Total conversations: {len(all_conversations)}")
+        
+        if len(all_conversations) == 0:
+            print("\n❌ Error: No conversations to merge!")
+            print("   Make sure you have run:")
+            print("   1. python src/data/generate_synthetic_data.py")
+            print("   2. python src/data/prepare_portuguese_data.py")
+            return 0, 0
+        
+        print(f"   - Kaya-specific: {len(kaya_conversations)} ({len(kaya_conversations)/len(all_conversations)*100:.1f}%)")
+        print(f"   - General Portuguese: {len(portuguese_conversations)} ({len(portuguese_conversations)/len(all_conversations)*100:.1f}%)")
+        
+        # Format all conversations
+        print(f"\n🔄 Formatting conversations with Llama-3.1 chat template...")
+        formatted_data = []
+        
+        for i, conv in enumerate(all_conversations):
+            formatted = self.format_conversation(conv)
+            
+            if formatted:
+                formatted_data.append({
+                    'formatted_text': formatted,
+                    'source': conv.get('source', 'unknown'),
+                    'original': conv  # Keep original for debugging
+                })
+        
+        print(f"✅ Successfully formatted {len(formatted_data)}/{len(all_conversations)} conversations")
+        
+        # Shuffle
+        print(f"\n🎲 Shuffling dataset...")
+        random.shuffle(formatted_data)
+        
+        # Split train/validation
+        split_idx = int(len(formatted_data) * self.train_split)
+        train_data = formatted_data[:split_idx]
+        val_data = formatted_data[split_idx:]
+        
+        print(f"✅ Split: {len(train_data)} train, {len(val_data)} validation ({self.train_split*100:.0f}/{(1-self.train_split)*100:.0f})")
+        
+        # Save train set
+        print(f"\n💾 Saving training set to {self.output_train.name}...")
+        self.output_train.parent.mkdir(exist_ok=True, parents=True)
+        
+        with open(self.output_train, 'w', encoding='utf-8') as f:
+            for entry in train_data:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        
+        print(f"✅ Saved {len(train_data)} training examples")
+        
+        # Save validation set
+        print(f"\n💾 Saving validation set to {self.output_val.name}...")
+        with open(self.output_val, 'w', encoding='utf-8') as f:
+            for entry in val_data:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        
+        print(f"✅ Saved {len(val_data)} validation examples")
+        
+        # Statistics
+        print("\n" + "=" * 60)
+        print("📊 MERGE STATISTICS")
+        print("=" * 60)
+        print(f"Total input: {len(all_conversations)}")
+        print(f"Successfully formatted: {len(formatted_data)} ({len(formatted_data)/len(all_conversations)*100:.1f}%)")
+        print(f"Training examples: {len(train_data)}")
+        print(f"Validation examples: {len(val_data)}")
+        
+        # Source breakdown in training set
+        kaya_count = sum(1 for x in train_data if x['source'] == 'synthetic_kaya')
+        port_count = sum(1 for x in train_data if x['source'] == 'alpaca-portuguese')
+        
+        print(f"\nTraining set composition:")
+        print(f"  Kaya-specific: {kaya_count} ({kaya_count/len(train_data)*100:.1f}%)")
+        print(f"  General Portuguese: {port_count} ({port_count/len(train_data)*100:.1f}%)")
+        
+        print(f"\n✅ Merge complete!")
+        print(f"   Train: {self.output_train}")
+        print(f"   Val: {self.output_val}")
+        
+        return len(train_data), len(val_data)

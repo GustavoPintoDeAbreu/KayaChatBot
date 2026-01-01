@@ -1,4 +1,5 @@
-# Kaya ChatBot Fine-Tuning Configuration
+# Kaya ChatBot Fine-Tuning Configuration (Docker Version)
+# All paths use Linux conventions for Docker container
 
 # Test Mode Settings
 # Set enabled: true for quick testing with minimal data/epochs
@@ -29,19 +30,19 @@ test_mode:
 # Data Processing Settings
 data:
   # New synthetic data pipeline
-  train_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\train_synthetic.jsonl"
-  val_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\val_synthetic.jsonl"
+  train_file: "/app/data/train_synthetic.jsonl"
+  val_file: "/app/data/val_synthetic.jsonl"
   
   # Legacy files (for reference)
-  input_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\wpp\\WhatsApp Chat with Kaya 👀 - gugu.txt"
-  output_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\processed_chat.jsonl"
+  input_file: "/app/data/wpp/WhatsApp Chat with Kaya 👀 - gugu.txt"
+  output_file: "/app/data/processed_chat.jsonl"
   
   # Token-based chunking settings
-  max_tokens_per_chunk: 2048  # Keep chunks smaller than max_seq_length for safety
-  overlap_tokens: 256  # Overlap between chunks for continuity
+  max_tokens_per_chunk: 2048
+  overlap_tokens: 256
   
   # Data split
-  train_test_split: 0.9  # 90% train, 10% validation
+  train_test_split: 0.9
   
   # Persona settings
   system_prompt: "You are a member of a Portuguese WhatsApp group. You speak informal European Portuguese with slang. You know the history of the group members. Use short, realistic WhatsApp messages."
@@ -49,7 +50,7 @@ data:
 # Model Settings
 model:
   model_id: "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-  max_seq_length: 4096  # Maximum context length
+  max_seq_length: 4096
   load_in_4bit: true
   
   # LoRA settings
@@ -67,7 +68,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "C:\\Users\\guga\\Desktop\\KayaChatBot\\models\\kaya_v2_synthetic"
+  output_dir: "/app/models/kaya_v2_synthetic"
   
   # Training hyperparameters (optimized for 2000+ synthetic examples)
   max_steps: 1500  # Reduced from 6000 to prevent overfitting (~1 epoch for larger dataset)
@@ -80,7 +81,7 @@ training:
   
   # Optimization
   optim: "adamw_8bit"
-  lr_scheduler_type: "linear"  # Changed from linear for better convergence
+  lr_scheduler_type: "linear"
   
   # Logging and checkpointing
   logging_steps: 25

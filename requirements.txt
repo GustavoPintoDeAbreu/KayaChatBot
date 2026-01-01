@@ -9,3 +9,7 @@ pandas
 scipy
 sentencepiece
 protobuf
+tiktoken
+tqdm
+python-dotenv
+openai

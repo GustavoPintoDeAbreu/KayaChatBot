@@ -1,2 +1,121 @@
-data/
+# ===================================
+# Python
+# ===================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ===================================
+# Virtual Environments
+# ===================================
 kaya_chatbot_env/
+venv/
+env/
+ENV/
+.venv
+
+# ===================================
+# Data Files (large/sensitive)
+# ===================================
+data/
+*.jsonl
+*.json
+*.txt
+
+# Exceptions: Keep config and documentation
+!config.yaml
+!config.docker.yaml
+!.cursorrules
+!README.md
+!requirements.txt
+
+# ===================================
+# Credentials & Secrets (CRITICAL)
+# ===================================
+credentials.txt
+.env
+.env.local
+*.key
+*.pem
+*.pfx
+
+# ===================================
+# Models (large files)
+# ===================================
+models/
+*.safetensors
+*.bin
+*.pth
+*.onnx
+*.pt
+checkpoint-*/
+
+# ===================================
+# Training Outputs
+# ===================================
+outputs/
+logs/
+*.log
+runs/
+wandb/
+
+# ===================================
+# Docker
+# ===================================
+.dockerignore
+docker-compose.override.yml
+
+# ===================================
+# IDE
+# ===================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vs/
+
+# ===================================
+# OS
+# ===================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===================================
+# Jupyter
+# ===================================
+.ipynb_checkpoints/
+*.ipynb
+
+# Exceptions: Keep test notebooks in src/testing
+!src/testing/*.ipynb
+
+# ===================================
+# Testing & Coverage
+# ===================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ===================================
+# Temporary & Backup Files
+# ===================================
+*.tmp
+*.bak
+*.backup
+temp/
+tmp/
+*.cache
+
+# ===================================
+# Batch Files
+# ===================================
+*.bat
