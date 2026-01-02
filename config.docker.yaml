@@ -27,6 +27,31 @@ test_mode:
     eval_steps: 25
     logging_steps: 5
 
+# Generation Settings
+generation:
+  provider: "xai"  # Options: "azure" or "xai" - using xai by default for better results
+  
+  # Azure OpenAI settings
+  azure:
+    endpoint: "https://kaya-openai.openai.azure.com/"
+    api_version: "2024-12-01-preview"
+    model: "gpt-4.1-mini"
+    max_tokens: 16000  # GPT-4.1-mini max output: 16K tokens
+    temperature: 0.85
+    timeout: 120  # Increased for larger outputs
+  
+  # xAI (Grok) settings
+  xai:
+    model: "grok-4-1-fast-reasoning"
+    max_tokens: 30000  # Grok-4 max output: 32K tokens (using 30K to be safe)
+    temperature: 0.85
+    timeout: 120  # Increased for larger outputs
+  
+  # Retry settings (applies to both providers)
+  retry:
+    max_attempts: 5
+    delay_seconds: 30
+
 # Data Processing Settings
 data:
   # New synthetic data pipeline
