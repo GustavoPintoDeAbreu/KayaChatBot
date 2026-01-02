@@ -52,7 +52,8 @@ RUN pip install --no-cache-dir \
     protobuf \
     tiktoken \
     python-dotenv \
-    openai
+    openai \
+    xai-sdk
 
 # Install unsloth and unsloth-zoo
 RUN pip install --no-cache-dir \
