@@ -13,3 +13,4 @@ tiktoken
 tqdm
 python-dotenv
 openai
+xai-sdk
