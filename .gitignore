@@ -23,7 +23,9 @@ ENV/
 # ===================================
 # Data Files (large/sensitive)
 # ===================================
-data/
+data/facebook/
+data/insta/
+data/wpp/
 *.jsonl
 *.json
 *.txt
