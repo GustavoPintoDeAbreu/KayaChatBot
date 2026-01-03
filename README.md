@@ -21,7 +21,6 @@ KayaChatBot/
 │   ├── data/                    # Data processing & generation
 │   │   ├── extract_all_messages.py
 │   │   ├── generate_synthetic_data.py
-│   │   ├── generate_one_conversation.py
 │   │   ├── prepare_portuguese_data.py
 │   │   └── merge_datasets.py
 │   ├── finetuning/              # Model training
@@ -141,7 +140,17 @@ python src/chat/inference.py
 
 **Output:** `data/synthetic_kaya.jsonl`
 
-**Alternative:** Use `generate_one_conversation.py` to generate single conversations with delays (workaround for strict rate limits)
+**Usage:**
+```bash
+# Batch mode (default - processes all chunks)
+python src/data/generate_synthetic_data.py
+
+# Single conversation (for rate limit workarounds)
+python src/data/generate_synthetic_data.py --mode single --depth 4
+
+# Generate specific number of conversations
+python src/data/generate_synthetic_data.py --mode count --count 50
+```
 
 ### 3. **Portuguese Dataset** (`prepare_portuguese_data.py`)
 - Downloads alpaca-portuguese instruction dataset from HuggingFace

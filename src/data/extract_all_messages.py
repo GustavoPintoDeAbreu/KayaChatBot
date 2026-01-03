@@ -1,0 +1,383 @@
+"""
+Extract and clean all messages from WhatsApp and Instagram sources.
+Creates unified cleaned message dataset and chunks for synthetic generation.
+"""
+
+import json
+import re
+import yaml
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict, Tuple
+from collections import defaultdict
+import tiktoken
+
+# Load configuration
+CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+# Configuration
+TEST_MODE = config['test_mode']['enabled']
+MAX_TOKENS_PER_CHUNK = 50000  # 50K tokens per chunk for Azure GPT-4.1-mini
+
+# Detect if running in Docker
+import os
+if os.path.exists('/app'):
+    DATA_DIR = Path("/app/data")
+else:
+    DATA_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data")
+
+OUTPUT_CLEANED = DATA_DIR / "all_messages_cleaned.jsonl"
+OUTPUT_FINETUNE_CHUNKS = DATA_DIR / "finetune_chunks.jsonl"
+
+# Initialize tokenizer for token counting
+tokenizer = tiktoken.encoding_for_model("gpt-4")
+
+
+class MessageExtractor:
+    """Extract and clean messages from multiple sources."""
+    
+    def __init__(self):
+        self.messages = []
+        
+    def clean_text(self, text: str) -> str:
+        """Clean message text by removing noise."""
+        if not text:
+            return ""
+        
+        # Remove URLs
+        text = re.sub(r'http[s]?://\S+', '', text)
+        
+        # Remove Unicode mentions (WhatsApp)
+        text = re.sub(r'@\u2068[^\u2069]*\u2069', '', text)
+        
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        
+        return text.strip()
+    
+    def is_valid_message(self, text: str) -> bool:
+        """Check if message is valid (not noise)."""
+        if not text or len(text) < 3:
+            # Allow common short responses
+            common_short = ['lol', 'sim', 'não', 'ok', 'oi', 'olá', 'wtf', 'lmao']
+            return text.lower() in common_short
+        return True
+    
+    def extract_whatsapp(self, file_path: Path) -> List[Dict]:
+        """Extract messages from WhatsApp chat export."""
+        print(f"\n📱 Processing WhatsApp: {file_path.name}")
+        messages = []
+        
+        # WhatsApp format: [DD/MM/YYYY, HH:MM:SS] Sender: Message
+        pattern = r'\[(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{1,2}:\d{1,2})\] ([^:]+): (.+)'
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+            for match in re.finditer(pattern, content, re.MULTILINE):
+                date, time, sender, text = match.groups()
+                
+                # Parse timestamp
+                timestamp_str = f"{date} {time}"
+                try:
+                    timestamp = datetime.strptime(timestamp_str, "%d/%m/%Y %H:%M:%S")
+                except:
+                    continue
+                
+                # Clean and validate
+                cleaned_text = self.clean_text(text)
+                
+                # Skip media omitted and system messages
+                if any(skip in cleaned_text.lower() for skip in [
+                    'media omitted', 'this message was edited', 
+                    'deleted this message', 'changed the subject'
+                ]):
+                    continue
+                
+                if not self.is_valid_message(cleaned_text):
+                    continue
+                
+                messages.append({
+                    'timestamp': timestamp.isoformat(),
+                    'sender': sender.strip(),
+                    'text': cleaned_text,
+                    'source': 'whatsapp'
+                })
+        
+        except Exception as e:
+            print(f"❌ Error processing WhatsApp file: {e}")
+            return []
+        
+        print(f"✅ Extracted {len(messages)} WhatsApp messages")
+        return messages
+    
+    def decode_instagram_text(self, text: str) -> str:
+        """Decode Instagram's double-encoded UTF-8."""
+        try:
+            # Instagram uses latin1 encoding that needs to be decoded to UTF-8
+            return text.encode('latin1').decode('utf-8')
+        except:
+            return text
+    
+    def extract_instagram(self, file_path: Path) -> List[Dict]:
+        """Extract messages from Instagram JSON export."""
+        print(f"\n💬 Processing Instagram: {file_path.name}")
+        messages = []
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Instagram format: {'participants': [...], 'messages': [...]}
+            instagram_messages = data.get('messages', [])
+            
+            for msg in instagram_messages:
+                # Skip if no content
+                if 'content' not in msg:
+                    continue
+                
+                text = msg['content']
+                
+                # Decode Instagram's encoding
+                text = self.decode_instagram_text(text)
+                
+                # Skip attachment notifications and reactions
+                if any(skip in text.lower() for skip in [
+                    'sent an attachment', 'liked a message', 'loved a message',
+                    'reacted', 'unsent a message', 'started a call',
+                    'missed a call', 'shared a post', 'shared a story'
+                ]):
+                    continue
+                
+                # Clean text
+                cleaned_text = self.clean_text(text)
+                
+                if not self.is_valid_message(cleaned_text):
+                    continue
+                
+                # Get sender name
+                sender = msg.get('sender_name', 'Unknown')
+                sender = self.decode_instagram_text(sender)
+                
+                # Get timestamp (milliseconds to datetime)
+                timestamp_ms = msg.get('timestamp_ms', 0)
+                timestamp = datetime.fromtimestamp(timestamp_ms / 1000)
+                
+                messages.append({
+                    'timestamp': timestamp.isoformat(),
+                    'sender': sender.strip(),
+                    'text': cleaned_text,
+                    'source': 'instagram'
+                })
+        
+        except Exception as e:
+            print(f"❌ Error processing Instagram file: {e}")
+            return []
+        
+        print(f"✅ Extracted {len(messages)} Instagram messages")
+        return messages
+    
+    def merge_consecutive_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Merge consecutive messages from the same sender."""
+        if not messages:
+            return []
+        
+        merged = []
+        current = messages[0].copy()
+        
+        for msg in messages[1:]:
+            # If same sender within 5 minutes, merge
+            if msg['sender'] == current['sender']:
+                try:
+                    curr_time = datetime.fromisoformat(current['timestamp'])
+                    msg_time = datetime.fromisoformat(msg['timestamp'])
+                    
+                    if (msg_time - curr_time).total_seconds() < 300:  # 5 minutes
+                        current['text'] += ' ' + msg['text']
+                        current['timestamp'] = msg['timestamp']  # Update to latest
+                        continue
+                except:
+                    pass
+            
+            # Different sender or too much time passed
+            merged.append(current)
+            current = msg.copy()
+        
+        merged.append(current)
+        return merged
+    
+    def extract_all(self) -> List[Dict]:
+        """Extract messages from all sources."""
+        all_messages = []
+        
+        # Extract WhatsApp messages
+        wpp_dir = DATA_DIR / "wpp"
+        if wpp_dir.exists():
+            for txt_file in wpp_dir.glob("*.txt"):
+                if 'processed' not in txt_file.name.lower():  # Skip already processed files
+                    messages = self.extract_whatsapp(txt_file)
+                    all_messages.extend(messages)
+        
+        # Extract Instagram messages
+        insta_dir = DATA_DIR / "insta"
+        if insta_dir.exists():
+            insta_files = sorted(insta_dir.glob("message_*.json"))
+            
+            if TEST_MODE:
+                # Only process limited files in test mode
+                limit = config['test_mode']['extraction']['instagram_files_limit']
+                insta_files = insta_files[:limit]
+                print(f"\n⚠️  TEST MODE: Processing only first {limit} Instagram file(s)")
+            
+            for json_file in insta_files:
+                messages = self.extract_instagram(json_file)
+                all_messages.extend(messages)
+        
+        # Sort by timestamp
+        all_messages.sort(key=lambda x: x['timestamp'])
+        
+        print(f"\n📊 Total messages before merging: {len(all_messages)}")
+        
+        # Merge consecutive messages
+        all_messages = self.merge_consecutive_messages(all_messages)
+        
+        print(f"📊 Total messages after merging: {len(all_messages)}")
+        
+        return all_messages
+
+
+class MessageChunker:
+    """Chunk messages into token-limited segments for synthetic generation (finetune chunks)."""
+    
+    def __init__(self, max_tokens: int = MAX_TOKENS_PER_CHUNK):
+        self.max_tokens = max_tokens
+        
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text."""
+        return len(tokenizer.encode(text))
+    
+    def create_finetune_chunks(self, messages: List[Dict]) -> List[Dict]:
+        """Create finetune chunks of messages up to max_tokens."""
+        finetune_chunks = []
+        current_finetune_chunk = []
+        current_tokens = 0
+        
+        for msg in messages:
+            # Format message
+            formatted = f"{msg['sender']}: {msg['text']}"
+            msg_tokens = self.count_tokens(formatted)
+            
+            # If adding this message exceeds limit, save current finetune chunk
+            if current_tokens + msg_tokens > self.max_tokens and current_finetune_chunk:
+                chunk_text = '\n'.join([
+                    f"{m['sender']}: {m['text']}" for m in current_finetune_chunk
+                ])
+                
+                finetune_chunks.append({
+                    'chunk_id': len(finetune_chunks),
+                    'messages': current_finetune_chunk,
+                    'text': chunk_text,
+                    'token_count': current_tokens,
+                    'message_count': len(current_finetune_chunk)
+                })
+                
+                current_finetune_chunk = []
+                current_tokens = 0
+            
+            # Add message to current finetune chunk
+            current_finetune_chunk.append(msg)
+            current_tokens += msg_tokens
+        
+        # Add final finetune chunk
+        if current_finetune_chunk:
+            chunk_text = '\n'.join([
+                f"{m['sender']}: {m['text']}" for m in current_finetune_chunk
+            ])
+            
+            finetune_chunks.append({
+                'chunk_id': len(finetune_chunks),
+                'messages': current_finetune_chunk,
+                'text': chunk_text,
+                'token_count': current_tokens,
+                'message_count': len(current_finetune_chunk)
+            })
+        
+        return finetune_chunks
+
+
+def main():
+    """Main extraction pipeline."""
+    print("=" * 60)
+    print("🚀 MESSAGE EXTRACTION PIPELINE")
+    print("=" * 60)
+    
+    if TEST_MODE:
+        print("\n⚠️  RUNNING IN TEST MODE")
+        print("   - Only first Instagram JSON will be processed")
+        print("   - Set TEST_MODE=False for full extraction\n")
+    
+    # Create output directory
+    DATA_DIR.mkdir(exist_ok=True)
+    
+    # Extract messages
+    extractor = MessageExtractor()
+    messages = extractor.extract_all()
+    
+    if not messages:
+        print("\n❌ No messages extracted!")
+        return
+    
+    # Save cleaned messages
+    print(f"\n💾 Saving cleaned messages to {OUTPUT_CLEANED.name}")
+    with open(OUTPUT_CLEANED, 'w', encoding='utf-8') as f:
+        for msg in messages:
+            f.write(json.dumps(msg, ensure_ascii=False) + '\n')
+    
+    print(f"✅ Saved {len(messages)} cleaned messages")
+    
+    # Create finetune chunks
+    print(f"\n🔨 Creating finetune chunks (max {MAX_TOKENS_PER_CHUNK:,} tokens each)")
+    chunker = MessageChunker(max_tokens=MAX_TOKENS_PER_CHUNK)
+    finetune_chunks = chunker.create_finetune_chunks(messages)
+    
+    # Save finetune chunks
+    print(f"\n💾 Saving finetune chunks to {OUTPUT_FINETUNE_CHUNKS.name}")
+    with open(OUTPUT_FINETUNE_CHUNKS, 'w', encoding='utf-8') as f:
+        for chunk in finetune_chunks:
+            f.write(json.dumps(chunk, ensure_ascii=False) + '\n')
+    
+    print(f"✅ Created {len(finetune_chunks)} finetune chunks")
+    
+    # Statistics
+    print("\n" + "=" * 60)
+    print("📊 EXTRACTION STATISTICS")
+    print("=" * 60)
+    print(f"Total messages: {len(messages)}")
+    print(f"Total finetune chunks: {len(finetune_chunks)}")
+    print(f"Avg messages per finetune chunk: {len(messages) / len(finetune_chunks):.1f}")
+    
+    # Token statistics
+    total_tokens = sum(chunk['token_count'] for chunk in finetune_chunks)
+    print(f"Total tokens: {total_tokens:,}")
+    print(f"Avg tokens per finetune chunk: {total_tokens / len(finetune_chunks):,.0f}")
+    
+    # Source breakdown
+    source_counts = defaultdict(int)
+    for msg in messages:
+        source_counts[msg['source']] += 1
+    
+    print("\nMessages by source:")
+    for source, count in source_counts.items():
+        print(f"  {source.capitalize()}: {count} ({count/len(messages)*100:.1f}%)")
+    
+    print("\n✅ Extraction complete!")
+    print(f"\nNext steps:")
+    print(f"  1. Review {OUTPUT_CLEANED.name} for quality")
+    print(f"  2. Run generate_synthetic_data.py to create training data from finetune chunks")
+
+
+if __name__ == "__main__":
+    main()
