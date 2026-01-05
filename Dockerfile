@@ -80,13 +80,16 @@ RUN pip install --no-cache-dir \
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/app/models/.cache \
-    TRANSFORMERS_CACHE=/app/models/.cache \
     CUDA_VISIBLE_DEVICES=0 \
     PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
 # Copy project files
 COPY src/ /app/src/
 COPY config.docker.yaml /app/config.yaml
+COPY run_full_pipeline.py /app/
+COPY test_pipeline.py /app/
+COPY validate_pipeline.py /app/
+COPY test_llm_cleaning.py /app/
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/models /app/outputs

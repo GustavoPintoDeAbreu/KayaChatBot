@@ -6,6 +6,7 @@ from typing import Dict, Any
 from .base import LLMProvider
 from .azure_provider import AzureProvider
 from .xai_provider import XAIProvider
+from .data_cleaning import DataCleaningLLM
 
 
 def get_provider(config: Dict[str, Any]) -> LLMProvider:
@@ -20,4 +21,10 @@ def get_provider(config: Dict[str, Any]) -> LLMProvider:
         raise ValueError(f"Unknown provider: {provider_name}. Supported: 'azure', 'xai'")
 
 
-__all__ = ['LLMProvider', 'AzureProvider', 'XAIProvider', 'get_provider']
+def get_data_cleaning_llm(config: Dict[str, Any]) -> DataCleaningLLM:
+    """Factory function to get the data cleaning LLM."""
+    provider = get_provider(config)
+    return DataCleaningLLM(config, provider)
+
+
+__all__ = ['LLMProvider', 'AzureProvider', 'XAIProvider', 'DataCleaningLLM', 'get_provider', 'get_data_cleaning_llm']

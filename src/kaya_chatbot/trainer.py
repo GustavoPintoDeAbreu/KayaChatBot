@@ -5,6 +5,7 @@ from transformers import TrainingArguments, TrainerCallback
 from datasets import Dataset
 from typing import Optional
 import time
+from datetime import datetime
 
 
 class ProgressCallback(TrainerCallback):
@@ -16,9 +17,9 @@ class ProgressCallback(TrainerCallback):
 
     def on_train_begin(self, args, state, control, **kwargs):
         self.start_time = time.time()
-        print("\n" + "=" * 60)
-        print("🚀 Training Started")
-        print("=" * 60)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message = "\n" + "=" * 60 + f"\n🚀 Training Started - {timestamp}\n" + "=" * 60
+        print(message, flush=True)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs:
@@ -34,23 +35,27 @@ class ProgressCallback(TrainerCallback):
             )
             eta_mins = eta_seconds / 60
 
-            print(f"\n📊 Step {step}/{total_steps} ({progress:.1f}%)")
-            print(
-                f"   ⚡ Speed: {steps_per_sec:.2f} steps/sec | ETA: {eta_mins:.1f} min"
-            )
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            message = f"\n[{timestamp}] 📊 Step {step}/{total_steps} ({progress:.1f}%)\n"
+            message += f"   ⚡ Speed: {steps_per_sec:.2f} steps/sec | ETA: {eta_mins:.1f} min\n"
 
             if "loss" in logs:
-                print(f"   📉 Loss: {logs['loss']:.4f}")
+                message += f"   📉 Loss: {logs['loss']:.4f}\n"
             if "learning_rate" in logs:
-                print(f"   📚 LR: {logs['learning_rate']:.2e}")
+                message += f"   📚 LR: {logs['learning_rate']:.2e}\n"
             if "eval_loss" in logs:
-                print(f"   ✅ Val Loss: {logs['eval_loss']:.4f}")
+                message += f"   ✅ Val Loss: {logs['eval_loss']:.4f}\n"
+
+            print(message, end="", flush=True)
 
     def on_train_end(self, args, state, control, **kwargs):
         elapsed = time.time() - self.start_time
-        print("\n" + "=" * 60)
-        print(f"✨ Training Completed in {elapsed/60:.2f} minutes")
-        print("=" * 60 + "\n")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message = "\n" + "=" * 60 + "\n"
+        message += f"✨ Training Completed - {timestamp}\n"
+        message += f"   Duration: {elapsed/60:.2f} minutes\n"
+        message += "=" * 60 + "\n"
+        print(message, flush=True)
 
 
 class KayaTrainer:
@@ -65,7 +70,7 @@ class KayaTrainer:
 
     def load_model(self):
         """Loads the model and tokenizer with 4-bit quantization and LoRA adapters."""
-        print(f"Loading model: {self.model_id}")
+        print(f"Loading model: {self.model_id}", flush=True)
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.model_id,
             max_seq_length=self.max_seq_length,
@@ -103,8 +108,8 @@ class KayaTrainer:
             loftq_config=None,
         )
 
-        print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})")
-        print(f"✓ Trainable parameters: {self.model.print_trainable_parameters()}")
+        print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})", flush=True)
+        print(f"✓ Trainable parameters: {self.model.print_trainable_parameters()}", flush=True)
 
     def train(
         self,
@@ -146,16 +151,17 @@ class KayaTrainer:
         if training_config:
             config.update(training_config)
 
-        print(f"\n📋 Training Configuration:")
-        print(f"   • Max steps: {config['max_steps']}")
+        print(f"\n📋 Training Configuration:", flush=True)
+        print(f"   • Max steps: {config['max_steps']}", flush=True)
         print(
-            f"   • Batch size: {config['per_device_train_batch_size']} (effective: {config['per_device_train_batch_size'] * config['gradient_accumulation_steps']})"
+            f"   • Batch size: {config['per_device_train_batch_size']} (effective: {config['per_device_train_batch_size'] * config['gradient_accumulation_steps']})",
+            flush=True
         )
-        print(f"   • Learning rate: {config['learning_rate']}")
-        print(f"   • Train samples: {len(train_dataset)}")
+        print(f"   • Learning rate: {config['learning_rate']}", flush=True)
+        print(f"   • Train samples: {len(train_dataset)}", flush=True)
         if eval_dataset:
-            print(f"   • Validation samples: {len(eval_dataset)}")
-        print()
+            print(f"   • Validation samples: {len(eval_dataset)}", flush=True)
+        print(flush=True)
 
         # Formatting function to extract pre-formatted text from dataset
         def formatting_func(examples):
@@ -210,4 +216,4 @@ class KayaTrainer:
             raise ValueError("Model not loaded.")
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
-        print(f"💾 Model saved to {output_dir}")
+        print(f"💾 Model saved to {output_dir}", flush=True)
