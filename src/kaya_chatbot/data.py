@@ -8,6 +8,13 @@ from transformers import AutoTokenizer
 from datetime import datetime
 from pathlib import Path
 
+# Import the LLM cleaning
+try:
+    from ..llm_providers import get_data_cleaning_llm
+except ImportError:
+    # Fallback for when running outside the package
+    from llm_providers import get_data_cleaning_llm
+
 
 @dataclass
 class ChatMessage:
@@ -18,11 +25,24 @@ class ChatMessage:
 
 class WhatsAppReader:
     """
-    Reads and cleans WhatsApp export files.
+    Reads and cleans WhatsApp export files using LLM-based filtering.
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, config: Optional[Dict] = None):
         self.file_path = file_path
+        self.config = config
+        self.cleaning_llm = None
+        
+        # Initialize LLM cleaning if config provided and enabled
+        if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
+            try:
+                self.cleaning_llm = get_data_cleaning_llm(config)
+                print("✅ LLM-based data cleaning enabled for WhatsApp reader")
+            except Exception as e:
+                error_msg = f"Failed to initialize LLM cleaning: {e}"
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg)
+        
         # Regex for "Date, Time - Sender: Message"
         # Example: 3/26/20, 15:28 - Gil João: Message
         self.date_pattern = re.compile(
@@ -34,7 +54,13 @@ class WhatsAppReader:
         )
 
     def _clean_text(self, text: str) -> Optional[str]:
-        """Applies regex cleaning rules."""
+        """Applies LLM-based cleaning rules."""
+        if not text or not text.strip():
+            return None
+            
+        text = text.strip()
+        
+        # Basic preprocessing (keep this as it's not content-based)
         if "<Media omitted>" in text:
             return None
 
@@ -49,12 +75,36 @@ class WhatsAppReader:
 
         text = text.strip()
         
-        # Filter out very short messages (< 3 words) unless they contain substance
-        word_count = len(text.split())
-        if word_count < 3 and text.lower() not in ['lol', 'ahah', 'ahahah', 'ok', 'ya', 'sim', 'não', 'nao']:
-            # Allow common short responses but filter random short stuff
-            if word_count == 1:
-                return None
+        # If LLM cleaning is available, use it for content-based decisions
+        if self.cleaning_llm:
+            try:
+                # For short messages, use LLM classification
+                if len(text.split()) <= 5:  # Short messages need classification
+                    decisions = self.cleaning_llm.clean_short_messages([text])
+                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
+                        return decisions[0].cleaned_content
+                    else:
+                        return None
+                else:
+                    # For longer messages, use filler cleaning
+                    decisions = self.cleaning_llm.clean_filler_words([text])
+                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
+                        return decisions[0].cleaned_content
+                    else:
+                        return None
+            except Exception as e:
+                error_msg = f"LLM cleaning failed for message '{text[:50]}...': {e}"
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg)
+        
+        # Fallback: if no LLM cleaning, apply basic rules (but this should not happen per requirements)
+        else:
+            # Filter out very short messages (< 3 words) unless they contain substance
+            word_count = len(text.split())
+            if word_count < 3 and text.lower() not in ['lol', 'ahah', 'ahahah', 'ok', 'ya', 'sim', 'não', 'nao']:
+                # Allow common short responses but filter random short stuff
+                if word_count == 1:
+                    return None
         
         return text
 
@@ -131,12 +181,25 @@ class WhatsAppReader:
 
 class InstagramReader:
     """
-    Reads and cleans Instagram JSON export files.
+    Reads and cleans Instagram JSON export files using LLM-based filtering.
     Filters out noise (attachment spam, likes, shared posts) and extracts real conversations.
     """
 
-    def __init__(self, json_path: str):
+    def __init__(self, json_path: str, config: Optional[Dict] = None):
         self.json_path = json_path
+        self.config = config
+        self.cleaning_llm = None
+        
+        # Initialize LLM cleaning if config provided and enabled
+        if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
+            try:
+                self.cleaning_llm = get_data_cleaning_llm(config)
+                print("✅ LLM-based data cleaning enabled for Instagram reader")
+            except Exception as e:
+                error_msg = f"Failed to initialize LLM cleaning: {e}"
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg)
+        
         # Patterns to identify noise
         self.attachment_pattern = re.compile(r".*sent an attachment\.$", re.IGNORECASE)
         self.liked_pattern = re.compile(r".*liked a message$", re.IGNORECASE)
@@ -154,12 +217,13 @@ class InstagramReader:
             return text
 
     def _clean_text(self, text: str) -> Optional[str]:
-        """Clean and filter Instagram message text."""
+        """Clean and filter Instagram message text using LLM."""
         if not text or not text.strip():
             return None
         
         text = text.strip()
         
+        # Basic pattern-based filtering (keep this as it's format-based)
         # Skip attachment notifications
         if self.attachment_pattern.match(text):
             return None
@@ -178,9 +242,33 @@ class InstagramReader:
         
         text = text.strip()
         
-        # Filter very short messages (likely just reactions or noise)
-        if len(text) < 3:
-            return None
+        # If LLM cleaning is available, use it for content-based decisions
+        if self.cleaning_llm:
+            try:
+                # For short messages, use LLM classification
+                if len(text.split()) <= 5:  # Short messages need classification
+                    decisions = self.cleaning_llm.clean_short_messages([text])
+                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
+                        return decisions[0].cleaned_content
+                    else:
+                        return None
+                else:
+                    # For longer messages, use filler cleaning
+                    decisions = self.cleaning_llm.clean_filler_words([text])
+                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
+                        return decisions[0].cleaned_content
+                    else:
+                        return None
+            except Exception as e:
+                error_msg = f"LLM cleaning failed for Instagram message '{text[:50]}...': {e}"
+                print(f"ERROR: {error_msg}")
+                raise RuntimeError(error_msg)
+        
+        # Fallback: basic length filter (but this should not happen per requirements)
+        else:
+            # Filter very short messages (likely just reactions or noise)
+            if len(text) < 3:
+                return None
         
         # Decode unicode escapes
         text = self._decode_unicode(text)

@@ -13,8 +13,11 @@ def main():
     print("Kaya Chat Interface")
     print("=" * 60)
     
-    # Load configuration
-    config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
+    # Load configuration (Docker or local environment)
+    docker_config = '/app/config.yaml'
+    local_config = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
+    config_path = docker_config if os.path.exists(docker_config) else local_config
+    
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     

@@ -71,6 +71,14 @@ data:
   
   # Persona settings
   system_prompt: "You are a member of a Portuguese WhatsApp group. You speak informal European Portuguese with slang. You know the history of the group members. Use short, realistic WhatsApp messages."
+  
+  # LLM-based data cleaning settings
+  cleaning:
+    enabled: true  # Always use LLM cleaning (no fallback)
+    batch_size: 10  # Messages per API call
+    confidence_threshold: 0.7  # Minimum confidence to accept decision
+    cache_file: "/app/data/.cleaning_cache.json"
+    stats_file: "/app/data/cleaning_stats.json"
 
 # Model Settings
 model:
