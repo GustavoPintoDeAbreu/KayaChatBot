@@ -23,40 +23,28 @@ from src.data.generation_utils import load_config, get_base_dir, get_output_path
 
 
 def get_generation_prompt(finetune_chunk_text: str, num_conversations: int) -> str:
-    """Create prompt for Azure OpenAI to generate conversations from finetune chunk."""
+    """Create prompt for Azure OpenAI to generate RAG-aware conversations from finetune chunk."""
     
     prompt = f"""Based on the following WhatsApp conversation history, generate {num_conversations} diverse multi-turn conversations in European Portuguese where someone asks Kaya questions.
 
 CONVERSATION HISTORY:
 {finetune_chunk_text[:35000]}
 
-INSTRUCTIONS:
-1. Generate {num_conversations} conversations with 2-5 turns each (varied lengths)
-2. Question types to vary:
-   - Personality: "Como é o Peter?" "O que achas do Gil?"
-   - Group dynamics: "Qual é a relação entre o Peter e o Gustavo?"
-   - Opinions: "És de esquerda ou de direita?"
-   - Events: "O que aconteceu quando...?"
-3. Kaya's responses:
-   - Use informal European Portuguese with slang
-   - SHORT WhatsApp-style messages (1-3 sentences)
-   - Funny, sarcastic, loyal personality
-   - Reference actual people/events from history
-   - Use casual expressions naturally when appropriate (don't force them)
-4. Users ask naturally, use "tu", sometimes follow up
+CRITICAL INSTRUCTION - RAG FORMAT:
+The model will be given conversation history as context during inference. Training examples MUST include this context format to teach the model to use retrieved information.
 
 OUTPUT FORMAT (EXACT JSON):
 {{
   "conversations": [
     {{
       "turns": [
-        {{"role": "user", "content": "Quem é o Peter?"}},
+        {{"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-04-15] ---\\n[Insert relevant snippet from history above]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nQuem é o Peter?"}},
         {{"role": "assistant", "content": "O Peter é fixe ahahah, sempre a organizar cenas."}}
       ]
     }},
     {{
       "turns": [
-        {{"role": "user", "content": "O que achas do Gil?"}},
+        {{"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-04-16] ---\\n[Insert relevant snippet about Gil]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nO que achas do Gil?"}},
         {{"role": "assistant", "content": "O Gilao é maluco mas boa onda lmao."}},
         {{"role": "user", "content": "Porquê?"}},
         {{"role": "assistant", "content": "Sempre com ideias loucas e a curtir."}}
@@ -65,31 +53,56 @@ OUTPUT FORMAT (EXACT JSON):
   ]
 }}
 
+INSTRUCTIONS:
+1. Generate {num_conversations} conversations with 2-5 turns each (varied lengths)
+2. **FIRST turn must include RAG context format** with relevant conversation snippet from history
+3. Question types to vary:
+   - Personality: "Como é o Peter?" "O que achas do Gil?"
+   - Group dynamics: "Qual é a relação entre o Peter e o Gustavo?"
+   - Opinions: "És de esquerda ou de direita?"
+   - Events: "O que aconteceu quando...?"
+4. Kaya's responses:
+   - Use informal European Portuguese with slang
+   - SHORT WhatsApp-style messages (1-3 sentences)
+   - **Answer based on the provided context snippet**
+   - Reference actual people/events from context
+   - Use casual expressions naturally
+5. Follow-up questions don't need RAG format (normal conversation)
+
+CRITICAL: First user message MUST include the RAG context format shown above!
+
 Generate ONLY valid JSON."""
 
     return prompt
 
 
 def get_single_conversation_prompt(finetune_chunk_text: str, depth: int) -> str:
-    """Create prompt for generating a single conversation."""
+    """Create prompt for generating a single RAG-aware conversation."""
     prompt = f"""Based on the following Portuguese group chat history, generate ONE realistic {depth}-turn conversation where someone asks questions.
 
 CHAT HISTORY:
 {finetune_chunk_text[:30000]}  
 
-INSTRUCTIONS:
-- Generate exactly {depth} exchanges (user asks, assistant responds, repeat)
-- Use informal European Portuguese with slang
-- Reference actual people/events from the history
-- Include "wtf", "lmao" and other expressions of the sort naturally when appropriate
+CRITICAL INSTRUCTION - RAG FORMAT:
+The model will be given conversation history as context during inference. The FIRST user message MUST include RAG context format.
 
 OUTPUT FORMAT - Return valid JSON:
 {{
   "conversation": [
-    {{"role": "user", "content": "question here"}},
-    {{"role": "assistant", "content": "Kaya's short response"}}
+    {{"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [date] ---\\n[relevant snippet from history above]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\n[question here]"}},
+    {{"role": "assistant", "content": "Kaya's short response based on context"}},
+    {{"role": "user", "content": "follow-up question (no RAG format needed)"}},
+    {{"role": "assistant", "content": "another response"}}
   ]
 }}
+
+INSTRUCTIONS:
+- Generate exactly {depth} exchanges (user asks, assistant responds, repeat)
+- FIRST user message MUST include RAG context format with relevant snippet
+- Use informal European Portuguese with slang
+- Kaya answers based on provided context
+- Include "wtf", "lmao" and other expressions naturally
+- Follow-ups don't need RAG format
 
 Generate ONLY valid JSON."""
 

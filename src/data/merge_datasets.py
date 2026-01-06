@@ -20,13 +20,15 @@ def main():
     else:
         data_dir = "C:/Users/guga/Desktop/KayaChatBot/data"
     
+    # Only use RAG-aware Kaya data (no general Portuguese alpaca data)
+    # The model should learn from RAG examples only
     merger = SyntheticDatasetMerger(
         kaya_file=f"{data_dir}/synthetic_kaya.jsonl",
-        portuguese_file=f"{data_dir}/synthetic_portuguese.jsonl",
+        portuguese_file=None,  # Removed: not RAG-aware, would confuse the model
         output_train=f"{data_dir}/train_synthetic.jsonl",
         output_val=f"{data_dir}/val_synthetic.jsonl",
         train_split=0.9,
-        kaya_ratio=0.7  # 70% Kaya, 30% Portuguese (reduced from 0.9 to preserve reasoning)
+        kaya_ratio=1.0  # 100% RAG-aware Kaya Q&A data
     )
     
     train_count, val_count = merger.merge_and_split()
