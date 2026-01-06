@@ -53,7 +53,9 @@ RUN pip install --no-cache-dir \
     tiktoken \
     python-dotenv \
     openai \
-    xai-sdk
+    xai-sdk \
+    chromadb \
+    sentence-transformers
 
 # Install unsloth and unsloth-zoo
 RUN pip install --no-cache-dir \
@@ -85,11 +87,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Copy project files
 COPY src/ /app/src/
+COPY tests/ /app/tests/
 COPY config.docker.yaml /app/config.yaml
 COPY run_full_pipeline.py /app/
-COPY test_pipeline.py /app/
-COPY validate_pipeline.py /app/
-COPY test_llm_cleaning.py /app/
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/models /app/outputs

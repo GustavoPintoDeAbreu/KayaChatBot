@@ -640,33 +640,40 @@ class SyntheticDatasetMerger:
         kaya_conversations = self.load_conversations(self.kaya_file)
         print(f"✅ Loaded {len(kaya_conversations)} Kaya conversations")
         
-        # Load general Portuguese data
-        print(f"\n📂 Loading Portuguese data from {self.portuguese_file.name}...")
-        portuguese_conversations = self.load_conversations(self.portuguese_file)
-        print(f"✅ Loaded {len(portuguese_conversations)} Portuguese conversations")
-                # Apply ratio sampling to balance Kaya vs Portuguese
-        print(f"\n🎯 Applying ratio: {self.kaya_ratio*100:.0f}% Kaya / {(1-self.kaya_ratio)*100:.0f}% Portuguese")
+        # Load general Portuguese data (if provided)
+        portuguese_conversations = []
+        if self.portuguese_file:
+            print(f"\n📂 Loading Portuguese data from {self.portuguese_file.name}...")
+            portuguese_conversations = self.load_conversations(self.portuguese_file)
+            print(f"✅ Loaded {len(portuguese_conversations)} Portuguese conversations")
+        else:
+            print(f"\n⚠️  Skipping Portuguese data (using 100% RAG-aware Kaya data)")
         
-        # Use all Kaya data (it's precious!)
-        kaya_count = len(kaya_conversations)
-        
-        # Calculate how many Portuguese examples we need for the target ratio
-        # Formula: kaya_count / total = kaya_ratio
-        # So: total = kaya_count / kaya_ratio
-        # And: portuguese_count = total - kaya_count
-        if self.kaya_ratio > 0 and kaya_count > 0:
-            target_total = int(kaya_count / self.kaya_ratio)
-            portuguese_needed = target_total - kaya_count
+        # Apply ratio sampling to balance Kaya vs Portuguese (if Portuguese data exists)
+        if portuguese_conversations:
+            print(f"\n🎯 Applying ratio: {self.kaya_ratio*100:.0f}% Kaya / {(1-self.kaya_ratio)*100:.0f}% Portuguese")
             
-            # Sample Portuguese data to match ratio
-            if portuguese_needed < len(portuguese_conversations):
-                import random
-                random.seed(3407)
-                portuguese_conversations = random.sample(portuguese_conversations, portuguese_needed)
-                print(f"   🎲 Sampled {portuguese_needed} Portuguese examples (from {len(self.load_conversations(self.portuguese_file))} available)")
-            else:
-                print(f"   ⚠️  Using all {len(portuguese_conversations)} Portuguese examples (needed {portuguese_needed})")
-                # Combine all conversations
+            # Use all Kaya data (it's precious!)
+            kaya_count = len(kaya_conversations)
+            
+            # Calculate how many Portuguese examples we need for the target ratio
+            # Formula: kaya_count / total = kaya_ratio
+            # So: total = kaya_count / kaya_ratio
+            # And: portuguese_count = total - kaya_count
+            if self.kaya_ratio > 0 and kaya_count > 0:
+                target_total = int(kaya_count / self.kaya_ratio)
+                portuguese_needed = target_total - kaya_count
+                
+                # Sample Portuguese data to match ratio
+                if portuguese_needed < len(portuguese_conversations):
+                    import random
+                    random.seed(3407)
+                    portuguese_conversations = random.sample(portuguese_conversations, portuguese_needed)
+                    print(f"   🎲 Sampled {portuguese_needed} Portuguese examples (from {len(self.load_conversations(self.portuguese_file))} available)")
+                else:
+                    print(f"   ⚠️  Using all {len(portuguese_conversations)} Portuguese examples (needed {portuguese_needed})")
+        
+        # Combine all conversations
         all_conversations = kaya_conversations + portuguese_conversations
         print(f"\n📊 Total conversations: {len(all_conversations)}")
         
