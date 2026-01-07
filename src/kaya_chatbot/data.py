@@ -479,14 +479,14 @@ class SyntheticDatasetMerger:
     def __init__(
         self,
         kaya_file: str = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_kaya.jsonl",
-        portuguese_file: str = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_portuguese.jsonl",
+        portuguese_file: Optional[str] = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_portuguese.jsonl",
         output_train: str = "C:/Users/guga/Desktop/KayaChatBot/data/train_synthetic.jsonl",
         output_val: str = "C:/Users/guga/Desktop/KayaChatBot/data/val_synthetic.jsonl",
         train_split: float = 0.9,
         kaya_ratio: float = 0.8,  # Target ratio of Kaya data (0.0-1.0)
     ):
         self.kaya_file = Path(kaya_file)
-        self.portuguese_file = Path(portuguese_file)
+        self.portuguese_file = Path(portuguese_file) if portuguese_file else None
         self.output_train = Path(output_train)
         self.output_val = Path(output_val)
         self.train_split = train_split
@@ -705,6 +705,8 @@ class SyntheticDatasetMerger:
         
         # Shuffle
         print(f"\n🎲 Shuffling dataset...")
+        import random
+        random.seed(3407)
         random.shuffle(formatted_data)
         
         # Split train/validation

@@ -4,7 +4,7 @@
 # Set enabled: true for quick testing with minimal data/epochs
 # Set enabled: false for full production runs
 test_mode:
-  enabled: false  # PRODUCTION MODE - Generate full dataset
+  enabled: false  # PRODUCTION MODE - Full training with all data
   
   # Test mode data generation limits
   extraction:
