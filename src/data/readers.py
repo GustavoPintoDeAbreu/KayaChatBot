@@ -32,7 +32,7 @@ class WhatsAppReader:
         self.file_path = file_path
         self.config = config
         self.cleaning_llm = None
-        
+
         # Initialize LLM cleaning if config provided and enabled
         if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
             try:
@@ -42,7 +42,7 @@ class WhatsAppReader:
                 error_msg = f"Failed to initialize LLM cleaning: {e}"
                 print(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
-        
+
         # Regex for "Date, Time - Sender: Message"
         # Example: 3/26/20, 15:28 - Gil João: Message
         self.date_pattern = re.compile(
@@ -57,9 +57,9 @@ class WhatsAppReader:
         """Applies LLM-based cleaning rules."""
         if not text or not text.strip():
             return None
-            
+
         text = text.strip()
-        
+
         # Basic preprocessing (keep this as it's not content-based)
         if "<Media omitted>" in text:
             return None
@@ -74,7 +74,7 @@ class WhatsAppReader:
         text = re.sub(r"@\u2068.*?\u2069", "", text)
 
         text = text.strip()
-        
+
         # If LLM cleaning is available, use it for content-based decisions
         if self.cleaning_llm:
             try:
@@ -96,7 +96,7 @@ class WhatsAppReader:
                 error_msg = f"LLM cleaning failed for message '{text[:50]}...': {e}"
                 print(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
-        
+
         # Fallback: if no LLM cleaning, apply basic rules (but this should not happen per requirements)
         else:
             # Filter out very short messages (< 3 words) unless they contain substance
@@ -105,7 +105,7 @@ class WhatsAppReader:
                 # Allow common short responses but filter random short stuff
                 if word_count == 1:
                     return None
-        
+
         return text
 
     def read(self) -> List[ChatMessage]:
@@ -146,11 +146,10 @@ class WhatsAppReader:
 
             # Check for system message line (e.g. "added you") - usually skip for training persona
             # unless we want to know group events. For now, let's skip system messages
-            # that don't have a sender (the regex above requires a colon for sender).
+            # that don't have a colon (the regex above requires a colon for sender).
             # But we need to handle multi-line messages.
 
             # If it matches the date pattern but NOT the sender pattern, it's a system message
-            # e.g. "3/26/20, 15:28 - Gil João created group..."
             sys_match = self.system_pattern.match(line)
             if sys_match and not match:
                 # It's a system message or a message without a colon (rare)
@@ -189,7 +188,7 @@ class InstagramReader:
         self.json_path = json_path
         self.config = config
         self.cleaning_llm = None
-        
+
         # Initialize LLM cleaning if config provided and enabled
         if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
             try:
@@ -199,7 +198,7 @@ class InstagramReader:
                 error_msg = f"Failed to initialize LLM cleaning: {e}"
                 print(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
-        
+
         # Patterns to identify noise
         self.attachment_pattern = re.compile(r".*sent an attachment\.$", re.IGNORECASE)
         self.liked_pattern = re.compile(r".*liked a message$", re.IGNORECASE)
@@ -220,28 +219,28 @@ class InstagramReader:
         """Clean and filter Instagram message text using LLM."""
         if not text or not text.strip():
             return None
-        
+
         text = text.strip()
-        
+
         # Basic pattern-based filtering (keep this as it's format-based)
         # Skip attachment notifications
         if self.attachment_pattern.match(text):
             return None
-        
+
         # Skip "liked a message" actions
         if self.liked_pattern.match(text):
             return None
-        
+
         # Skip unsent messages
         if self.unsent_pattern.match(text):
             return None
-        
+
         # Remove Instagram URLs (usually shared content, not conversation)
         text = re.sub(r'https?://(?:www\.)?instagram\.com/\S+', '', text)
         text = re.sub(r'https?://\S+', '', text)  # Remove other URLs too
-        
+
         text = text.strip()
-        
+
         # If LLM cleaning is available, use it for content-based decisions
         if self.cleaning_llm:
             try:
@@ -263,31 +262,31 @@ class InstagramReader:
                 error_msg = f"LLM cleaning failed for Instagram message '{text[:50]}...': {e}"
                 print(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
-        
+
         # Fallback: basic length filter (but this should not happen per requirements)
         else:
             # Filter very short messages (likely just reactions or noise)
             if len(text) < 3:
                 return None
-        
+
         # Decode unicode escapes
         text = self._decode_unicode(text)
-        
+
         return text
 
     def read(self) -> List[ChatMessage]:
         """Reads Instagram JSON and returns list of ChatMessage objects."""
         if not os.path.exists(self.json_path):
             raise FileNotFoundError(f"File not found: {self.json_path}")
-        
+
         with open(self.json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         messages = []
-        
+
         # Extract participants (for reference, though we'll use sender_name from messages)
         participants = data.get('participants', [])
-        
+
         # Process messages
         for msg in data.get('messages', []):
             # Skip messages without content
@@ -299,15 +298,15 @@ class InstagramReader:
                     continue
             else:
                 content = msg['content']
-            
+
             # Clean the content
             cleaned_content = self._clean_text(content)
             if not cleaned_content:
                 continue
-            
+
             # Extract sender
             sender = msg.get('sender_name', 'Unknown')
-            
+
             # Convert timestamp (milliseconds since epoch) to readable date
             timestamp_ms = msg.get('timestamp_ms', 0)
             if timestamp_ms:
@@ -315,9 +314,9 @@ class InstagramReader:
                 date_str = date_obj.strftime('%m/%d/%y, %H:%M')
             else:
                 date_str = 'Unknown'
-            
+
             messages.append(ChatMessage(date_str, sender, cleaned_content))
-        
+
         return messages
 
 
@@ -363,14 +362,14 @@ class ConversationFormatter:
             overlap_tokens: Overlap between chunks for continuity.
         """
         dataset = []
-        
+
         # Merge consecutive messages from same sender
         merged_messages = []
         if self.messages:
             current_sender = self.messages[0].sender
             current_content = [self.messages[0].content]
             current_date = self.messages[0].date
-            
+
             for msg in self.messages[1:]:
                 if msg.sender == current_sender:
                     # Same sender, merge
@@ -382,11 +381,11 @@ class ConversationFormatter:
                     current_sender = msg.sender
                     current_content = [msg.content]
                     current_date = msg.date
-            
+
             # Add last message
             merged_text = " ".join(current_content)
             merged_messages.append(ChatMessage(current_date, current_sender, merged_text))
-        
+
         # Build the full conversation text from merged messages
         full_conversation = ""
         for msg in merged_messages:
@@ -492,7 +491,7 @@ class SyntheticDatasetMerger:
         self.train_split = train_split
         self.kaya_ratio = kaya_ratio
         self.tokenizer = None
-        
+
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
@@ -503,11 +502,11 @@ class SyntheticDatasetMerger:
     def load_conversations(self, file_path: Path) -> List[Dict]:
         """Load conversations from JSONL file."""
         conversations = []
-        
+
         if not file_path.exists():
             print(f"⚠️  File not found: {file_path}")
             return conversations
-        
+
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
@@ -516,7 +515,7 @@ class SyntheticDatasetMerger:
                 except Exception as e:
                     print(f"⚠️  Error parsing line: {e}")
                     continue
-        
+
         return conversations
 
     def clean_filler_words(self, text: str) -> str:
@@ -526,21 +525,21 @@ class SyntheticDatasetMerger:
         - Limit to max 1 occurrence of each filler per response
         """
         import re
-        
+
         # Define filler patterns (case-insensitive)
         fillers = ['ahahah', 'ahah', 'ahahha', 'wtf', 'lmao', 'lol']
-        
+
         # Remove fillers from the very start of the text (with optional punctuation)
         for filler in fillers:
             # Match filler at start with optional comma/space
             text = re.sub(rf'^{filler}[,\s]*', '', text, flags=re.IGNORECASE)
-        
+
         # Limit each filler to max 1 occurrence
         for filler in fillers:
             # Find all occurrences
             pattern = re.compile(rf'\b{filler}\b', flags=re.IGNORECASE)
             matches = list(pattern.finditer(text))
-            
+
             # If more than 1, keep only the last one (usually most natural)
             if len(matches) > 1:
                 # Remove all but the last
@@ -548,21 +547,21 @@ class SyntheticDatasetMerger:
                     # Replace with space to avoid word concatenation
                     start, end = match.span()
                     text = text[:start] + ' ' * (end - start) + text[end:]
-        
+
         # Clean up extra spaces
         text = re.sub(r'\s+', ' ', text).strip()
-        
+
         return text
 
     def format_conversation(self, conversation: Dict) -> Optional[str]:
         """Format a conversation using Llama-3.1 chat template."""
-        
+
         # Extract conversation turns
         turns = conversation.get('conversations', [])
-        
+
         if not turns or len(turns) < 2:
             return None
-        
+
         # Get system prompt - USE KAYA PERSONALITY PROMPT FOR ALL KAYA DATA
         source = conversation.get('source', '')
         if source == 'synthetic_kaya':
@@ -571,43 +570,43 @@ class SyntheticDatasetMerger:
         else:
             # Use provided system prompt for Portuguese instruction data
             system_prompt = conversation.get('system', '')
-        
+
         # Build messages for chat template
         messages = []
-        
+
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        
+
         # Add conversation turns
         for turn in turns:
             role = turn.get('role', '')
             content = turn.get('content', '')
-            
+
             if not content:
                 continue
-            
+
             # Apply filler word cleaning to assistant responses
             if role in ['assistant', 'gpt', 'bot']:
                 content = self.clean_filler_words(content)
-            
+
             # Map role names
             if role in ['user', 'human']:
                 messages.append({"role": "user", "content": content})
             elif role in ['assistant', 'gpt', 'bot']:
                 messages.append({"role": "assistant", "content": content})
-        
+
         # Validate: must have at least one user and one assistant message
         has_user = any(m['role'] == 'user' for m in messages)
         has_assistant = any(m['role'] == 'assistant' for m in messages)
-        
+
         if not (has_user and has_assistant):
             return None
-        
+
         # Apply chat template
         if self.tokenizer and hasattr(self.tokenizer, 'apply_chat_template'):
             try:
                 formatted = self.tokenizer.apply_chat_template(
-                    messages, 
+                    messages,
                     tokenize=False,
                     add_generation_prompt=False
                 )
@@ -618,28 +617,28 @@ class SyntheticDatasetMerger:
         else:
             # Manual fallback for Llama-3.1 format
             formatted = "<|begin_of_text|>"
-            
+
             for msg in messages:
                 role = msg['role']
                 content = msg['content']
-                
+
                 formatted += f"<|start_header_id|>{role}<|end_header_id|>\n\n"
                 formatted += f"{content}<|eot_id|>"
-            
+
             return formatted
 
     def merge_and_split(self) -> tuple[int, int]:
         """Merge datasets, apply formatting, shuffle, and split."""
-        
+
         print("=" * 60)
         print("🔄 MERGING SYNTHETIC DATASETS")
         print("=" * 60)
-        
+
         # Load Kaya-specific data
         print(f"\n📂 Loading Kaya-specific data from {self.kaya_file.name}...")
         kaya_conversations = self.load_conversations(self.kaya_file)
         print(f"✅ Loaded {len(kaya_conversations)} Kaya conversations")
-        
+
         # Load general Portuguese data (if provided)
         portuguese_conversations = []
         if self.portuguese_file:
@@ -648,14 +647,14 @@ class SyntheticDatasetMerger:
             print(f"✅ Loaded {len(portuguese_conversations)} Portuguese conversations")
         else:
             print(f"\n⚠️  Skipping Portuguese data (using 100% RAG-aware Kaya data)")
-        
+
         # Apply ratio sampling to balance Kaya vs Portuguese (if Portuguese data exists)
         if portuguese_conversations:
             print(f"\n🎯 Applying ratio: {self.kaya_ratio*100:.0f}% Kaya / {(1-self.kaya_ratio)*100:.0f}% Portuguese")
-            
+
             # Use all Kaya data (it's precious!)
             kaya_count = len(kaya_conversations)
-            
+
             # Calculate how many Portuguese examples we need for the target ratio
             # Formula: kaya_count / total = kaya_ratio
             # So: total = kaya_count / kaya_ratio
@@ -663,7 +662,7 @@ class SyntheticDatasetMerger:
             if self.kaya_ratio > 0 and kaya_count > 0:
                 target_total = int(kaya_count / self.kaya_ratio)
                 portuguese_needed = target_total - kaya_count
-                
+
                 # Sample Portuguese data to match ratio
                 if portuguese_needed < len(portuguese_conversations):
                     import random
@@ -672,7 +671,7 @@ class SyntheticDatasetMerger:
                     print(f"   🎲 Sampled {portuguese_needed} Portuguese examples (from {len(self.load_conversations(self.portuguese_file))} available)")
                 else:
                     print(f"   ⚠️  Using all {len(portuguese_conversations)} Portuguese examples (needed {portuguese_needed})")
-        
+
         # Combine all conversations
         all_conversations = kaya_conversations + portuguese_conversations
         print(f"\n📊 Total conversations: {len(all_conversations)}")
@@ -683,76 +682,76 @@ class SyntheticDatasetMerger:
             print("   1. python src/data/generate_synthetic_data.py")
             print("   2. python src/data/prepare_portuguese_data.py")
             return 0, 0
-        
+
         print(f"   - Kaya-specific: {len(kaya_conversations)} ({len(kaya_conversations)/len(all_conversations)*100:.1f}%)")
         print(f"   - General Portuguese: {len(portuguese_conversations)} ({len(portuguese_conversations)/len(all_conversations)*100:.1f}%)")
-        
+
         # Format all conversations
         print(f"\n🔄 Formatting conversations with Llama-3.1 chat template...")
         formatted_data = []
-        
+
         for i, conv in enumerate(all_conversations):
             formatted = self.format_conversation(conv)
-            
+
             if formatted:
                 formatted_data.append({
                     'formatted_text': formatted,
                     'source': conv.get('source', 'unknown'),
                     'original': conv  # Keep original for debugging
                 })
-        
+
         print(f"✅ Successfully formatted {len(formatted_data)}/{len(all_conversations)} conversations")
-        
+
         # Shuffle
         print(f"\n🎲 Shuffling dataset...")
         import random
         random.seed(3407)
         random.shuffle(formatted_data)
-        
+
         # Split train/validation
         split_idx = int(len(formatted_data) * self.train_split)
         train_data = formatted_data[:split_idx]
         val_data = formatted_data[split_idx:]
-        
+
         print(f"✅ Split: {len(train_data)} train, {len(val_data)} validation ({self.train_split*100:.0f}/{(1-self.train_split)*100:.0f})")
-        
+
         # Save train set
         print(f"\n💾 Saving training set to {self.output_train.name}...")
         self.output_train.parent.mkdir(exist_ok=True, parents=True)
-        
+
         with open(self.output_train, 'w', encoding='utf-8') as f:
             for entry in train_data:
                 f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-        
+
         print(f"✅ Saved {len(train_data)} training examples")
-        
+
         # Save validation set
         print(f"\n💾 Saving validation set to {self.output_val.name}...")
         with open(self.output_val, 'w', encoding='utf-8') as f:
             for entry in val_data:
                 f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-        
+
         print(f"✅ Saved {len(val_data)} validation examples")
-        
+
         # Statistics
         print("\n" + "=" * 60)
         print("📊 MERGE STATISTICS")
         print("=" * 60)
         print(f"Total input: {len(all_conversations)}")
-        print(f"Successfully formatted: {len(formatted_data)} ({len(formatted_data)/len(all_conversations)*100:.1f}%)")
+        print(f"Successfully formatted: {len(formatted_data)} ({len(formatted_data)/len(all_conversations)*100:.0f}%)")
         print(f"Training examples: {len(train_data)}")
         print(f"Validation examples: {len(val_data)}")
-        
+
         # Source breakdown in training set
         kaya_count = sum(1 for x in train_data if x['source'] == 'synthetic_kaya')
         port_count = sum(1 for x in train_data if x['source'] == 'alpaca-portuguese')
-        
+
         print(f"\nTraining set composition:")
         print(f"  Kaya-specific: {kaya_count} ({kaya_count/len(train_data)*100:.1f}%)")
         print(f"  General Portuguese: {port_count} ({port_count/len(train_data)*100:.1f}%)")
-        
+
         print(f"\n✅ Merge complete!")
         print(f"   Train: {self.output_train}")
         print(f"   Val: {self.output_val}")
-        
+
         return len(train_data), len(val_data)

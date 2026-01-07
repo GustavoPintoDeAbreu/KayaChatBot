@@ -12,7 +12,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, '/app/src')
 
-from kaya_chatbot.data import WhatsAppReader, InstagramReader
+from src.data.readers import WhatsAppReader, InstagramReader
 
 
 def load_config():

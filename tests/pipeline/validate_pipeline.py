@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import re
 
-DATA_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data")
+DATA_DIR = Path("/app/data") if Path("/app").exists() else Path("C:/Users/guga/Desktop/KayaChatBot/data")
 
 def check_file(filepath, description):
     """Check if file exists and show stats"""
