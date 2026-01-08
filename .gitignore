@@ -23,10 +23,17 @@ ENV/
 # ===================================
 # Data Files (large/sensitive)
 # ===================================
-data/
+data/facebook/
+data/insta/
+data/wpp/
+data/rag_db/
 *.jsonl
 *.json
 *.txt
+
+# ChromaDB files
+chroma.sqlite3
+*.sqlite3
 
 # Exceptions: Keep config and documentation
 !config.yaml

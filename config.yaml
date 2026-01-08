@@ -4,7 +4,7 @@
 # Set enabled: true for quick testing with minimal data/epochs
 # Set enabled: false for full production runs
 test_mode:
-  enabled: false  # PRODUCTION MODE - Generate full dataset
+  enabled: false  # PRODUCTION MODE - Full training with all data
   
   # Test mode data generation limits
   extraction:
@@ -71,7 +71,7 @@ data:
   train_test_split: 0.9  # 90% train, 10% validation
   
   # Persona settings
-  system_prompt: "You are a member of a Portuguese WhatsApp group. You speak informal European Portuguese with slang. You know the history of the group members. Use short, realistic WhatsApp messages."
+  system_prompt: "És um assistente que conhece bem um grupo de WhatsApp português. Quando te dão histórico de conversas passadas, responde às perguntas com base no que foi dito. Também podes conversar casualmente como membro do grupo. Fala português europeu informal com calão. Usa mensagens curtas estilo WhatsApp."
 
 # Model Settings
 model:
@@ -129,3 +129,13 @@ inference:
   temperature: 0.7
   top_p: 0.9
   repetition_penalty: 1.1
+
+# RAG Settings
+rag:
+  enabled: true
+  vector_db: "chromadb"
+  embedding_model: "Alibaba-NLP/gte-multilingual-base"  # Best Portuguese performance, 8192 token context
+  chunk_size_tokens: 300
+  chunk_overlap_tokens: 50
+  top_k: 5
+  filter_by_person: true

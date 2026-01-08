@@ -13,13 +13,13 @@ import psutil
 # Suppress HuggingFace cache deprecation warning
 os.environ['HF_HOME'] = os.environ.get('HF_HOME', '/tmp/huggingface')
 
-# Add src directory to Python path for kaya_chatbot imports
+# Add src directory to Python path for src imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 builtins.psutil = psutil
 from datasets import load_dataset
 
-from kaya_chatbot.trainer import KayaTrainer
+from src.finetuning.trainer import KayaTrainer
 
 
 def main():
