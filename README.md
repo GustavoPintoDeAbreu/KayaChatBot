@@ -8,10 +8,36 @@ KayaChatBot uses a synthetic data generation pipeline to create training example
 
 **Key Features:**
 - Extracts and cleans messages from WhatsApp exports and Instagram JSON
-- Generates synthetic multi-turn conversations using Azure OpenAI GPT-4
+- Generates synthetic multi-turn conversations using xAI Grok or Azure OpenAI GPT-4
+- **RAG System**: Retrieves relevant conversation history for factual questions
 - Merges with general Portuguese instruction data for better language understanding
 - Fine-tunes Llama-3.1-8B using LoRA (Low-Rank Adaptation) with 4-bit quantization
+- Dual-mode chat: Q&A with context vs casual conversation
 - Efficient training on consumer GPUs (requires ~12GB VRAM)
+
+## 🤖 RAG Features
+
+KayaChatBot includes a Retrieval-Augmented Generation (RAG) system for enhanced conversational capabilities:
+
+### Dual-Mode Chat
+- **Q&A Mode**: When asked questions, retrieves relevant conversation history and provides context-aware answers
+- **Casual Mode**: For general conversation, responds naturally as a group member
+
+### Smart Context Retrieval
+- Uses Alibaba-NLP GTE multilingual embeddings (optimized for Portuguese)
+- Person-aware filtering: Queries about "Peter" retrieve Peter's messages
+- Semantic search across 1750+ conversation chunks
+- Real-time retrieval stats during chat
+
+### Example Usage
+```
+User: What did Peter say about music?
+📚 Retrieved 3 relevant chunks
+Kaya: Peter said he loves this music, chemistry is top ahah
+
+User: olá pessoal
+Kaya: oi tudo bem? 😊
+```
 
 ## 📁 Project Structure
 
@@ -21,20 +47,23 @@ KayaChatBot/
 │   ├── data/                    # Data processing & generation
 │   │   ├── extract_all_messages.py
 │   │   ├── generate_synthetic_data.py
-│   │   ├── generate_one_conversation.py
 │   │   ├── prepare_portuguese_data.py
-│   │   └── merge_datasets.py
+│   │   ├── merge_datasets.py
+│   │   └── readers.py            # Data readers and formatters
 │   ├── finetuning/              # Model training
-│   │   └── train.py
+│   │   ├── train.py
+│   │   └── trainer.py            # Training utilities
 │   ├── chat/                    # Inference & interaction
 │   │   ├── chat.py
-│   │   └── inference.py
+│   │   ├── inference.py
+│   │   └── retriever.py          # RAG retrieval system
 │   ├── testing/                 # Test scripts
 │   │   ├── test_azure.py
 │   │   └── test_azure.ipynb
-│   ├── kaya_chatbot/            # Core library
-│   │   ├── data.py
-│   │   └── trainer.py
+│   ├── llm_providers/           # LLM provider abstractions
+│   │   ├── azure_provider.py
+│   │   ├── xai_provider.py
+│   │   └── base.py
 │   └── models.py                # Pydantic data models
 ├── data/                        # Generated data (gitignored)
 ├── models/                      # Trained models (gitignored)
@@ -134,14 +163,24 @@ python src/chat/inference.py
 - `data/finetune_chunks.jsonl` - Chunked messages for generation
 
 ### 2. **Synthetic Data Generation** (`generate_synthetic_data.py`)
-- Uses Azure OpenAI GPT-4.1-mini to generate diverse Q&A conversations
+- Uses xAI Grok or Azure OpenAI GPT-4.1-mini to generate diverse Q&A conversations
 - Creates 2-5 turn conversations based on your chat history
 - Varies question types: personality, opinions, events, relationships
-- Rate limiting: ~4 chunks/minute (200K TPM limit)
+- Rate limiting: ~4 chunks/minute (200K TPM limit for Azure, higher for xAI)
 
 **Output:** `data/synthetic_kaya.jsonl`
 
-**Alternative:** Use `generate_one_conversation.py` to generate single conversations with delays (workaround for strict rate limits)
+**Usage:**
+```bash
+# Batch mode (default - processes all chunks)
+python src/data/generate_synthetic_data.py
+
+# Single conversation (for rate limit workarounds)
+python src/data/generate_synthetic_data.py --mode single --depth 4
+
+# Generate specific number of conversations
+python src/data/generate_synthetic_data.py --mode count --count 50
+```
 
 ### 3. **Portuguese Dataset** (`prepare_portuguese_data.py`)
 - Downloads alpaca-portuguese instruction dataset from HuggingFace

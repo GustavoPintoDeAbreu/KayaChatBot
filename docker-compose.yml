@@ -31,7 +31,6 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
-      - TRANSFORMERS_CACHE=/app/models/.cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
     
