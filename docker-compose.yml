@@ -1,11 +1,85 @@
+version: '3.8'
+
 services:
+  # Ollama service for model serving
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kaya-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./models:/root/.ollama/models
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI backend service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: kaya-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data:ro
+      - ./src:/app/src:ro
+      - ./config.docker.yaml:/app/config.yaml:ro
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ALLOWED_EMAILS=${ALLOWED_EMAILS:-friend1@example.com,friend2@example.com}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # React frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: kaya-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Cloudflare Tunnel for public access
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kaya-tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN}
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+  # Original training/development container (optional)
   kaya-chatbot:
     build:
       context: .
       dockerfile: Dockerfile
     image: kaya-chatbot:latest
-    container_name: kaya-chatbot
-    
+    container_name: kaya-chatbot-dev
+    profiles: ["dev"]  # Only run when explicitly requested
+
     # Enable single GPU support
     deploy:
       resources:
@@ -14,7 +88,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    
+
     # Mount volumes (Windows paths mapped to Linux paths)
     volumes:
       - ./data:/app/data
@@ -22,23 +96,26 @@ services:
       - ./src:/app/src:ro
       - ./config.docker.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro  # Mount .env file
-    
+
     # Load environment variables from .env file
     env_file:
       - .env
-    
+
     # Environment variables for GPU and caching
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-    
+
     # Keep container running for interactive use
     stdin_open: true
     tty: true
-    
+
     working_dir: /app
-    
+
     # Runtime configuration
     runtime: nvidia
+
+volumes:
+  ollama_data:

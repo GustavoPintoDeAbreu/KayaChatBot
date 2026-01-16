@@ -14,6 +14,181 @@ KayaChatBot uses a synthetic data generation pipeline to create training example
 - Fine-tunes Llama-3.1-8B using LoRA (Low-Rank Adaptation) with 4-bit quantization
 - Dual-mode chat: Q&A with context vs casual conversation
 - Efficient training on consumer GPUs (requires ~12GB VRAM)
+- **Web App**: Deploy as a self-hosted web application with React frontend and Ollama backend
+
+## 🌐 Web App Deployment
+
+Deploy KayaChatBot as a web application accessible to friends via the internet using Docker, Ollama, React, and Cloudflare Tunnel.
+
+### Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   React Frontend│────│  FastAPI Backend │────│     Ollama      │
+│    (Port 3000)  │    │    (Port 8000)   │    │  (Port 11434)   │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                        │                        │
+         └────────────────────────┴────────────────────────┴─────────┐
+                                                   │                  │
+                                         ┌─────────────────┐          │
+                                         │ Cloudflare      │          │
+                                         │ Tunnel          │          │
+                                         └─────────────────┘          │
+                                                   │                  │
+                                         Public URL (*.trycloudflare.com)
+```
+
+### Quick Web App Setup
+
+1. **Export model to GGUF** (one-time setup):
+   ```bash
+   # Activate virtual environment
+   kaya_chatbot_env\Scripts\activate  # Windows
+   source kaya_chatbot_env/bin/activate  # Linux/Mac
+
+   # Export model
+   python src/export/export_gguf.py
+   ```
+
+2. **Configure environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your settings:
+   # - ALLOWED_EMAILS: comma-separated list of friend emails
+   # - CLOUDFLARE_TOKEN: from https://dash.cloudflare.com/
+   # - SECRET_KEY: random string for security
+   ```
+
+3. **Deploy web app**:
+   ```bash
+   # Make setup script executable (Linux/Mac)
+   chmod +x setup.sh
+
+   # Run setup (builds containers and configures Ollama)
+   ./setup.sh
+   ```
+
+4. **Access your chatbot**:
+   - **Local**: http://localhost:3000
+   - **Public**: Check Cloudflare dashboard for your tunnel URL
+
+### Web App Features
+
+- **Email Authentication**: Only authorized friends can access
+- **Real-time Chat**: Modern React UI with typing indicators
+- **RAG Integration**: Automatic context retrieval for questions
+- **Conversation History**: Persistent chat sessions
+- **Responsive Design**: Works on desktop and mobile
+- **Secure**: HTTPS via Cloudflare, authentication required
+
+### Manual Setup (Alternative)
+
+If you prefer step-by-step control:
+
+```bash
+# 1. Start Ollama and load model
+docker-compose up -d ollama
+docker-compose exec ollama ollama create kaya-chatbot -f models/Modelfile
+
+# 2. Start API backend
+docker-compose up -d api
+
+# 3. Start React frontend
+docker-compose up -d frontend
+
+# 4. Start Cloudflare tunnel (optional)
+docker-compose up -d cloudflared
+```
+
+### Cloudflare Tunnel Setup (Custom Domain)
+
+To make your chatbot accessible at **https://sigmakayachatbot.pt** (or your custom domain):
+
+1. **Complete setup guide**: See [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md) for detailed step-by-step instructions
+2. **Quick steps**:
+   - Add domain to Cloudflare account
+   - Create tunnel in Zero Trust dashboard
+   - Configure public hostname: `sigmakayachatbot.pt` → `frontend:3000`
+   - Copy tunnel token to `.env` as `CLOUDFLARE_TOKEN`
+   - Run `docker-compose up -d --build`
+
+Your chatbot will be accessible at both:
+- **Local**: http://localhost:3000
+- **Public**: https://sigmakayachatbot.pt (after tunnel setup)
+
+## 🤖 RAG Features
+
+KayaChatBot includes a Retrieval-Augmented Generation (RAG) system for enhanced conversational capabilities:
+
+### Dual-Mode Chat
+- **Q&A Mode**: When asked questions, retrieves relevant conversation history and provides context-aware answers
+- **Casual Mode**: For general conversation, responds naturally as a group member
+
+### Smart Context Retrieval
+- Uses Alibaba-NLP GTE multilingual embeddings (optimized for Portuguese)
+- Person-aware filtering: Queries about "Peter" retrieve Peter's messages
+- Semantic search across 1750+ conversation chunks
+- Real-time retrieval stats during chat
+
+### Example Usage
+```
+User: What did Peter say about music?
+📚 Retrieved 3 relevant chunks
+Kaya: Peter said he loves this music, chemistry is top ahah
+
+User: olá pessoal
+Kaya: oi tudo bem? 😊
+```
+
+## 📁 Project Structure
+
+```
+KayaChatBot/
+├── src/
+│   ├── api/                    # FastAPI backend for web app
+│   │   └── main.py
+│   ├── data/                   # Data processing & generation
+│   │   ├── extract_all_messages.py
+│   │   ├── generate_synthetic_data.py
+│   │   ├── prepare_portuguese_data.py
+│   │   ├── merge_datasets.py
+│   │   └── readers.py          # Data readers and formatters
+│   ├── export/                 # Model export utilities
+│   │   └── export_gguf.py
+│   ├── finetuning/             # Model training
+│   │   ├── train.py
+│   │   └── trainer.py          # Training utilities
+│   ├── chat/                   # Inference & interaction
+│   │   ├── chat.py
+│   │   ├── inference.py
+│   │   └── retriever.py        # RAG retrieval system
+│   ├── testing/                # Test scripts
+│   │   ├── test_azure.py
+│   │   └── test_azure.ipynb
+│   ├── llm_providers/          # LLM provider abstractions
+│   │   ├── azure_provider.py
+│   │   ├── xai_provider.py
+│   │   └── base.py
+│   └── models.py               # Pydantic data models
+├── frontend/                   # React frontend
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── App.css
+│   │   └── main.jsx
+│   ├── Dockerfile
+│   └── package.json
+├── data/                       # Generated data (gitignored)
+├── models/                     # Trained models (gitignored)
+├── config.yaml                 # Training configuration
+├── docker-compose.yml          # Multi-service Docker setup
+├── Dockerfile.api              # FastAPI container
+├── requirements.api.txt        # API dependencies
+├── setup.sh                    # Web app setup script
+├── run_full_pipeline.py        # Main pipeline orchestrator
+├── test_pipeline.py            # Test mode runner
+├── validate_pipeline.py        # Data validation
+└── .env.example               # Environment template
+```
 
 ## 🤖 RAG Features
 
