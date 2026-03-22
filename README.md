@@ -1,10 +1,10 @@
 # KayaChatBot
 
-A personalized Portuguese chatbot fine-tuned on real WhatsApp and Instagram conversations using Llama-3.1-8B with LoRA.
+An AI "extra member" for a Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using Llama-3.1-8B with LoRA.
 
 ## 🎯 Overview
 
-KayaChatBot uses a synthetic data generation pipeline to create training examples from your personal chat history, then fine-tunes a large language model to mimic your conversational style in European Portuguese.
+KayaChatBot is designed to feel like an extra member of the group chat — someone who was always there and remembers everything. It learns facts, events, and relationships from the group's conversation history so it can answer questions like "what did we talk about at the beach trip?" or just have a casual chat. It communicates in **European Portuguese or English** (not necessarily using the group's own slang or lingo).
 
 **Key Features:**
 - Extracts and cleans messages from WhatsApp exports and Instagram JSON
@@ -348,9 +348,9 @@ export PYTHONPATH="${PYTHONPATH}:/path/to/KayaChatBot"
 
 With ~20K messages and 2000+ synthetic conversations:
 - Training converges in ~3 epochs
-- Model learns conversational style and personality
-- Responses should feel natural and "in character"
-- European Portuguese slang and expressions preserved
+- Model learns facts, events, and relationships from shared conversation history
+- Responses feel grounded in real group memories
+- Communicates naturally in European Portuguese and English
 
 ## 🤝 Contributing
 
@@ -368,4 +368,4 @@ Private project - All rights reserved.
 
 ---
 
-**Note:** This chatbot is trained on personal data. Results and personality will be unique to your conversation history.
+**Note:** This bot is trained on personal group chat data. Its "memory" of past events and people comes entirely from that history.
