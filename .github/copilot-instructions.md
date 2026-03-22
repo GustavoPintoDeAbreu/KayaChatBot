@@ -1,4 +1,4 @@
-# KayaChatBot — Cursor Rules
+# GitHub Copilot Instructions
 
 ## Project Overview
 KayaChatBot is an AI "extra member" for a Portuguese friend group chat. The goal is for the bot to feel like someone who was always part of the group — it has a long-term memory of facts, events, and people learned from real WhatsApp and Instagram conversation history (via RAG + fine-tuning). It communicates in **European Portuguese or English**; it does NOT need to use the group's specific slang or lingo. The focus is on natural language ability and factual memory, not mimicking any particular speech style.
@@ -9,8 +9,8 @@ KayaChatBot is an AI "extra member" for a Portuguese friend group chat. The goal
 - Always install Python packages within the 'kaya_chatbot' virtual environment
 - **Prefer using Python executable directly** (e.g., `python script.py`) always inside virtual environment
 
-## Coding preferences
-- Avoid creating backup and temporary code files when re writing existing ones, either replace that one or create another one and delete it.
+## Coding Preferences
+- Avoid creating backup and temporary code files when rewriting existing ones; either replace the existing file or create a new one and delete the old one
 
 ## Docker Usage
 - When requested and building images, make sure to erase previously built images, containers, volumes, or builds to prevent storage overload (e.g. using `docker system prune` or similar)
