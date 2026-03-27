@@ -24,10 +24,7 @@ TOP_K = RAG_CONFIG['top_k']
 FILTER_BY_PERSON = RAG_CONFIG['filter_by_person']
 
 # Detect if running in Docker
-if os.path.exists('/app'):
-    DB_DIR = Path("/app/data/rag_db")
-else:
-    DB_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data/rag_db")
+DB_DIR = Path("/app/data/rag_db") if os.path.exists('/app') else Path(__file__).parent.parent.parent / "data" / "rag_db"
 
 
 class ConversationRetriever:

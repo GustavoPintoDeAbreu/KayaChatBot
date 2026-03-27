@@ -12,8 +12,8 @@ if sys.platform == 'win32':
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
-PYTHON = "C:/Users/guga/Desktop/KayaChatBot/kaya_chatbot_env/Scripts/python.exe"
-BASE_DIR = Path("C:/Users/guga/Desktop/KayaChatBot")
+PYTHON = sys.executable
+BASE_DIR = Path(__file__).parent.parent.parent
 
 
 def run_script(script_path: Path, description: str):

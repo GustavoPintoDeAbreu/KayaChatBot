@@ -27,12 +27,9 @@ CHUNK_OVERLAP_TOKENS = RAG_CONFIG['chunk_overlap_tokens']
 EMBEDDING_MODEL = RAG_CONFIG['embedding_model']
 
 # Detect if running in Docker
-if os.path.exists('/app'):
-    DATA_DIR = Path("/app/data")
-    DB_DIR = Path("/app/data/rag_db")
-else:
-    DATA_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data")
-    DB_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data/rag_db")
+_BASE_DIR = Path("/app") if os.path.exists('/app') else Path(__file__).parent.parent.parent
+DATA_DIR = _BASE_DIR / "data"
+DB_DIR = _BASE_DIR / "data" / "rag_db"
 
 # Input/Output paths
 INPUT_CLEANED = DATA_DIR / "all_messages_cleaned.jsonl"

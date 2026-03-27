@@ -1,6 +1,6 @@
 """
 Fine-Tuning Script
-Trains Llama-3 8B on WhatsApp chat data using LoRA and 4-bit quantization.
+Trains Qwen3-14B on WhatsApp chat data using LoRA and 4-bit quantization.
 """
 import os
 import sys
@@ -13,8 +13,8 @@ import psutil
 # Suppress HuggingFace cache deprecation warning
 os.environ['HF_HOME'] = os.environ.get('HF_HOME', '/tmp/huggingface')
 
-# Add src directory to Python path for src imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to Python path so 'src' package is importable
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 builtins.psutil = psutil
 from datasets import load_dataset

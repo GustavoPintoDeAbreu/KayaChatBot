@@ -145,14 +145,16 @@ def main():
             
             print(f"   [Mode: {mode_indicator}]")
 
-            # Format prompt for Llama-3.1
-            prompt_parts = [
-                f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>",
-                f"<|start_header_id|>user<|end_header_id|>\n\n{user_message}<|eot_id|>",
-                f"<|start_header_id|>assistant<|end_header_id|>\n\n"
+            # Format prompt using the tokenizer's chat template (model-agnostic)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
             ]
-
-            prompt = "".join(prompt_parts)
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
 
             inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
 

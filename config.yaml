@@ -56,12 +56,12 @@ generation:
 # Data Processing Settings
 data:
   # New synthetic data pipeline
-  train_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\train_synthetic.jsonl"
-  val_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\val_synthetic.jsonl"
+  train_file: "./data/train_synthetic.jsonl"
+  val_file: "./data/val_synthetic.jsonl"
   
   # Legacy files (for reference)
-  input_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\wpp\\WhatsApp Chat with Kaya 👀 - gugu.txt"
-  output_file: "C:\\Users\\guga\\Desktop\\KayaChatBot\\data\\processed_chat.jsonl"
+  input_file: "./data/wpp/WhatsApp Chat with Kaya 👀.txt"
+  output_file: "./data/processed_chat.jsonl"
   
   # Token-based chunking settings
   max_tokens_per_chunk: 2048  # Keep chunks smaller than max_seq_length for safety
@@ -73,10 +73,16 @@ data:
   # Persona settings
   system_prompt: "És um membro extra de um grupo de amigos portugueses. Conheces bem todos os membros do grupo e tudo o que aconteceu, porque aprendeste através das conversas passadas. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Fala em português europeu ou inglês de forma natural."
 
+# Pipeline Settings
+pipeline:
+  # Set skip_synthetic: true to skip API-based generation and use direct message formatting instead.
+  # This avoids any API calls and builds training data straight from the extracted chat messages.
+  skip_synthetic: true
+
 # Model Settings
 model:
-  model_id: "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-  max_seq_length: 4096  # Maximum context length
+  model_id: "unsloth/Qwen3-14B-bnb-4bit"
+  max_seq_length: 4096  # Start at 4096; test 8192 if VRAM allows (Qwen3 supports up to 128K)
   load_in_4bit: true
   
   # LoRA settings
@@ -94,7 +100,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "C:\\Users\\guga\\Desktop\\KayaChatBot\\models\\kaya_v2_synthetic"
+  output_dir: "./models/kaya_v2_synthetic"
   
   # Training hyperparameters (optimized for 2000+ synthetic examples)
   max_steps: 1500  # Reduced from 6000 to prevent overfitting (~1 epoch for larger dataset)
@@ -134,7 +140,7 @@ inference:
 rag:
   enabled: true
   vector_db: "chromadb"
-  embedding_model: "Alibaba-NLP/gte-multilingual-base"  # Best Portuguese performance, 8192 token context
+  embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 5
