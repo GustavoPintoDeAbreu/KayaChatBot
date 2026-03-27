@@ -328,7 +328,7 @@ class ConversationFormatter:
     def __init__(
         self,
         messages: List[ChatMessage],
-        tokenizer_name: str = "unsloth/llama-3-8b-Instruct-bnb-4bit",
+        tokenizer_name: str = "unsloth/Qwen3-14B-Instruct-bnb-4bit",
     ):
         self.messages = messages
         try:
@@ -437,19 +437,13 @@ class ConversationFormatter:
         )
         return dataset
 
-    def format_for_llama3(self, data_entry: Dict) -> str:
+    def format_for_chat(self, data_entry: Dict) -> str:
         """
-        Formats a data entry with Llama-3's chat template.
-        This is what the model will actually see during training.
+        Formats a data entry using the tokenizer's chat template.
+        Falls back to ChatML format if no tokenizer is available.
         """
-        # Llama-3 chat format:
-        # <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-        # {system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
-        # Read this chat log.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-        # {chat_text}<|eot_id|>
-
         if self.tokenizer and hasattr(self.tokenizer, "apply_chat_template"):
-            # Use the official chat template
+            # Use the model's own chat template (model-agnostic)
             messages = [
                 {"role": "system", "content": data_entry["system"]},
                 {"role": "user", "content": "Remember this conversation history."},
@@ -457,15 +451,10 @@ class ConversationFormatter:
             ]
             return self.tokenizer.apply_chat_template(messages, tokenize=False)
         else:
-            # Manual fallback format
-            formatted = (
-                f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
-            )
-            formatted += f"{data_entry['system']}<|eot_id|>"
-            formatted += f"<|start_header_id|>user<|end_header_id|>\n\n"
-            formatted += f"Remember this conversation history.<|eot_id|>"
-            formatted += f"<|start_header_id|>assistant<|end_header_id|>\n\n"
-            formatted += f"{data_entry['text']}<|eot_id|>"
+            # Manual fallback: ChatML format (Qwen3 / most modern models)
+            formatted = f"<|im_start|>system\n{data_entry['system']}<|im_end|>\n"
+            formatted += f"<|im_start|>user\nRemember this conversation history.<|im_end|>\n"
+            formatted += f"<|im_start|>assistant\n{data_entry['text']}<|im_end|>\n"
             return formatted
 
 
@@ -477,24 +466,25 @@ class SyntheticDatasetMerger:
 
     def __init__(
         self,
-        kaya_file: str = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_kaya.jsonl",
-        portuguese_file: Optional[str] = "C:/Users/guga/Desktop/KayaChatBot/data/synthetic_portuguese.jsonl",
-        output_train: str = "C:/Users/guga/Desktop/KayaChatBot/data/train_synthetic.jsonl",
-        output_val: str = "C:/Users/guga/Desktop/KayaChatBot/data/val_synthetic.jsonl",
+        kaya_file: str = None,
+        portuguese_file: Optional[str] = None,
+        output_train: str = None,
+        output_val: str = None,
         train_split: float = 0.9,
         kaya_ratio: float = 0.8,  # Target ratio of Kaya data (0.0-1.0)
     ):
-        self.kaya_file = Path(kaya_file)
+        _data = Path(__file__).parent.parent.parent / "data"
+        self.kaya_file = Path(kaya_file) if kaya_file else _data / "synthetic_kaya.jsonl"
         self.portuguese_file = Path(portuguese_file) if portuguese_file else None
-        self.output_train = Path(output_train)
-        self.output_val = Path(output_val)
+        self.output_train = Path(output_train) if output_train else _data / "train_synthetic.jsonl"
+        self.output_val = Path(output_val) if output_val else _data / "val_synthetic.jsonl"
         self.train_split = train_split
         self.kaya_ratio = kaya_ratio
         self.tokenizer = None
 
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
-                "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
+                "unsloth/Qwen3-14B-Instruct-bnb-4bit"
             )
         except:
             print("Warning: Could not load tokenizer for chat template.")
@@ -554,7 +544,7 @@ class SyntheticDatasetMerger:
         return text
 
     def format_conversation(self, conversation: Dict) -> Optional[str]:
-        """Format a conversation using Llama-3.1 chat template."""
+        """Format a conversation using the tokenizer's chat template (model-agnostic)."""
 
         # Extract conversation turns
         turns = conversation.get('conversations', [])
@@ -562,11 +552,11 @@ class SyntheticDatasetMerger:
         if not turns or len(turns) < 2:
             return None
 
-        # Get system prompt - USE KAYA PERSONALITY PROMPT FOR ALL KAYA DATA
+        # Get system prompt for the conversation
         source = conversation.get('source', '')
         if source == 'synthetic_kaya':
-            # Inject Kaya personality system prompt for all Kaya conversations
-            system_prompt = "You are a member of a Portuguese WhatsApp group. You speak informal European Portuguese with slang. You know the history of the group members. Use short, realistic WhatsApp messages."
+            # Inject Kaya system prompt for all Kaya conversations
+            system_prompt = "You are Kaya, an extra member of a Portuguese friend group chat. You have a long-term memory of facts, events, and people from the group's shared past. You communicate naturally in European Portuguese or English."
         else:
             # Use provided system prompt for Portuguese instruction data
             system_prompt = conversation.get('system', '')
@@ -615,15 +605,17 @@ class SyntheticDatasetMerger:
                 print(f"⚠️  Error applying chat template: {e}")
                 return None
         else:
-            # Manual fallback for Llama-3.1 format
-            formatted = "<|begin_of_text|>"
+            # Manual fallback: ChatML format (Qwen3 / most modern models)
+            formatted = "<|im_start|>"
 
             for msg in messages:
                 role = msg['role']
                 content = msg['content']
 
-                formatted += f"<|start_header_id|>{role}<|end_header_id|>\n\n"
-                formatted += f"{content}<|eot_id|>"
+                formatted += f"{role}\n{content}<|im_end|>\n<|im_start|>"
+
+            # Remove trailing incomplete <|im_start|>
+            formatted = formatted.rstrip("<|im_start|>").rstrip()
 
             return formatted
 
@@ -687,7 +679,7 @@ class SyntheticDatasetMerger:
         print(f"   - General Portuguese: {len(portuguese_conversations)} ({len(portuguese_conversations)/len(all_conversations)*100:.1f}%)")
 
         # Format all conversations
-        print(f"\n🔄 Formatting conversations with Llama-3.1 chat template...")
+        print(f"\n🔄 Formatting conversations with chat template...")
         formatted_data = []
 
         for i, conv in enumerate(all_conversations):
@@ -747,8 +739,11 @@ class SyntheticDatasetMerger:
         port_count = sum(1 for x in train_data if x['source'] == 'alpaca-portuguese')
 
         print(f"\nTraining set composition:")
-        print(f"  Kaya-specific: {kaya_count} ({kaya_count/len(train_data)*100:.1f}%)")
-        print(f"  General Portuguese: {port_count} ({port_count/len(train_data)*100:.1f}%)")
+        if len(train_data) > 0:
+            print(f"  Kaya-specific: {kaya_count} ({kaya_count/len(train_data)*100:.1f}%)")
+            print(f"  General Portuguese: {port_count} ({port_count/len(train_data)*100:.1f}%)")
+        else:
+            print(f"  (no training examples — all went to validation due to small dataset)")
 
         print(f"\n✅ Merge complete!")
         print(f"   Train: {self.output_train}")

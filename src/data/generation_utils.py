@@ -21,7 +21,7 @@ def get_base_dir() -> Path:
     if os.path.exists('/app'):
         return Path("/app")
     else:
-        return Path("C:/Users/guga/Desktop/KayaChatBot")
+        return Path(__file__).parent.parent.parent
 
 
 def get_output_paths():

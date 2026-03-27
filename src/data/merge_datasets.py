@@ -6,8 +6,8 @@ import sys
 import os
 from pathlib import Path
 
-# Add src directory to Python path for src imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to Python path for src imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.data.readers import SyntheticDatasetMerger
 
 
@@ -18,7 +18,7 @@ def main():
     if os.path.exists('/app'):
         data_dir = "/app/data"
     else:
-        data_dir = "C:/Users/guga/Desktop/KayaChatBot/data"
+        data_dir = str(Path(__file__).parent.parent.parent / "data")
     
     # Only use RAG-aware Kaya data (no general Portuguese alpaca data)
     # The model should learn from RAG examples only

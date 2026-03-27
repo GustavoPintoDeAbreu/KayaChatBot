@@ -59,7 +59,7 @@ data:
   val_file: "/app/data/val_synthetic.jsonl"
   
   # Legacy files (for reference)
-  input_file: "/app/data/wpp/WhatsApp Chat with Kaya 👀 - gugu.txt"
+  input_file: "/app/data/wpp/WhatsApp Chat with Kaya 👀.txt"
   output_file: "/app/data/processed_chat.jsonl"
   
   # Token-based chunking settings
@@ -80,10 +80,14 @@ data:
     cache_file: "/app/data/.cleaning_cache.json"
     stats_file: "/app/data/cleaning_stats.json"
 
+# Pipeline Settings
+pipeline:
+  skip_synthetic: true
+
 # Model Settings
 model:
-  model_id: "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-  max_seq_length: 4096
+  model_id: "unsloth/Qwen3-14B-bnb-4bit"
+  max_seq_length: 4096  # Start at 4096; test 8192 if VRAM allows (Qwen3 supports up to 128K)
   load_in_4bit: true
   
   # LoRA settings
@@ -141,7 +145,7 @@ inference:
 rag:
   enabled: true
   vector_db: "chromadb"
-  embedding_model: "Alibaba-NLP/gte-multilingual-base"  # Best Portuguese performance, 8192 token context
+  embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 5

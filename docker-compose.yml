@@ -40,5 +40,8 @@ services:
     
     working_dir: /app
     
+    # Run the full pipeline automatically on container start
+    command: python run_full_pipeline.py
+    
     # Runtime configuration
     runtime: nvidia
