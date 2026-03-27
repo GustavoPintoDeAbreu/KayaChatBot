@@ -199,7 +199,7 @@ class SyntheticConversation(BaseModel):
 # ============================================================================
 
 class TrainingExample(BaseModel):
-    """A formatted training example with Llama-3.1 chat template applied.
+    """A formatted training example with chat template applied.
     
     This is the final format ready for fine-tuning.
     """
@@ -219,10 +219,13 @@ class TrainingExample(BaseModel):
     @field_validator("formatted_text")
     @classmethod
     def check_chat_template(cls, v: str) -> str:
-        """Validate that Llama-3.1 chat template tokens are present."""
-        required_tokens = ["<|begin_of_text|>", "<|start_header_id|>", "<|end_header_id|>"]
-        if not all(token in v for token in required_tokens):
-            raise ValueError("Formatted text missing required Llama-3.1 chat template tokens")
+        """Validate that a chat template has been applied (model-agnostic)."""
+        # ChatML format used by Qwen3 and many modern models
+        has_chatml = "<|im_start|>" in v and "<|im_end|>" in v
+        # Llama-style format (legacy fallback)
+        has_llama = "<|begin_of_text|>" in v and "<|start_header_id|>" in v
+        if not (has_chatml or has_llama):
+            raise ValueError("Formatted text missing chat template tokens")
         return v
     
     def to_dict(self) -> Dict[str, Any]:

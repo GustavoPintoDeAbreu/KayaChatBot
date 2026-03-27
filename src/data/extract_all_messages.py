@@ -26,7 +26,7 @@ import os
 if os.path.exists('/app'):
     DATA_DIR = Path("/app/data")
 else:
-    DATA_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data")
+    DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 OUTPUT_CLEANED = DATA_DIR / "all_messages_cleaned.jsonl"
 OUTPUT_FINETUNE_CHUNKS = DATA_DIR / "finetune_chunks.jsonl"
@@ -66,51 +66,98 @@ class MessageExtractor:
         return True
     
     def extract_whatsapp(self, file_path: Path) -> List[Dict]:
-        """Extract messages from WhatsApp chat export."""
+        """Extract messages from WhatsApp chat export.
+
+        Handles the real iOS/Android export format:
+            M/DD/YY, HH:MM - Sender: Message
+        Multiline messages (continuation lines without a timestamp) are merged
+        into the previous message.
+        """
         print(f"\n📱 Processing WhatsApp: {file_path.name}")
         messages = []
-        
-        # WhatsApp format: [DD/MM/YYYY, HH:MM:SS] Sender: Message
-        pattern = r'\[(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{1,2}:\d{1,2})\] ([^:]+): (.+)'
-        
+
+        # Format: "3/26/20, 15:28 - Sender Name: message text"
+        msg_pattern = re.compile(
+            r'^(\d{1,2}/\d{1,2}/\d{2,4}, \d{1,2}:\d{2}) - ([^:]+): (.+)$'
+        )
+        # System-message line (no "Sender: " part): "3/26/20, 15:28 - Gil João added you"
+        sys_pattern = re.compile(
+            r'^\d{1,2}/\d{1,2}/\d{2,4}, \d{1,2}:\d{2} - .+$'
+        )
+
+        # Skip tokens that appear in content (not system messages)
+        SKIP_TOKENS = [
+            'media omitted', 'file attached',
+            'this message was edited',
+            'deleted this message', 'changed the subject',
+        ]
+
+        current_date: str = ""
+        current_sender: str = ""
+        current_content: list = []
+
+        def flush():
+            """Flush accumulated lines as a single message."""
+            if not current_content or not current_sender:
+                return
+            full_text = " ".join(current_content)
+            cleaned_text = self.clean_text(full_text)
+            if not cleaned_text:
+                return
+            if any(skip in cleaned_text.lower() for skip in SKIP_TOKENS):
+                return
+            if not self.is_valid_message(cleaned_text):
+                return
+            messages.append({
+                'timestamp': current_date,
+                'sender': current_sender,
+                'text': cleaned_text,
+                'source': 'whatsapp',
+            })
+
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                
-            for match in re.finditer(pattern, content, re.MULTILINE):
-                date, time, sender, text = match.groups()
-                
-                # Parse timestamp
-                timestamp_str = f"{date} {time}"
-                try:
-                    timestamp = datetime.strptime(timestamp_str, "%d/%m/%Y %H:%M:%S")
-                except:
+                lines = f.readlines()
+
+            for raw_line in lines:
+                line = raw_line.rstrip('\n')
+
+                # --- New timestamped message ---
+                match = msg_pattern.match(line)
+                if match:
+                    flush()
+                    datetime_str, sender, text = match.groups()
+                    try:
+                        # Try 2-digit year first (most common), then 4-digit
+                        try:
+                            ts = datetime.strptime(datetime_str, "%m/%d/%y, %H:%M")
+                        except ValueError:
+                            ts = datetime.strptime(datetime_str, "%m/%d/%Y, %H:%M")
+                        current_date = ts.isoformat()
+                    except Exception:
+                        current_date = datetime_str
+                    current_sender = sender.strip()
+                    current_content = [text]
                     continue
-                
-                # Clean and validate
-                cleaned_text = self.clean_text(text)
-                
-                # Skip media omitted and system messages
-                if any(skip in cleaned_text.lower() for skip in [
-                    'media omitted', 'this message was edited', 
-                    'deleted this message', 'changed the subject'
-                ]):
+
+                # --- System message (no Sender: part) — flush and skip ---
+                if sys_pattern.match(line):
+                    flush()
+                    current_sender = ""
+                    current_content = []
                     continue
-                
-                if not self.is_valid_message(cleaned_text):
-                    continue
-                
-                messages.append({
-                    'timestamp': timestamp.isoformat(),
-                    'sender': sender.strip(),
-                    'text': cleaned_text,
-                    'source': 'whatsapp'
-                })
-        
+
+                # --- Continuation line of previous message ---
+                stripped = line.strip()
+                if stripped and current_content:
+                    current_content.append(stripped)
+
+            flush()  # flush last pending message
+
         except Exception as e:
             print(f"❌ Error processing WhatsApp file: {e}")
             return []
-        
+
         print(f"✅ Extracted {len(messages)} WhatsApp messages")
         return messages
     

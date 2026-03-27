@@ -26,7 +26,7 @@ import os
 if os.path.exists('/app'):
     DATA_DIR = Path("/app/data")
 else:
-    DATA_DIR = Path("C:/Users/guga/Desktop/KayaChatBot/data")
+    DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 OUTPUT_FILE = DATA_DIR / "synthetic_portuguese.jsonl"
 
