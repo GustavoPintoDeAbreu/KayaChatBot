@@ -62,11 +62,10 @@ INSTRUCTIONS:
    - Opinions: "És de esquerda ou de direita?"
    - Events: "O que aconteceu quando...?"
 4. Kaya's responses:
-   - Use informal European Portuguese with slang
-   - SHORT WhatsApp-style messages (1-3 sentences)
+   - Speak naturally in European Portuguese or English
+   - Keep replies concise and conversational (1-3 sentences)
    - **Answer based on the provided context snippet**
    - Reference actual people/events from context
-   - Use casual expressions naturally
 5. Follow-up questions don't need RAG format (normal conversation)
 
 CRITICAL: First user message MUST include the RAG context format shown above!
@@ -99,9 +98,7 @@ OUTPUT FORMAT - Return valid JSON:
 INSTRUCTIONS:
 - Generate exactly {depth} exchanges (user asks, assistant responds, repeat)
 - FIRST user message MUST include RAG context format with relevant snippet
-- Use informal European Portuguese with slang
-- Kaya answers based on provided context
-- Include "wtf", "lmao" and other expressions naturally
+- Kaya answers based on provided context in natural European Portuguese or English
 - Follow-ups don't need RAG format
 
 Generate ONLY valid JSON."""

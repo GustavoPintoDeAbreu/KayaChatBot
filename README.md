@@ -1,6 +1,6 @@
 # KayaChatBot
 
-An AI "extra member" for a Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using Llama-3.1-8B with LoRA.
+An AI "extra member" for a Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using Qwen3-14B with LoRA.
 
 ## 🎯 Overview
 
@@ -11,7 +11,7 @@ KayaChatBot is designed to feel like an extra member of the group chat — someo
 - Generates synthetic multi-turn conversations using xAI Grok or Azure OpenAI GPT-4
 - **RAG System**: Retrieves relevant conversation history for factual questions
 - Merges with general Portuguese instruction data for better language understanding
-- Fine-tunes Llama-3.1-8B using LoRA (Low-Rank Adaptation) with 4-bit quantization
+- Fine-tunes Qwen3-14B using LoRA (Low-Rank Adaptation) with 4-bit quantization
 - Dual-mode chat: Q&A with context vs casual conversation
 - Efficient training on consumer GPUs (requires ~12GB VRAM)
 
@@ -24,7 +24,7 @@ KayaChatBot includes a Retrieval-Augmented Generation (RAG) system for enhanced 
 - **Casual Mode**: For general conversation, responds naturally as a group member
 
 ### Smart Context Retrieval
-- Uses Alibaba-NLP GTE multilingual embeddings (optimized for Portuguese)
+- Uses BAAI/bge-m3 multilingual embeddings (M3: multi-linguality, multi-granularity, multi-functionality)
 - Person-aware filtering: Queries about "Peter" retrieve Peter's messages
 - Semantic search across 1750+ conversation chunks
 - Real-time retrieval stats during chat
@@ -191,7 +191,7 @@ python src/data/generate_synthetic_data.py --mode count --count 50
 
 ### 4. **Dataset Merging** (`merge_datasets.py`)
 - Combines Kaya-specific and general Portuguese data
-- Applies Llama-3.1 chat template formatting
+- Applies Qwen3 chat template formatting (ChatML)
 - Shuffles and splits into train/val (90/10)
 
 **Output:** 
@@ -199,8 +199,8 @@ python src/data/generate_synthetic_data.py --mode count --count 50
 - `data/val_synthetic.jsonl`
 
 ### 5. **Fine-Tuning** (`train.py`)
-- Loads Llama-3.1-8B-Instruct with 4-bit quantization
-- Applies LoRA adapters (rank=16, alpha=16)
+- Loads Qwen3-14B-Instruct with 4-bit quantization
+- Applies LoRA adapters (rank=32, alpha=32)
 - Trains for 3 epochs with cosine learning rate schedule
 - Saves checkpoints every 100 steps
 
@@ -237,8 +237,8 @@ Edit `config.yaml` to customize:
 
 ```yaml
 model:
-  model_id: "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-  max_seq_length: 2048
+  model_id: "unsloth/Qwen3-14B-Instruct-bnb-4bit"
+  max_seq_length: 4096
 
 training:
   output_dir: "./models/kaya_v1"
