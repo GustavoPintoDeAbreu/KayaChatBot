@@ -12,6 +12,13 @@ KayaChatBot is an AI "extra member" for a Portuguese friend group chat. The goal
 ## Coding Preferences
 - Avoid creating backup and temporary code files when rewriting existing ones; either replace the existing file or create a new one and delete the old one
 
+ - Branching & PRs in Plans: Whenever you're asked to create a plan, include explicit steps to:
+	 - create a new Git branch for the work,
+	 - open a pull request (PR) for that branch,
+	 - run tests and verify the change (including running the project in Docker where applicable),
+	 - iterate until the implementation is well tested and well implemented,
+	 - merge the PR after tests pass and approvals are obtained.
+
 ## Docker Usage
 - When requested and building images, make sure to erase previously built images, containers, volumes, or builds to prevent storage overload (e.g. using `docker system prune` or similar)
 - After completing any change, always test it inside Docker to verify it works correctly in the containerized environment
