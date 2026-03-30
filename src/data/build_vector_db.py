@@ -8,7 +8,6 @@ import os
 import re
 import yaml
 from pathlib import Path
-from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from collections import defaultdict
 import chromadb
@@ -30,6 +29,22 @@ EMBEDDING_MODEL = RAG_CONFIG['embedding_model']
 _BASE_DIR = Path("/app") if os.path.exists('/app') else Path(__file__).parent.parent.parent
 DATA_DIR = _BASE_DIR / "data"
 DB_DIR = _BASE_DIR / "data" / "rag_db"
+
+# Load group members from JSON (single source of truth)
+_members_file = DATA_DIR / "group_members.json"
+if _members_file.exists():
+    with open(_members_file, 'r', encoding='utf-8') as _f:
+        _members_data = json.load(_f)
+    GROUP_MEMBERS = [
+        alias.lower()
+        for m in _members_data.get('members', [])
+        for alias in m.get('aliases', [])
+    ]
+else:
+    GROUP_MEMBERS = [
+        'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
+        'mateus', 'rafa', 'bernardo', 'chamusca', 'gilao', 'pedro'
+    ]
 
 # Input/Output paths
 INPUT_CLEANED = DATA_DIR / "all_messages_cleaned.jsonl"
@@ -57,16 +72,10 @@ class ConversationChunker:
 
     def extract_mentioned_people(self, text: str) -> List[str]:
         """Extract mentioned people from text using heuristics."""
-        # Common group member names (case insensitive)
-        group_members = [
-            'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
-            'mateus', 'rafa', 'bernardo', 'chamusca', 'gilao', 'pedro', 'kaya'
-        ]
-
         mentioned = []
         text_lower = text.lower()
 
-        for member in group_members:
+        for member in GROUP_MEMBERS:
             if member in text_lower:
                 mentioned.append(member)
 
@@ -314,6 +323,82 @@ class VectorDatabaseBuilder:
         }
 
 
+class KnowledgeBaseBuilder:
+    """Build and populate a curated knowledge base ChromaDB collection from group_knowledge.json."""
+
+    def __init__(self, db_path: Path, embedding_model: str = EMBEDDING_MODEL):
+        self.db_path = db_path
+        self.embedding_model = embedding_model
+        self.client = chromadb.PersistentClient(path=str(db_path))
+        self.collection = None
+        self.encoder = None
+
+    def initialize(self, collection_name: str = "kaya_knowledge_base"):
+        """Initialize the KB collection and embedding model (reusing already-loaded encoder if possible)."""
+        print(f"🔧 Initializing knowledge base collection '{collection_name}'")
+
+        self.encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+
+        # Always rebuild the KB collection so it stays in sync with the JSON file
+        try:
+            self.client.delete_collection(name=collection_name)
+            print(f"🗑️  Deleted existing collection '{collection_name}'")
+        except Exception:
+            pass
+
+        self.collection = self.client.create_collection(
+            name=collection_name,
+            metadata={
+                "description": "Curated group knowledge facts for Kaya chatbot",
+                "embedding_model": self.embedding_model,
+            }
+        )
+        print(f"✅ Knowledge base collection created")
+
+    def build_from_json(self, knowledge_file: Path):
+        """Load facts from group_knowledge.json and embed them into the collection."""
+        if not knowledge_file.exists():
+            print(f"⚠️  Knowledge file not found: {knowledge_file} — skipping KB build")
+            return
+
+        with open(knowledge_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        facts = data.get('facts', [])
+        if not facts:
+            print("⚠️  No facts found in knowledge file")
+            return
+
+        print(f"📥 Embedding {len(facts)} knowledge facts...")
+
+        ids = [fact['id'] for fact in facts]
+        documents = [fact['text'] for fact in facts]
+        metadatas = [
+            {'category': fact.get('category', ''), 'subject': fact.get('subject', '')}
+            for fact in facts
+        ]
+
+        batch_size = 32
+        embeddings = []
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            batch_embeddings = self.encoder.encode(batch, show_progress_bar=False)
+            embeddings.extend(batch_embeddings.tolist())
+
+        self.collection.add(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings
+        )
+
+        print(f"✅ Added {len(facts)} facts to knowledge base collection")
+
+    def get_stats(self) -> Dict[str, Any]:
+        count = self.collection.count() if self.collection else 0
+        return {'total_facts': count, 'collection_name': 'kaya_knowledge_base'}
+
+
 def load_cleaned_messages(limit: int = None) -> List[Dict]:
     """Load cleaned messages from file."""
     messages = []
@@ -358,58 +443,62 @@ def main():
         print("❌ No messages loaded!")
         return
 
-    # Create chunks
+    # ------------------------------------------------------------------ #
+    #  Part 1: Conversation history collection                             #
+    # ------------------------------------------------------------------ #
     print(f"\n🔨 Creating conversation chunks (max {CHUNK_SIZE_TOKENS} tokens each)")
     chunker = ConversationChunker(
         chunk_size_tokens=CHUNK_SIZE_TOKENS,
         overlap_tokens=CHUNK_OVERLAP_TOKENS
     )
     chunks = chunker.create_conversation_chunks(messages)
-
     print(f"✅ Created {len(chunks)} conversation chunks")
 
-    # Initialize vector database
     builder = VectorDatabaseBuilder(DB_DIR, EMBEDDING_MODEL)
     builder.initialize()
-
-    # Add chunks to database
     builder.add_chunks(chunks)
 
-    # Statistics
     stats = builder.get_stats()
     print("\n" + "=" * 60)
-    print("📊 RAG DATABASE STATISTICS")
+    print("📊 CONVERSATION RAG STATISTICS")
     print("=" * 60)
     print(f"Total chunks: {stats['total_chunks']}")
     print(f"Collection: {stats['collection_name']}")
     print(f"Database location: {DB_DIR}")
 
-    # Chunk statistics
     total_messages = sum(chunk['message_count'] for chunk in chunks)
     total_tokens = sum(chunk['token_count'] for chunk in chunks)
-    avg_messages_per_chunk = total_messages / len(chunks)
-    avg_tokens_per_chunk = total_tokens / len(chunks)
-
     print(f"Total messages in chunks: {total_messages}")
     print(f"Total tokens in chunks: {total_tokens:,}")
-    print(f"Average messages per chunk: {avg_messages_per_chunk:.1f}")
-    print(f"Average tokens per chunk: {avg_tokens_per_chunk:.0f}")
+    print(f"Average messages per chunk: {total_messages / len(chunks):.1f}")
+    print(f"Average tokens per chunk: {total_tokens / len(chunks):.0f}")
 
-    # Metadata statistics
-    all_participants = set()
-    all_mentioned = set()
-    for chunk in chunks:
-        all_participants.update(chunk['participants'])
-        all_mentioned.update(chunk['mentioned'])
+    # ------------------------------------------------------------------ #
+    #  Part 2: Curated knowledge base collection                           #
+    # ------------------------------------------------------------------ #
+    kb_config = RAG_CONFIG.get('knowledge_base', {})
+    if kb_config.get('enabled', True):
+        print("\n" + "=" * 60)
+        print("🧠 KNOWLEDGE BASE BUILDER")
+        print("=" * 60)
 
-    print(f"Unique participants: {len(all_participants)}")
-    print(f"Unique mentioned people: {len(all_mentioned)}")
+        knowledge_file_str = kb_config.get('file', str(DATA_DIR / 'group_knowledge.json'))
+        knowledge_file = Path(knowledge_file_str) if os.path.isabs(knowledge_file_str) else _BASE_DIR / knowledge_file_str.lstrip('./')
+        kb_collection_name = kb_config.get('collection_name', 'kaya_knowledge_base')
 
-    print("\n✅ RAG database build complete!")
+        kb_builder = KnowledgeBaseBuilder(DB_DIR, EMBEDDING_MODEL)
+        kb_builder.initialize(kb_collection_name)
+        kb_builder.build_from_json(knowledge_file)
+
+        kb_stats = kb_builder.get_stats()
+        print(f"Total facts: {kb_stats['total_facts']}")
+        print(f"Collection: {kb_stats['collection_name']}")
+
+    print("\n✅ All RAG collections built!")
     print(f"\nNext steps:")
-    print(f"  1. Test retrieval with src/chat/retriever.py")
-    print(f"  2. Update src/chat/chat.py to use RAG")
-    print(f"  3. Run chat interface to test RAG functionality")
+    print(f"  1. Fill in notes/descriptions in data/group_members.json and data/group_knowledge.json")
+    print(f"  2. Re-run this script after updating the JSON files to rebuild the knowledge base")
+    print(f"  3. Run: python src/chat/chat.py")
 
 
 if __name__ == "__main__":

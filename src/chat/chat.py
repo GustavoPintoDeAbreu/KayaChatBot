@@ -28,8 +28,35 @@ def main():
 
     model_dir = config['training']['output_dir']
     max_seq_length = config['model']['max_seq_length']
-    system_prompt = config['data']['system_prompt']
-    rag_enabled = config.get('rag', {}).get('enabled', False)
+    base_system_prompt = config['data']['system_prompt']
+    rag_config = config.get('rag', {})
+    rag_enabled = rag_config.get('enabled', False)
+    always_on = rag_config.get('always_on', True)
+    knowledge_approach = rag_config.get('knowledge_approach', 'both')
+
+    # Build system prompt — optionally inject group member profiles (JSON approach)
+    system_prompt = base_system_prompt
+    members_file = config.get('data', {}).get('group_members_file')
+    if members_file:
+        # Support both absolute paths and relative paths
+        from pathlib import Path as _Path
+        _mf = _Path(members_file)
+        if not _mf.is_absolute():
+            _mf = _Path(config_path).parent / members_file
+        if _mf.exists() and knowledge_approach in ('both', 'json_only'):
+            import json as _json
+            members_data = _json.loads(_mf.read_text(encoding='utf-8'))
+            member_lines = []
+            for m in members_data.get('members', []):
+                line = m['name']
+                aliases = [a for a in m.get('aliases', []) if a.lower() != m['name'].lower()]
+                if aliases:
+                    line += f" (também conhecido como: {', '.join(aliases)})"
+                if m.get('notes'):
+                    line += f" — {m['notes']}"
+                member_lines.append(line)
+            if member_lines:
+                system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
 
     # Check if model exists
     if not os.path.exists(model_dir):
@@ -51,13 +78,11 @@ def main():
     retriever = None
     if rag_enabled:
         try:
-            # Try different import paths for Docker and local environments
             try:
                 from src.chat.retriever import get_retriever
             except ImportError:
-                # Docker environment - src is in sys.path
                 from chat.retriever import get_retriever
-            
+
             retriever = get_retriever(config)
             print("✓ RAG retriever initialized!")
         except Exception as e:
@@ -69,14 +94,13 @@ def main():
     try:
         user_name = input("\nEnter your name (default: User): ").strip() or "User"
     except (EOFError, OSError):
-        # Non-interactive mode (e.g., piped input)
         user_name = "User"
         print("\n⚠️  Non-interactive mode detected. Using default name: User")
-    
-    bot_name = "Kaya"
 
-    rag_status = "with RAG" if rag_enabled else "without RAG"
-    print(f"\n💬 Chat started {rag_status}! Type 'exit' to quit.")
+    bot_name = "Kaya Bot"
+
+    rag_status = "with always-on RAG" if (rag_enabled and always_on) else ("with RAG" if rag_enabled else "without RAG")
+    print(f"\n💬 Chat started {rag_status}! [knowledge_approach={knowledge_approach}] Type 'exit' to quit.")
     print("-" * 60)
 
     # Keep a short history buffer to fit in context
@@ -104,45 +128,32 @@ def main():
             if len(history) > max_history_lines:
                 history = history[-max_history_lines:]
 
-            # Detect if this is a question (Q&A mode) or casual message (conversation mode)
-            is_question = any(keyword in user_input.lower() for keyword in [
-                'o que', 'como', 'quando', 'onde', 'quem', 'porque', 'porquê', 'qual', 
-                'quantos', 'quantas', '?', 'diz', 'dizes', 'sabes', 'conheces', 'what', 'how'
-            ])
-
-            # Retrieve relevant context if RAG is enabled
+            # Always retrieve RAG context (always-on mode)
             context = ""
             if rag_enabled and retriever:
                 try:
-                    retrieved_chunks = retriever.retrieve(user_input)
-                    context = retriever.format_context(retrieved_chunks)
-
-                    if retrieved_chunks:
-                        print(f"📚 Retrieved {len(retrieved_chunks)} relevant conversation chunks")
-                        for chunk in retrieved_chunks[:2]:  # Show first 2 for debugging
-                            print(f"   • {chunk['message_count']} messages, similarity: {chunk['similarity_score']:.3f}")
+                    context = retriever.retrieve_all(user_input, knowledge_approach=knowledge_approach)
+                    if context:
+                        conv_count = context.count("--- Conversa ")
+                        kb_count = context.count("---") - conv_count
+                        print(f"📚 RAG: {conv_count} conversation chunk(s)" + (f", {kb_count} knowledge fact(s)" if kb_count > 0 else ""))
                 except Exception as e:
                     print(f"⚠️  RAG retrieval failed: {e}")
                     context = ""
 
-            # Build the user message based on mode
-            if is_question and context:
-                # Q&A mode with RAG: Provide context and ask for answer
-                user_message = f"{context}\n\nCom base nestas conversas passadas, responde:\n{user_input}"
-                mode_indicator = "Q&A with RAG"
-            elif is_question:
-                # Q&A mode without context: Direct question
-                user_message = user_input
-                mode_indicator = "Q&A"
-            else:
-                # Conversation mode: Include recent history
-                if len(history) > 1:
-                    recent_history = "\n".join(history[-5:])  # Last 5 messages
-                    user_message = f"Conversa recente:\n{recent_history}\n\n{user_name}: {user_input}"
-                else:
-                    user_message = user_input
-                mode_indicator = "Casual"
-            
+            # Build user message: RAG context + recent history + current input
+            message_parts = []
+            if context:
+                message_parts.append(context)
+
+            if len(history) > 1:
+                recent = "\n".join(history[-5:-1])  # Last 5 messages excluding current
+                message_parts.append(f"Conversa recente:\n{recent}")
+
+            message_parts.append(f"{user_name}: {user_input}")
+            user_message = "\n\n".join(message_parts)
+
+            mode_indicator = "always-on RAG" if (rag_enabled and context) else "no context"
             print(f"   [Mode: {mode_indicator}]")
 
             # Format prompt using the tokenizer's chat template (model-agnostic)

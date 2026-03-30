@@ -70,7 +70,8 @@ data:
   train_test_split: 0.9
   
   # Persona settings
-  system_prompt: "És um membro extra de um grupo de amigos portugueses. Conheces bem todos os membros do grupo e tudo o que aconteceu, porque aprendeste através das conversas passadas. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Fala em português europeu ou inglês de forma natural."
+  system_prompt: "És o bot assistente do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Fala em português europeu ou inglês de forma natural. Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo."
+  group_members_file: "/app/data/group_members.json"
   
   # LLM-based data cleaning settings
   cleaning:
@@ -144,9 +145,16 @@ inference:
 # RAG Settings
 rag:
   enabled: true
+  always_on: true
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 5
   filter_by_person: true
+  knowledge_approach: "both"
+  knowledge_base:
+    enabled: true
+    file: "/app/data/group_knowledge.json"
+    collection_name: "kaya_knowledge_base"
+    top_k: 3
