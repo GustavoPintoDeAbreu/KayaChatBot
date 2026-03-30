@@ -117,6 +117,7 @@ class KayaTrainer:
         eval_dataset: Optional[Dataset] = None,
         output_dir: str = "outputs",
         training_config: dict = None,
+        resume_from_checkpoint: Optional[str] = None,
     ):
         """
         Runs the training loop with validation support.
@@ -207,7 +208,7 @@ class KayaTrainer:
             ),
         )
 
-        trainer_stats = trainer.train()
+        trainer_stats = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         return trainer, trainer_stats
 
     def save_model(self, output_dir: str = "outputs"):
