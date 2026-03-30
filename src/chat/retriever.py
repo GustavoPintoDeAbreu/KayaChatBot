@@ -139,10 +139,10 @@ class ConversationRetriever:
         )):
             # Post-query filtering by person if needed
             if query_persons:
-                participants_list = metadata.get('participants', '').split(',') if metadata.get('participants') else []
-                mentioned_list = metadata.get('mentioned', '').split(',') if metadata.get('mentioned') else []
+                participants_list = [p.lower() for p in metadata.get('participants', '').split(',')] if metadata.get('participants') else []
+                mentioned_list = [m.lower() for m in metadata.get('mentioned', '').split(',')] if metadata.get('mentioned') else []
                 
-                # Check if any query person is in participants or mentioned
+                # Check if any query person is in participants or mentioned (case-insensitive)
                 person_found = any(
                     person in participants_list or person in mentioned_list
                     for person in query_persons
