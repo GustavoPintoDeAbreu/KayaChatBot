@@ -238,7 +238,11 @@ class ConversationRetriever:
             subject = chunk.get('subject', '')
             header = f"\n--- {subject} ---" if subject else "\n---"
             context_parts.append(header)
-            context_parts.append(chunk['text'])
+            # Truncate to first 3 sentences to stay within the model's token budget
+            text = chunk['text']
+            sentences = [s.strip() for s in text.split('.') if s.strip()]
+            truncated = '. '.join(sentences[:3]) + ('.' if sentences else '')
+            context_parts.append(truncated)
         context_parts.append("\n=== Fim do conhecimento ===")
 
         return "\n".join(context_parts)

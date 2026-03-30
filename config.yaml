@@ -172,4 +172,4 @@ rag:
     enabled: true
     file: "./data/group_knowledge.json"
     collection_name: "kaya_knowledge_base"
-    top_k: 3  # Fewer than conversation chunks — facts are dense
+    top_k: 2  # Fewer than conversation chunks — facts are dense (truncated to 3 sentences per chunk)
