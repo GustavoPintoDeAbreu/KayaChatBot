@@ -555,8 +555,8 @@ class SyntheticDatasetMerger:
         # Get system prompt for the conversation
         source = conversation.get('source', '')
         if source == 'synthetic_kaya':
-            # Inject Kaya system prompt for all Kaya conversations
-            system_prompt = "You are Kaya, an extra member of a Portuguese friend group chat. You have a long-term memory of facts, events, and people from the group's shared past. You communicate naturally in European Portuguese or English."
+            # Inject bot system prompt for all Kaya conversations
+            system_prompt = "You are the AI assistant bot for the 'Kaya' friend group chat. You have a long-term memory of facts, events, and people from the group's shared past. You communicate naturally in European Portuguese or English. You are NOT a group member — you are a bot with access to the group's collective memory."
         else:
             # Use provided system prompt for Portuguese instruction data
             system_prompt = conversation.get('system', '')

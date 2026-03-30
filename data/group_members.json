@@ -1,0 +1,65 @@
+{
+  "group_name": "Kaya",
+  "members": [
+    {
+      "name": "Peter",
+      "aliases": ["peter"],
+      "notes": ""
+    },
+    {
+      "name": "Gil",
+      "aliases": ["gil", "gilão", "gilao"],
+      "notes": ""
+    },
+    {
+      "name": "Gustavo",
+      "aliases": ["gustavo"],
+      "notes": ""
+    },
+    {
+      "name": "David",
+      "aliases": ["david"],
+      "notes": ""
+    },
+    {
+      "name": "Manuel",
+      "aliases": ["manuel"],
+      "notes": ""
+    },
+    {
+      "name": "Carnall",
+      "aliases": ["carnall"],
+      "notes": ""
+    },
+    {
+      "name": "Frederico",
+      "aliases": ["frederico"],
+      "notes": ""
+    },
+    {
+      "name": "Mateus",
+      "aliases": ["mateus"],
+      "notes": ""
+    },
+    {
+      "name": "Rafa",
+      "aliases": ["rafa"],
+      "notes": ""
+    },
+    {
+      "name": "Bernardo",
+      "aliases": ["bernardo"],
+      "notes": ""
+    },
+    {
+      "name": "Chamusca",
+      "aliases": ["chamusca"],
+      "notes": ""
+    },
+    {
+      "name": "Pedro",
+      "aliases": ["pedro"],
+      "notes": ""
+    }
+  ]
+}

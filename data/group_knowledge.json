@@ -1,0 +1,83 @@
+{
+  "description": "Curated knowledge base for the Kaya friend group. Each entry is a fact that will be embedded into a ChromaDB collection and retrieved at inference time to ground the bot's answers. Fill in the 'text' fields with real information about the group.",
+  "facts": [
+    {
+      "id": "member_peter",
+      "category": "member",
+      "subject": "Peter",
+      "text": "Peter is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_gil",
+      "category": "member",
+      "subject": "Gil",
+      "text": "Gil (also known as Gilão) is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_gustavo",
+      "category": "member",
+      "subject": "Gustavo",
+      "text": "Gustavo is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_david",
+      "category": "member",
+      "subject": "David",
+      "text": "David is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_manuel",
+      "category": "member",
+      "subject": "Manuel",
+      "text": "Manuel is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_carnall",
+      "category": "member",
+      "subject": "Carnall",
+      "text": "Carnall is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_frederico",
+      "category": "member",
+      "subject": "Frederico",
+      "text": "Frederico is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_mateus",
+      "category": "member",
+      "subject": "Mateus",
+      "text": "Mateus is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_rafa",
+      "category": "member",
+      "subject": "Rafa",
+      "text": "Rafa is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_bernardo",
+      "category": "member",
+      "subject": "Bernardo",
+      "text": "Bernardo is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_chamusca",
+      "category": "member",
+      "subject": "Chamusca",
+      "text": "Chamusca is a member of the Kaya friend group."
+    },
+    {
+      "id": "member_pedro",
+      "category": "member",
+      "subject": "Pedro",
+      "text": "Pedro is a member of the Kaya friend group."
+    },
+    {
+      "id": "group_overview",
+      "category": "group",
+      "subject": "Kaya group overview",
+      "text": "Kaya is the name of a Portuguese friend group chat. The group communicates in European Portuguese and English."
+    }
+  ]
+}

@@ -87,8 +87,10 @@ def split_into_sessions(messages: List[Dict]) -> List[List[Dict]]:
 
 
 def format_context(messages: List[Dict]) -> str:
+    """Format context messages using the same RAG markers used at inference."""
     lines = [f"[{m['sender']}]: {m['text']}" for m in messages]
-    return "\n".join(lines)
+    body = "\n".join(lines)
+    return f"=== Conversas relevantes do grupo ===\n{body}\n=== Fim das conversas ==="
 
 
 def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
@@ -121,7 +123,7 @@ def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
                 "conversations": [
                     {
                         "role": "user",
-                        "content": f"Group chat context:\n{context_text}"
+                        "content": context_text
                     },
                     {
                         "role": "assistant",

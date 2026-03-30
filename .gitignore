@@ -29,6 +29,9 @@ data/wpp/
 data/rag_db/
 *.jsonl
 *.json
+# Exception: project config JSON files should be tracked
+!data/group_members.json
+!data/group_knowledge.json
 *.txt
 
 # ChromaDB files
