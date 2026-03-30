@@ -80,6 +80,17 @@ pipeline:
   # This avoids any API calls and builds training data straight from the extracted chat messages.
   skip_synthetic: true
 
+  # Set generate_knowledge: true to run the LLM knowledge extraction step (Azure GPT-4.1-mini).
+  # This reads all_messages_cleaned.jsonl and populates group_members.json + group_knowledge.json.
+  # Requires AZURE_OPENAI_API_KEY_gpt_41_mini in .env. Set to false to skip (use existing data).
+  generate_knowledge: false
+
+# Knowledge Generation Settings (used when pipeline.generate_knowledge: true)
+knowledge_generation:
+  chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the LLM
+  checkpoint_every: 5        # Save progress every N chunks
+  rate_limit_delay: 2        # Seconds to wait between API calls
+
 # Model Settings
 model:
   model_id: "unsloth/Qwen3-14B-bnb-4bit"

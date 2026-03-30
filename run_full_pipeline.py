@@ -65,6 +65,7 @@ def main():
         config = yaml.safe_load(f)
 
     skip_synthetic: bool = config.get('pipeline', {}).get('skip_synthetic', False)
+    generate_knowledge: bool = config.get('pipeline', {}).get('generate_knowledge', False)
     test_mode: bool = config.get('test_mode', {}).get('enabled', False)
 
     if test_mode:
@@ -74,6 +75,8 @@ def main():
         print("\nMode: Direct (no API calls)  [pipeline.skip_synthetic = true]", flush=True)
         print("\nSteps:", flush=True)
         print("  1. Extract messages from WhatsApp + Instagram", flush=True)
+        if generate_knowledge:
+            print("  1b. Generate knowledge base from messages (Azure API)", flush=True)
         print("  2. Format direct training data from messages", flush=True)
         print("  3. Merge datasets and create train/val splits", flush=True)
         print("  4. Fine-tune the model", flush=True)
@@ -81,6 +84,8 @@ def main():
         print("\nMode: Full (with API synthetic generation)  [pipeline.skip_synthetic = false]", flush=True)
         print("\nSteps:", flush=True)
         print("  1. Extract messages from WhatsApp + Instagram", flush=True)
+        if generate_knowledge:
+            print("  1b. Generate knowledge base from messages (Azure API)", flush=True)
         print("  2. Generate Kaya-specific conversations (xAI/Azure API)", flush=True)
         print("  3. Download and prepare Portuguese dataset", flush=True)
         print("  4. Merge datasets and create train/val splits", flush=True)
@@ -97,6 +102,18 @@ def main():
     ):
         print("\n❌ Pipeline failed at Step 1", flush=True)
         return
+
+    # ------------------------------------------------------------------
+    # Step 1b (optional) — Generate knowledge base via Azure LLM
+    # ------------------------------------------------------------------
+    if generate_knowledge:
+        print("\n💰 Note: This step will call the Azure OpenAI API", flush=True)
+        if not run_script(
+            BASE_DIR / "src/data/generate_knowledge_base.py",
+            "Step 1b: Generate Knowledge Base (Azure API)",
+        ):
+            print("\n❌ Pipeline failed at Step 1b (knowledge generation)", flush=True)
+            return
 
     if skip_synthetic:
         # ------------------------------------------------------------------
