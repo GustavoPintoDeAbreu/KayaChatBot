@@ -134,13 +134,20 @@ def main():
         "seed": config['training']['seed'],
     }
     
-    # Start training
+    # Start training — resume from latest checkpoint if one exists
+    import glob as _glob
+    checkpoints = sorted(_glob.glob(os.path.join(output_dir, "checkpoint-*")), key=lambda p: int(p.split("-")[-1]))
+    resume_checkpoint = checkpoints[-1] if checkpoints else None
+    if resume_checkpoint:
+        print(f"\n   ↩️  Resuming from checkpoint: {resume_checkpoint}")
+
     print(f"\n5. Starting training...")
     trainer, stats = trainer_wrapper.train(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         output_dir=output_dir,
-        training_config=training_config
+        training_config=training_config,
+        resume_from_checkpoint=resume_checkpoint,
     )
     
     # Save model
