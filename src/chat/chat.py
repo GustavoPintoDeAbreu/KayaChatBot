@@ -4,11 +4,12 @@ Allows the user to chat with the fine-tuned Kaya model with RAG support.
 """
 import os
 import sys
+import json
 import yaml
 import torch
 from pathlib import Path
-from unsloth import FastLanguageModel
-from transformers import TextStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextStreamer
+from peft import PeftModel
 
 # Add parent directory to path for imports (Docker compatibility)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -27,7 +28,6 @@ def main():
         config = yaml.safe_load(f)
 
     model_dir = config['training']['output_dir']
-    max_seq_length = config['model']['max_seq_length']
     base_system_prompt = config['data']['system_prompt']
     rag_config = config.get('rag', {})
     rag_enabled = rag_config.get('enabled', False)
@@ -52,26 +52,40 @@ def main():
                 aliases = [a for a in m.get('aliases', []) if a.lower() != m['name'].lower()]
                 if aliases:
                     line += f" (também conhecido como: {', '.join(aliases)})"
-                if m.get('notes'):
-                    line += f" — {m['notes']}"
+                notes = m.get('notes', '')
+                if notes:
+                    # Keep only the first 2 sentences to stay within token budget
+                    sentences = [s.strip() for s in notes.split('.') if s.strip()]
+                    short_notes = '. '.join(sentences[:2]) + '.'
+                    line += f" — {short_notes}"
                 member_lines.append(line)
             if member_lines:
                 system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
 
-    # Check if model exists
-    if not os.path.exists(model_dir):
-        print(f"\n❌ Error: Model not found at {model_dir}")
-        return
-
-    # Load model
+    # Load model via standard PEFT (avoids Unsloth's broken fast inference for Qwen3)
     print(f"\nLoading model... (this may take a minute)")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_dir,
-        max_seq_length=max_seq_length,
-        dtype=None,
+    adapter_config_path = Path(model_dir) / "adapter_config.json"
+    if not adapter_config_path.exists():
+        print(f"\n❌ Error: adapter_config.json not found in {model_dir}")
+        return
+    adapter_cfg = json.loads(adapter_config_path.read_text(encoding='utf-8'))
+    base_model_name = adapter_cfg.get('base_model_name_or_path', 'unsloth/Qwen3-14B-bnb-4bit')
+
+    bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
     )
-    FastLanguageModel.for_inference(model)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        quantization_config=bnb_config,
+        device_map="cuda",
+        trust_remote_code=True,
+    )
+    model = PeftModel.from_pretrained(base_model, model_dir)
+    model.eval()
     print(f"✓ Model loaded!")
 
     # Initialize RAG retriever if enabled
@@ -180,10 +194,8 @@ def main():
                 **inputs,
                 max_new_tokens=128,
                 temperature=0.7,
+                do_sample=True,
                 top_p=0.9,
-                use_cache=True,
-                stop_strings=["\n", f"{user_name}:"],
-                tokenizer=tokenizer,
                 streamer=streamer
             )
 
