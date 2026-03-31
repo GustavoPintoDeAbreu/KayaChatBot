@@ -49,6 +49,22 @@ class XAIProvider(LLMProvider):
 
         return self._retry_with_backoff(_generate)
 
+    def generate_text(self, system_prompt: str, user_prompt: str) -> str:
+        """Generate a raw text response using xAI (Grok)."""
+        def _generate():
+            chat = self.client.chat.create(
+                model=self.xai_config['model'],
+                messages=[
+                    system(system_prompt),
+                    user(user_prompt)
+                ]
+            )
+            response = chat.sample()
+            content = response.content if hasattr(response, 'content') else str(response)
+            return content.strip()
+
+        return self._retry_with_backoff(_generate)
+
     def _parse_response(self, content: str) -> List[Dict]:
         """Parse the response content into conversations."""
         # Remove markdown code blocks if present

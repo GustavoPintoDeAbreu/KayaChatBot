@@ -20,6 +20,16 @@ class LLMProvider(ABC):
         """Generate conversations from a prompt."""
         pass
 
+    @abstractmethod
+    def generate_text(self, system_prompt: str, user_prompt: str) -> str:
+        """Generate a raw text response given system and user prompts.
+
+        Unlike ``generate_conversations``, this method returns the raw text
+        content of the model response without any post-processing, making it
+        suitable for structured JSON extraction tasks.
+        """
+        pass
+
     def _retry_with_backoff(self, func, *args, **kwargs):
         """Retry a function with exponential backoff."""
         for attempt in range(self.max_attempts):

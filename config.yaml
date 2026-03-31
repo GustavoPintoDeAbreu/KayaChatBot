@@ -37,6 +37,7 @@ generation:
     model: "gpt-4.1-mini"
     max_tokens: 16000  # GPT-4.1-mini max output: 16K tokens
     temperature: 0.85
+    extraction_temperature: 0.3  # Lower temperature for factual extraction (generate_text)
     timeout: 120  # Increased for larger outputs
   
   # xAI (Grok) settings
@@ -90,6 +91,24 @@ knowledge_generation:
   chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the LLM
   checkpoint_every: 5        # Save progress every N chunks
   rate_limit_delay: 2        # Seconds to wait between API calls
+
+# Knowledge Base Profile Settings
+# Controls which structured profile fields are extracted per member.
+# Remove a field from the list to skip its extraction (useful for testing subsets).
+# NOTE: political_preference is sensitive — it is stored only in group_members.json
+#       and is never embedded into ChromaDB vectors.
+knowledge_base:
+  profile_fields:
+    - name
+    - age
+    - interests
+    - occupation
+    - living_place
+    - marital_status
+    - political_preference
+    - state_of_mind
+    - biography_summary
+    - frequently_discussed_topics
 
 # Model Settings
 model:
