@@ -75,14 +75,19 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this structur
   "members": {
     "MemberName": "Concise factual biography in 1-3 sentences. Only include what is clearly supported by the chat.",
     "AnotherMember": "..."
+  },
+  "recent_summaries": {
+    "MemberName": "Short paragraph (1-2 sentences) about their most recent discussion topics, opinions, or notable events in this chunk.",
+    "AnotherMember": "..."
   }
 }
 
 Rules:
 - Only include members that appear in this specific chunk.
 - Do NOT invent facts. Only use what is clearly stated or implied in the messages.
-- Use English for the biographies.
+- Use English for the biographies and recent summaries.
 - Keep each biography concise: 1-3 sentences max.
+- Keep each recent_summary concise: 1-2 sentences capturing the most recent activity or topics.
 - If nothing new or useful is found for a member, omit them from the output entirely.
 """
 
@@ -189,8 +194,8 @@ def call_azure_llm(
     user_prompt: str,
     max_retries: int = 3,
     retry_delay: float = 5.0,
-) -> Optional[Dict[str, str]]:
-    """Call Azure GPT-4.1-mini and return parsed {member: bio} dict or None on failure."""
+) -> Optional[Dict]:
+    """Call Azure GPT-4.1-mini and return parsed dict with 'members' and 'recent_summaries' or None on failure."""
     for attempt in range(1, max_retries + 1):
         try:
             response = client.chat.completions.create(
@@ -213,8 +218,12 @@ def call_azure_llm(
 
             result = json.loads(content)
             members_dict = result.get("members", {})
+            recent_summaries_dict = result.get("recent_summaries", {})
             if isinstance(members_dict, dict):
-                return members_dict
+                return {
+                    "members": members_dict,
+                    "recent_summaries": recent_summaries_dict if isinstance(recent_summaries_dict, dict) else {},
+                }
 
         except json.JSONDecodeError as e:
             print(f"  [attempt {attempt}] JSON parse error: {e}. Retrying...", flush=True)
@@ -242,12 +251,14 @@ def merge_bios(existing: str, new_info: str) -> str:
     return existing
 
 
-def save_group_members(members_data: Dict, bios: Dict[str, str]) -> None:
-    """Write updated notes to group_members.json."""
+def save_group_members(members_data: Dict, bios: Dict[str, str], recent_summaries: Dict[str, str]) -> None:
+    """Write updated notes and recent_summary to group_members.json."""
     for member in members_data["members"]:
         name = member["name"]
         if name in bios and bios[name]:
             member["notes"] = bios[name]
+        if name in recent_summaries and recent_summaries[name]:
+            member["recent_summary"] = recent_summaries[name]
     with open(GROUP_MEMBERS_FILE, "w", encoding="utf-8") as f:
         json.dump(members_data, f, ensure_ascii=False, indent=2)
 
@@ -297,6 +308,13 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
         m["name"]: m.get("notes", "") for m in members_data["members"]
     }
 
+    # Current recent summaries (always replaced with latest, not merged).
+    # Messages are processed in chronological order, so later chunks naturally
+    # produce more recent summaries that overwrite earlier ones.
+    current_recent_summaries: Dict[str, str] = {
+        m["name"]: m.get("recent_summary", "") for m in members_data["members"]
+    }
+
     # Chunk messages
     chunks = chunk_messages(messages, CHUNK_SIZE_WORDS)
     total_chunks = len(chunks)
@@ -337,7 +355,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
         new_bios = call_azure_llm(client, user_prompt)
         if new_bios:
-            for member_name, bio in new_bios.items():
+            for member_name, bio in new_bios["members"].items():
                 # Normalise name: try exact match first, then partial
                 matched_name = None
                 if member_name in current_bios:
@@ -354,10 +372,25 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
                 else:
                     print(f"    ⚠️  Unknown member '{member_name}' returned by LLM, skipping.", flush=True)
 
+            # recent_summaries always replace (they represent the latest snapshot)
+            for member_name, summary in new_bios["recent_summaries"].items():
+                matched_name = None
+                if member_name in current_recent_summaries:
+                    matched_name = member_name
+                else:
+                    for name in current_recent_summaries:
+                        if name.lower() == member_name.lower():
+                            matched_name = name
+                            break
+
+                if matched_name and summary:
+                    current_recent_summaries[matched_name] = summary.strip()
+                    print(f"    ✅ Updated recent_summary for {matched_name}", flush=True)
+
         # Checkpoint
         if (i + 1) % checkpoint_every == 0:
             print(f"  💾 Checkpoint after chunk {chunk_idx}...", flush=True)
-            save_group_members(members_data, current_bios)
+            save_group_members(members_data, current_bios, current_recent_summaries)
             save_group_knowledge(knowledge_data, current_bios)
 
         # Rate limit
@@ -366,7 +399,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
     # Final save
     print("\n💾 Saving final results...", flush=True)
-    save_group_members(members_data, current_bios)
+    save_group_members(members_data, current_bios, current_recent_summaries)
     save_group_knowledge(knowledge_data, current_bios)
 
     # Summary
