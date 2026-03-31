@@ -45,6 +45,7 @@ chroma.sqlite3
 !.cursorrules
 !README.md
 !requirements.txt
+!requirements-copilot.txt
 
 # ===================================
 # Credentials & Secrets (CRITICAL)

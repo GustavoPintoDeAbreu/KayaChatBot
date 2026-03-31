@@ -31,8 +31,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
+          # Use lightweight deps — full ML stack (torch, unsloth, etc.) exceeds runner disk
+          pip install -r requirements-copilot.txt
 
-      - name: Verify test suite runs
+      - name: Verify environment
         run: |
-          python -m pytest tests/ --co -q 2>/dev/null || echo "Test collection completed"
+          python --version
+          python -c "import yaml, pydantic, openai; print('Core imports OK')"
