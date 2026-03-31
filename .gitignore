@@ -133,6 +133,11 @@ tmp/
 unsloth_compiled_cache/
 
 # ===================================
+# GitHub Actions Self-Hosted Runner
+# ===================================
+actions-runner/
+
+# ===================================
 # Batch Files
 # ===================================
 *.bat
