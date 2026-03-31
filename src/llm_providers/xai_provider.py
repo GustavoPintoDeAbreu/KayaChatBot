@@ -19,6 +19,16 @@ class XAIProvider(LLMProvider):
         super().__init__(config)
         self.xai_config = config['generation']['xai']
         self.client = self._initialize_client()
+        self._has_xai_assistant = self._check_xai_assistant()
+
+    @staticmethod
+    def _check_xai_assistant() -> bool:
+        """Check once at init whether xai_sdk exports an assistant helper."""
+        try:
+            from xai_sdk.chat import assistant  # noqa: F401
+            return True
+        except ImportError:
+            return False
 
     def _initialize_client(self) -> Client:
         """Initialize xAI client."""
@@ -48,6 +58,36 @@ class XAIProvider(LLMProvider):
             return self._parse_response(content.strip())
 
         return self._retry_with_backoff(_generate)
+
+    def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+        """Send a chat completion request and return the response text."""
+        def _complete():
+            if self._has_xai_assistant:
+                from xai_sdk.chat import assistant as xai_assistant
+            else:
+                xai_assistant = None
+
+            formatted = []
+            for msg in messages:
+                role = msg['role']
+                content = msg['content']
+                if role == 'system':
+                    formatted.append(system(content))
+                elif role == 'user':
+                    formatted.append(user(content))
+                elif role == 'assistant' and xai_assistant is not None:
+                    formatted.append(xai_assistant(content))
+                # Skip assistant messages if xai_sdk doesn't support them
+
+            chat = self.client.chat.create(
+                model=self.xai_config['model'],
+                messages=formatted,
+            )
+            response = chat.sample()
+            content = response.content if hasattr(response, 'content') else str(response)
+            return content.strip()
+
+        return self._retry_with_backoff(_complete)
 
     def _parse_response(self, content: str) -> List[Dict]:
         """Parse the response content into conversations."""
