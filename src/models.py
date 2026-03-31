@@ -6,6 +6,7 @@ This module defines data models for each phase of the pipeline:
 - Processed data (cleaned messages, finetune chunks)
 - Synthetic generation (conversations)
 - Training format (formatted examples)
+- Member profiles (structured LLM-extracted data)
 """
 
 from datetime import datetime
@@ -235,3 +236,70 @@ class TrainingExample(BaseModel):
             "source": self.source,
             "original": self.original
         }
+
+
+# ============================================================================
+# Member Profile Models
+# ============================================================================
+
+class MemberProfile(BaseModel):
+    """Structured profile for a Kaya group member extracted via LLM.
+
+    All fields are optional to allow incremental extraction.  The
+    ``political_preference`` field is marked sensitive — it must only be
+    stored in the local ``group_members.json`` file and never embedded into
+    ChromaDB vectors or surfaced unless the query is explicitly about
+    politics/preferences.
+    """
+
+    name: str
+    age: Optional[str] = None
+    interests: Optional[List[str]] = None
+    occupation: Optional[str] = None
+    living_place: Optional[str] = None
+    marital_status: Optional[str] = None
+    # SENSITIVE — stored locally only, never embedded in ChromaDB
+    political_preference: Optional[str] = None
+    state_of_mind: Optional[str] = None
+    biography_summary: Optional[str] = None
+    frequently_discussed_topics: Optional[List[str]] = None
+    # Legacy fallback — preserved for backward compatibility
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(frozen=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict, omitting None values."""
+        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Convert to dict suitable for ChromaDB embedding.
+
+        Excludes sensitive fields (political_preference) that must not be
+        stored in vector embeddings.
+        """
+        sensitive_fields = {"political_preference"}
+        return {
+            k: v for k, v in self.model_dump().items()
+            if v is not None and k not in sensitive_fields
+        }
+
+
+class TopicMapping(BaseModel):
+    """A topic-to-member mapping fact for group_knowledge.json.
+
+    Entries with ``category = "topic_mapping"`` are added to the knowledge
+    base so that the RAG retriever can surface them when a query touches a
+    particular topic.
+    """
+
+    id: str
+    category: Literal["topic_mapping"] = "topic_mapping"
+    subject: str  # Member name
+    text: str     # Human-readable description of the topic association
+
+    model_config = ConfigDict(frozen=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for JSON serialization."""
+        return self.model_dump()
