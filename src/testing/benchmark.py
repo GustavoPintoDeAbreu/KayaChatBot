@@ -57,6 +57,11 @@ class BenchmarkResult:
 # Runner
 # ---------------------------------------------------------------------------
 
+def _noop_response_fn(question: str) -> str:
+    """No-op response function used for dry-runs (returns empty string)."""
+    return ""
+
+
 class BenchmarkRunner:
     """Builds a configuration matrix, runs scenarios, and formats reports."""
 
@@ -165,7 +170,7 @@ class BenchmarkRunner:
             if self.response_fn_factory is not None:
                 response_fn = self.response_fn_factory(cfg)
             else:
-                response_fn = lambda q: ""  # noqa: E731 — dry-run placeholder
+                response_fn = _noop_response_fn
 
             start = time.time()
             scenario_results = self.tester.run_all(
@@ -370,8 +375,8 @@ def main() -> None:
     if args.scenarios is not None:
         config["benchmark"]["scenarios_per_config"] = args.scenarios
 
-    # Build runner — dry-run means no factory (uses empty-string placeholder)
-    factory = None if args.dry_run else None  # extend later for real models
+    # Build runner — dry-run uses no factory (falls back to _noop_response_fn)
+    factory = None  # extend later to build real model response functions
     runner = BenchmarkRunner(config, response_fn_factory=factory)
 
     print("📊 Building benchmark matrix …")
