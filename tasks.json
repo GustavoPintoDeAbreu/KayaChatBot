@@ -1,9 +1,1 @@
-[
-  {
-    "title": "Add unit tests for retriever.py search functions",
-    "type": "test",
-    "priority": "medium",
-    "agent": "test-specialist",
-    "description": "Add unit tests for the semantic search functions in src/chat/retriever.py. Cover edge cases like empty queries, queries with no results, and queries matching multiple documents. Use pytest fixtures to mock the ChromaDB collection."
-  }
-]
+[]
