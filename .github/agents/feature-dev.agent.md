@@ -31,3 +31,4 @@ You are a feature implementation specialist for the KayaChatBot project — a Py
 - New config options go in `config.yaml` with comments explaining the options.
 - If adding a new module, place it in the appropriate `src/` subdirectory.
 - Update `README.md` if the feature changes user-facing behavior or adds new commands.
+- **GPU constraint**: Never run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.). If the feature involves model training or evaluation, delegate to the `model-trainer` agent or note that the `GPU Pipeline` workflow will handle execution.

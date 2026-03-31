@@ -424,6 +424,7 @@ tasks.json → GitHub Action → GitHub Issues → Copilot Coding Agent → Pull
 | `bug-fixer` | `.github/agents/bug-fixer.agent.md` | Root cause analysis, minimal fixes, regression tests |
 | `feature-dev` | `.github/agents/feature-dev.agent.md` | New features following existing patterns, with tests |
 | `test-specialist` | `.github/agents/test-specialist.agent.md` | Test coverage improvements, never modifies production code |
+| `model-trainer` | `.github/agents/model-trainer.agent.md` | Fine-tuning config, LoRA settings, data pipeline improvements |
 
 ### Task Templates for `tasks.json`
 
@@ -489,6 +490,21 @@ The `tasks.json` file at the repo root accepts an array of task objects. After p
 ]
 ```
 
+#### Fine-Tuning / Model Improvement Template
+
+```json
+[
+  {
+    "title": "Finetune: <short description of the change>",
+    "type": "finetune",
+    "priority": "medium",
+    "description": "**Goal:** <what training improvement to make>\n\n**Proposed change:**\n- <e.g. increase LoRA rank from 32 to 64>\n- <e.g. adjust learning rate schedule>\n\n**Expected effect:** <what you expect to improve — loss, response quality, etc.>\n\n**Files to modify:** `config.yaml`, `src/finetuning/trainer.py`",
+    "files_hint": ["config.yaml", "src/finetuning/trainer.py"],
+    "agent": "model-trainer"
+  }
+]
+```
+
 #### Multiple Tasks Example
 
 ```json
@@ -523,12 +539,12 @@ The `tasks.json` file at the repo root accepts an array of task objects. After p
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `title` | string | Yes | Issue title. Prefix with `Fix:`, `Feature:`, `Improvement:`, or `Test:` |
-| `type` | string | Yes | One of: `bug`, `feature`, `improvement`, `test` |
+| `title` | string | Yes | Issue title. Prefix with `Fix:`, `Feature:`, `Improvement:`, `Test:`, or `Finetune:` |
+| `type` | string | Yes | One of: `bug`, `feature`, `improvement`, `test`, `finetune`, `evaluate` |
 | `priority` | string | Yes | One of: `high`, `medium`, `low` |
 | `description` | string | Yes | Detailed description. Supports Markdown. |
 | `files_hint` | string[] | No | Relevant file paths to help the agent find context faster |
-| `agent` | string | No | Agent profile to use: `bug-fixer`, `feature-dev`, or `test-specialist`. Defaults to standard Copilot if omitted. |
+| `agent` | string | No | Agent profile: `bug-fixer`, `feature-dev`, `test-specialist`, or `model-trainer`. Defaults to standard Copilot if omitted. |
 
 ### Setup (One-Time)
 
@@ -539,6 +555,39 @@ The `tasks.json` file at the repo root accepts an array of task objects. After p
    bash .github/scripts/setup-labels.sh YOUR_USERNAME/KayaChatBot
    ```
 3. **Push this branch to main**: The `copilot-setup-steps.yml` workflow must be on the default branch for Copilot to use it.
+
+### Self-Hosted GPU Runner Setup (One-Time, on your GPU machine)
+
+The `GPU Pipeline` workflow (`gpu-pipeline.yml`) runs on your local machine via a self-hosted GitHub Actions runner. This lets Copilot's PRs trigger real fine-tuning on your GPU.
+
+**Prerequisites on your machine:**
+- NVIDIA drivers + CUDA toolkit installed
+- Docker with NVIDIA container runtime (`nvidia-docker2`)
+- Internet access to reach GitHub
+
+**Install the runner:**
+```bash
+mkdir actions-runner && cd actions-runner
+curl -o actions-runner-linux-x64-2.333.1.tar.gz -L \
+  https://github.com/actions/runner/releases/download/v2.333.1/actions-runner-linux-x64-2.333.1.tar.gz
+echo "18f8f68ed1892854ff2ab1bab4fcaa2f5abeedc98093b6cb13638991725cab74  actions-runner-linux-x64-2.333.1.tar.gz" | shasum -a 256 -c
+tar xzf ./actions-runner-linux-x64-2.333.1.tar.gz
+./config.sh --url https://github.com/GustavoPintoDeAbreu/KayaChatBot --token <TOKEN>
+./run.sh
+```
+
+Get a fresh registration token from: Repo Settings → Actions → Runners → New self-hosted runner.
+
+**Optional: run as a systemd service** (auto-starts with the machine):
+```bash
+sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+**How it integrates with Copilot:**
+- Copilot opens a PR touching `src/finetuning/`, `config.yaml`, or training data files
+- `gpu-pipeline.yml` auto-triggers on your machine with mode `finetune` (240 min timeout)
+- Training output is parsed and posted back to the PR as a comment with loss, steps, and duration
+- You can also trigger manually from the GitHub Actions tab with modes: `finetune`, `evaluate`, `inference-test`, `full-pipeline`
 
 ### MCP Servers
 
