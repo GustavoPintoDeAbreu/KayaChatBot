@@ -161,7 +161,7 @@ class ConversationTester:
     """Runs bilingual test scenarios against a response function and scores results."""
 
     def __init__(self, scenarios: Optional[List[dict]] = None):
-        """Initialise the tester with a scenario list.
+        """Initialize the tester with a scenario list.
 
         Args:
             scenarios: List of scenario dicts.  Falls back to the module-level
