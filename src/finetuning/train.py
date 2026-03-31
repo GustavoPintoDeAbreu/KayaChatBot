@@ -107,11 +107,15 @@ def main():
         "dropout": config['model']['lora_dropout'],
         "target_modules": config['model']['target_modules']
     }
-    
+
+    # Read incremental retraining config
+    resume_from_checkpoint = config['training'].get('resume_from_checkpoint')
+
     trainer_wrapper = KayaTrainer(
         model_id=model_id,
         max_seq_length=max_seq_length,
-        lora_config=lora_config
+        lora_config=lora_config,
+        resume_from_checkpoint=resume_from_checkpoint,
     )
     
     print(f"\n4. Loading model (this may take several minutes)...")
@@ -133,6 +137,15 @@ def main():
         "eval_steps": config['training']['eval_steps'],
         "seed": config['training']['seed'],
     }
+
+    # Pass incremental params so the trainer can apply them when a checkpoint is loaded
+    if resume_from_checkpoint:
+        training_config["incremental_steps"] = config['training']['incremental_steps']
+        training_config["incremental_learning_rate"] = config['training']['incremental_learning_rate']
+        print(f"\n   🔄 Incremental training enabled:")
+        print(f"   ✓ Checkpoint: {resume_from_checkpoint}")
+        print(f"   ✓ Steps: {config['training']['incremental_steps']} (vs full: {config['training']['max_steps']})")
+        print(f"   ✓ Learning rate: {config['training']['incremental_learning_rate']} (vs full: {config['training']['learning_rate']})")
     
     # Start training — resume from latest checkpoint if one exists
     import glob as _glob
