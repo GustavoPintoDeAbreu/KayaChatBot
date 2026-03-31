@@ -31,3 +31,4 @@ You are a testing specialist for the KayaChatBot project — a Python RAG-based 
 - Mock all external API calls (Azure OpenAI, xAI) and GPU operations.
 - Tests must be deterministic — no randomness, no network calls, no filesystem side effects outside temp directories.
 - Keep test execution fast (< 30 seconds total for the full suite).
+- **GPU constraint**: Never run `docker-compose up` or any training commands. If GPU validation is needed, note it in the PR — the `GPU Pipeline` workflow runs the full test suite in Docker via `evaluate` mode.

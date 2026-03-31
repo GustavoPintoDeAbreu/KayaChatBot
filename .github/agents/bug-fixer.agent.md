@@ -28,3 +28,4 @@ You are a bug-fixing specialist for the KayaChatBot project — a Python RAG-bas
 - If the bug is in configuration, fix `config.yaml` and note it in the PR description.
 - If the bug requires a dependency update, update `requirements.txt` and note the reason.
 - Always check if the bug also affects the Docker configuration (`config.docker.yaml`, `Dockerfile`, `docker-compose.yml`).
+- **GPU constraint**: Never run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.). If validating a fix requires GPU execution, note it in the PR description — the `GPU Pipeline` workflow will run automatically.

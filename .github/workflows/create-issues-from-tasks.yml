@@ -41,13 +41,16 @@ jobs:
             const agentLabelMap = {
               'bug-fixer': 'agent:bug-fixer',
               'feature-dev': 'agent:feature-dev',
-              'test-specialist': 'agent:test-specialist'
+              'test-specialist': 'agent:test-specialist',
+              'model-trainer': 'agent:model-trainer'
             };
 
             const typeLabelMap = {
               'bug': 'bug',
               'feature': 'feature',
               'test': 'test',
+              'finetune': 'finetune',
+              'evaluate': 'evaluate',
               'improvement': 'improvement'
             };
 

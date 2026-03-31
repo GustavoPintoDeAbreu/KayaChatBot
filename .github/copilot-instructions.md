@@ -53,6 +53,17 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 - After completing any change, always test it inside Docker to verify it works correctly in the containerized environment
 
 ## Custom Agents & Automation
-- **Agent profiles**: `.github/agents/` — specialized agent configurations (bug-fixer, feature-dev, test-specialist)
+- **Agent profiles**: `.github/agents/` — specialized agent configurations:
+  - `bug-fixer` — root cause analysis, minimal fixes, regression tests
+  - `feature-dev` — new features following existing patterns
+  - `test-specialist` — test coverage improvements, never modifies production code
+  - `model-trainer` — fine-tuning config, LoRA settings, data pipeline improvements
 - **Task intake**: `tasks.json` — JSON file for submitting bugs/features; automatically creates GitHub Issues via `.github/workflows/create-issues-from-tasks.yml`
 - When working on a task, always check which custom agent profile applies based on the issue labels
+
+## GPU Constraints
+- The Copilot coding agent runs on GitHub-hosted runners — **no GPU available**.
+- For model-related tasks (fine-tuning, inference testing, evaluation), the agent modifies code/config **only**. It must never attempt to run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.).
+- GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (user's local GPU machine) when a PR touches training-related files.
+- Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min).
+- Training results (loss, duration, steps) are posted back to the PR as a comment by the workflow.

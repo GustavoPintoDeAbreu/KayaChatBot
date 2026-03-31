@@ -1,0 +1,124 @@
+name: "GPU Pipeline"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/finetuning/**"
+      - "config.yaml"
+      - "config.docker.yaml"
+      - "data/train_synthetic.jsonl"
+      - "data/val_synthetic.jsonl"
+      - "run_full_pipeline.py"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Pipeline mode to run"
+        required: true
+        default: "finetune"
+        type: choice
+        options:
+          - finetune
+          - evaluate
+          - inference-test
+          - full-pipeline
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gpu-pipeline:
+    runs-on: self-hosted
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Determine run mode
+        id: mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=finetune" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare environment
+        run: |
+          # Ensure .env exists (docker-compose env_file requires it, even if empty)
+          touch .env
+          # Ensure output directories exist (gitignored, not in checkout)
+          mkdir -p models data
+
+      - name: Build Docker image
+        run: docker-compose build
+
+      - name: Run finetune
+        if: steps.mode.outputs.mode == 'finetune'
+        timeout-minutes: 240
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/finetuning/train.py 2>&1 | tee pipeline_output.log
+
+      - name: Run full pipeline
+        if: steps.mode.outputs.mode == 'full-pipeline'
+        timeout-minutes: 240
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python run_full_pipeline.py 2>&1 | tee pipeline_output.log
+
+      - name: Run evaluate (test suite)
+        if: steps.mode.outputs.mode == 'evaluate'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python -m pytest tests/ -v 2>&1 | tee pipeline_output.log
+
+      - name: Run inference test
+        if: steps.mode.outputs.mode == 'inference-test'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/chat/inference.py 2>&1 | tee pipeline_output.log
+
+      - name: Parse and post results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { execSync } = require('child_process');
+            const path = require('path');
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const logFile = path.join(workspace, 'pipeline_output.log');
+            const mode = '${{ steps.mode.outputs.mode }}';
+
+            let markdown;
+            try {
+              markdown = execSync(
+                `python3 .github/scripts/post-gpu-results.py "${logFile}" "${mode}"`,
+                { cwd: workspace, timeout: 30000 }
+              ).toString().trim();
+            } catch (err) {
+              markdown = `## 🖥️ GPU Pipeline Results — \`${mode}\`\n\n❌ Failed to parse pipeline output.\n\n\`\`\`\n${err.stderr || err.message}\n\`\`\``;
+            }
+
+            // Write to job summary
+            await core.summary.addRaw(markdown).write();
+
+            // Post as PR comment if this is a pull_request event
+            if (context.eventName === 'pull_request') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: markdown
+              });
+            }
+
+      - name: Cleanup Docker resources
+        if: always()
+        run: |
+          docker-compose down --rmi local --volumes --remove-orphans 2>/dev/null || true

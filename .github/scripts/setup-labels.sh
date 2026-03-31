@@ -20,10 +20,15 @@ declare -A LABELS=(
   ["priority:medium"]="fbca04:Medium priority"
   ["priority:low"]="0e8a16:Low priority"
 
+  # Task type labels (training)
+  ["finetune"]="0052cc:Fine-tuning or model training task"
+  ["evaluate"]="006b75:Model evaluation or benchmarking"
+
   # Agent labels
   ["agent:bug-fixer"]="d93f0b:Routed to bug-fixer agent"
   ["agent:feature-dev"]="0075ca:Routed to feature-dev agent"
   ["agent:test-specialist"]="5319e7:Routed to test-specialist agent"
+  ["agent:model-trainer"]="c5def5:Routed to model-trainer agent"
 )
 
 for label in "${!LABELS[@]}"; do
