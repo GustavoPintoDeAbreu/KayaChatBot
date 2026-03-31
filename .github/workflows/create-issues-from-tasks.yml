@@ -79,14 +79,28 @@ jobs:
               }
 
               try {
-                const issue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title: task.title,
-                  body: body,
-                  labels: labels,
-                  assignees: ['copilot']
-                });
+                // Try creating with Copilot as assignee first
+                let issue;
+                try {
+                  issue = await github.rest.issues.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title: task.title,
+                    body: body,
+                    labels: labels,
+                    assignees: ['copilot']
+                  });
+                } catch (assignErr) {
+                  // Copilot assignee may not be available — create without it
+                  console.log(`Note: Could not assign to copilot, creating issue without assignee.`);
+                  issue = await github.rest.issues.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title: task.title,
+                    body: body,
+                    labels: labels
+                  });
+                }
                 console.log(`Created issue #${issue.data.number}: ${task.title}`);
               } catch (err) {
                 console.error(`Failed to create issue "${task.title}": ${err.message}`);
