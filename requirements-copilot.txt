@@ -1,0 +1,11 @@
+# Lightweight dependencies for Copilot coding agent (GitHub-hosted runner)
+# Excludes GPU/ML packages (torch, unsloth, xformers, bitsandbytes, etc.)
+# that would exceed runner disk space. The agent only edits code — it does
+# not run model training or inference.
+pyyaml
+pydantic
+python-dotenv
+openai
+tqdm
+tiktoken
+pytest
