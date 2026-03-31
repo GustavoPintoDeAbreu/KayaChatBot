@@ -167,6 +167,12 @@ rag:
   #   "none"         — Neither (baseline: only conversation RAG + finetune)
   knowledge_approach: "both"
 
+  # Token budget for total injected context (whitespace-based approximation: words / 0.75)
+  max_context_tokens: 3000
+
+  # Inject per-member recent summaries when a member is mentioned in the query
+  inject_recent_summaries: true
+
   # Knowledge base (ChromaDB collection of curated group facts)
   knowledge_base:
     enabled: true
