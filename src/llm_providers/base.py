@@ -20,6 +20,11 @@ class LLMProvider(ABC):
         """Generate conversations from a prompt."""
         pass
 
+    @abstractmethod
+    def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+        """Send a chat completion request and return the response text."""
+        pass
+
     def _retry_with_backoff(self, func, *args, **kwargs):
         """Retry a function with exponential backoff."""
         for attempt in range(self.max_attempts):
