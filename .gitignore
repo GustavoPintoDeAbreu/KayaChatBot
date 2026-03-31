@@ -32,6 +32,7 @@ data/rag_db/
 # Exception: project config JSON files should be tracked
 !data/group_members.json
 !data/group_knowledge.json
+!tasks.json
 *.txt
 
 # ChromaDB files
@@ -85,6 +86,7 @@ docker-compose.override.yml
 # IDE
 # ===================================
 .vscode/
+!.vscode/mcp.json
 .idea/
 *.swp
 *.swo

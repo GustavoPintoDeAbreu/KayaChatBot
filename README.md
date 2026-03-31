@@ -401,9 +401,152 @@ With ~20K messages and 2000+ synthetic conversations:
 - Responses feel grounded in real group memories
 - Communicates naturally in European Portuguese and English
 
+## � Copilot Coding Agent Team
+
+This project uses **GitHub Copilot coding agent** with custom agent profiles and a JSON-based task intake system. You write bugs and features in a JSON file, push it, and Copilot autonomously creates PRs.
+
+### How It Works
+
+```
+tasks.json → GitHub Action → GitHub Issues → Copilot Coding Agent → Pull Requests
+```
+
+1. Add tasks to `tasks.json` (see templates below)
+2. Push to `main`
+3. A GitHub Action creates labeled issues and assigns them to Copilot
+4. Copilot picks up each issue, works in its own environment, runs tests, and opens a PR
+5. You review and merge the PR
+
+### Custom Agent Profiles
+
+| Agent | File | Specialization |
+|-------|------|----------------|
+| `bug-fixer` | `.github/agents/bug-fixer.agent.md` | Root cause analysis, minimal fixes, regression tests |
+| `feature-dev` | `.github/agents/feature-dev.agent.md` | New features following existing patterns, with tests |
+| `test-specialist` | `.github/agents/test-specialist.agent.md` | Test coverage improvements, never modifies production code |
+
+### Task Templates for `tasks.json`
+
+The `tasks.json` file at the repo root accepts an array of task objects. After pushing, the GitHub Action processes them into issues and clears the file.
+
+#### Bug Report Template
+
+```json
+[
+  {
+    "title": "Fix: <short description of the bug>",
+    "type": "bug",
+    "priority": "high",
+    "description": "**What happens:** <describe the incorrect behavior>\n\n**Expected:** <describe what should happen>\n\n**Steps to reproduce:**\n1. <step 1>\n2. <step 2>\n\n**Error message (if any):**\n```\n<paste error here>\n```",
+    "files_hint": ["src/chat/retriever.py"],
+    "agent": "bug-fixer"
+  }
+]
+```
+
+#### Feature Request Template
+
+```json
+[
+  {
+    "title": "Feature: <short description>",
+    "type": "feature",
+    "priority": "medium",
+    "description": "**Goal:** <what should the feature do?>\n\n**Details:**\n- <requirement 1>\n- <requirement 2>\n\n**Acceptance criteria:**\n- [ ] <criterion 1>\n- [ ] <criterion 2>",
+    "files_hint": ["src/chat/chat.py", "config.yaml"],
+    "agent": "feature-dev"
+  }
+]
+```
+
+#### Improvement Template
+
+```json
+[
+  {
+    "title": "Improvement: <short description>",
+    "type": "improvement",
+    "priority": "low",
+    "description": "**Current behavior:** <what exists today>\n\n**Proposed improvement:** <what should change>\n\n**Motivation:** <why this matters>",
+    "files_hint": [],
+    "agent": "feature-dev"
+  }
+]
+```
+
+#### Test Coverage Template
+
+```json
+[
+  {
+    "title": "Test: <what needs test coverage>",
+    "type": "test",
+    "priority": "medium",
+    "description": "**Module to test:** `src/chat/retriever.py`\n\n**What to cover:**\n- <scenario 1>\n- <scenario 2>\n- Edge cases: <describe>",
+    "files_hint": ["src/chat/retriever.py"],
+    "agent": "test-specialist"
+  }
+]
+```
+
+#### Multiple Tasks Example
+
+```json
+[
+  {
+    "title": "Fix: RAG retriever returns empty results for short queries",
+    "type": "bug",
+    "priority": "high",
+    "description": "When a user sends a message shorter than 3 words, the retriever returns no context chunks. Expected: still retrieve relevant chunks based on semantic similarity.",
+    "files_hint": ["src/chat/retriever.py"],
+    "agent": "bug-fixer"
+  },
+  {
+    "title": "Feature: Add health check endpoint",
+    "type": "feature",
+    "priority": "medium",
+    "description": "Add a simple HTTP health check endpoint that returns the bot's status, loaded model info, and ChromaDB collection stats.",
+    "agent": "feature-dev"
+  },
+  {
+    "title": "Test: Cover knowledge base generation edge cases",
+    "type": "test",
+    "priority": "low",
+    "description": "Add tests for `src/data/generate_knowledge_base.py` covering: empty input, malformed JSON chunks, API timeout handling, and resume-from checkpoint logic.",
+    "files_hint": ["src/data/generate_knowledge_base.py"],
+    "agent": "test-specialist"
+  }
+]
+```
+
+### Task JSON Schema Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Issue title. Prefix with `Fix:`, `Feature:`, `Improvement:`, or `Test:` |
+| `type` | string | Yes | One of: `bug`, `feature`, `improvement`, `test` |
+| `priority` | string | Yes | One of: `high`, `medium`, `low` |
+| `description` | string | Yes | Detailed description. Supports Markdown. |
+| `files_hint` | string[] | No | Relevant file paths to help the agent find context faster |
+| `agent` | string | No | Agent profile to use: `bug-fixer`, `feature-dev`, or `test-specialist`. Defaults to standard Copilot if omitted. |
+
+### Setup (One-Time)
+
+1. **Enable Copilot coding agent**: Repo Settings → Code & automation → Copilot → Coding agent ✅
+2. **Create labels**: Run the label setup script:
+   ```bash
+   # Requires GitHub CLI (gh) authenticated
+   bash .github/scripts/setup-labels.sh YOUR_USERNAME/KayaChatBot
+   ```
+3. **Push this branch to main**: The `copilot-setup-steps.yml` workflow must be on the default branch for Copilot to use it.
+
+### MCP Servers
+
+The GitHub MCP server is configured in `.vscode/mcp.json` for local VS Code Copilot Chat, giving the IDE access to issues, PRs, and repo context. The coding agent on GitHub.com has the built-in GitHub MCP server enabled by default.
+
 ## 🤝 Contributing
 
-This is a personal project, but suggestions welcome! Open issues for bugs or feature requests.
+This is a personal project, but suggestions welcome! Open issues for bugs or feature requests — or add them to `tasks.json` and let Copilot handle it.
 
 ## 📄 License
 

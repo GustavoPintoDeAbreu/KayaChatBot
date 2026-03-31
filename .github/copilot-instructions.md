@@ -24,6 +24,35 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 	 - iterate until the implementation is well tested and well implemented,
 	 - merge the PR after tests pass and approvals are obtained.
 
+## Build, Test & Validation Commands
+- **Install dependencies**: `pip install -r requirements.txt`
+- **Run all tests**: `python -m pytest tests/ -v`
+- **Run RAG tests only**: `python -m pytest tests/rag/ -v`
+- **Run pipeline tests only**: `python -m pytest tests/pipeline/ -v`
+- **Validate pipeline outputs**: `python tests/pipeline/validate_pipeline.py`
+- **Build & run in Docker**: `docker-compose up --build`
+- **Run bot locally**: `python src/chat/chat.py`
+- **Run full pipeline**: `python run_full_pipeline.py`
+- **Build vector DB**: `python src/data/build_vector_db.py`
+
+## Key File Locations
+- **Central config**: `config.yaml` (local), `config.docker.yaml` (Docker overrides)
+- **RAG retriever**: `src/chat/retriever.py` — semantic search over ChromaDB
+- **Inference engine**: `src/chat/inference.py` — model loading and generation
+- **Chat loop**: `src/chat/chat.py` — interactive chat with always-on RAG
+- **Data pipeline**: `src/data/` — extraction, synthetic generation, knowledge base, vector DB
+- **LLM providers**: `src/llm_providers/` — Azure OpenAI, xAI Grok abstractions (follow `base.py` interface)
+- **Pydantic models**: `src/models.py` — type-safe data structures
+- **Member profiles**: `data/group_members.json` (injected into system prompt)
+- **Curated knowledge**: `data/group_knowledge.json` (embedded into ChromaDB `kaya_knowledge_base`)
+- **ChromaDB storage**: `data/rag_db/` — persistent vector DB with `kaya_conversations` and `kaya_knowledge_base` collections
+- **Tests**: `tests/rag/`, `tests/pipeline/`, `tests/test_inference.py`
+
 ## Docker Usage
 - When requested and building images, make sure to erase previously built images, containers, volumes, or builds to prevent storage overload (e.g. using `docker system prune` or similar)
 - After completing any change, always test it inside Docker to verify it works correctly in the containerized environment
+
+## Custom Agents & Automation
+- **Agent profiles**: `.github/agents/` — specialized agent configurations (bug-fixer, feature-dev, test-specialist)
+- **Task intake**: `tasks.json` — JSON file for submitting bugs/features; automatically creates GitHub Issues via `.github/workflows/create-issues-from-tasks.yml`
+- When working on a task, always check which custom agent profile applies based on the issue labels
