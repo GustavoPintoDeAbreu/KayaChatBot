@@ -37,6 +37,7 @@ generation:
     model: "gpt-4.1-mini"
     max_tokens: 16000  # GPT-4.1-mini max output: 16K tokens
     temperature: 0.85
+    extraction_temperature: 0.3  # Lower temperature for factual extraction (generate_text)
     timeout: 120  # Increased for larger outputs
   
   # xAI (Grok) settings
@@ -85,11 +86,35 @@ pipeline:
   # Requires AZURE_OPENAI_API_KEY_gpt_41_mini in .env. Set to false to skip (use existing data).
   generate_knowledge: false
 
+  # Set incremental: true to run the incremental update pipeline instead of full extraction.
+  # When true, run_full_pipeline.py calls incremental_update.py with data/wpp as input,
+  # which only adds messages newer than the last processed date and deduplicates by hash.
+  # When false (default), the full extract_all_messages.py re-extracts everything.
+  incremental: false
+
 # Knowledge Generation Settings (used when pipeline.generate_knowledge: true)
 knowledge_generation:
   chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the LLM
   checkpoint_every: 5        # Save progress every N chunks
   rate_limit_delay: 2        # Seconds to wait between API calls
+
+# Knowledge Base Profile Settings
+# Controls which structured profile fields are extracted per member.
+# Remove a field from the list to skip its extraction (useful for testing subsets).
+# NOTE: political_preference is sensitive — it is stored only in group_members.json
+#       and is never embedded into ChromaDB vectors.
+knowledge_base:
+  profile_fields:
+    - name
+    - age
+    - interests
+    - occupation
+    - living_place
+    - marital_status
+    - political_preference
+    - state_of_mind
+    - biography_summary
+    - frequently_discussed_topics
 
 # Model Settings
 model:
@@ -141,6 +166,11 @@ training:
   dataset_num_proc: 2
   packing: false
 
+  # Incremental retraining settings
+  resume_from_checkpoint: null  # Path to existing LoRA checkpoint (e.g. models/kaya_v2_synthetic/); null = train from scratch
+  incremental_steps: 500  # Fewer steps for incremental training (vs 1500 for full retrain)
+  incremental_learning_rate: 0.00005  # Lower LR to avoid catastrophic forgetting (5e-5 vs 1e-4)
+
 # Inference Settings
 inference:
   max_new_tokens: 256
@@ -167,9 +197,43 @@ rag:
   #   "none"         — Neither (baseline: only conversation RAG + finetune)
   knowledge_approach: "both"
 
+  # Token budget for total injected context (whitespace-based approximation: words / 0.75)
+  max_context_tokens: 3000
+
+  # Inject per-member recent summaries when a member is mentioned in the query
+  inject_recent_summaries: true
+
   # Knowledge base (ChromaDB collection of curated group facts)
   knowledge_base:
     enabled: true
     file: "./data/group_knowledge.json"
     collection_name: "kaya_knowledge_base"
     top_k: 2  # Fewer than conversation chunks — facts are dense (truncated to 3 sentences per chunk)
+
+# Benchmark Settings
+benchmark:
+  scenarios_per_config: 10  # number of test scenarios per configuration
+  output_dir: "reports/benchmarks/"  # where to save reports
+  dimensions:             # which dimensions to test (comment out to disable)
+    - knowledge_approaches
+    - languages
+    # - context_sizes     # uncomment to also vary max_seq_length and top_k
+    # - models            # uncomment to also vary model IDs
+
+  # Values for each dimension
+  knowledge_approaches:
+    - "both"
+    - "json_only"
+    - "chromadb_only"
+    - "none"
+  languages:
+    - "pt"
+    - "en"
+  context_sizes:
+    - max_seq_length: 2048
+      top_k: 3
+    - max_seq_length: 4096
+      top_k: 5
+    - max_seq_length: 8192
+      top_k: 10
+  models: []   # populated at runtime with checkpoint paths

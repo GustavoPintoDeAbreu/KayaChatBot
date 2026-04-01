@@ -64,7 +64,6 @@ def test_rag_components():
     try:
         # Test ChromaDB operations without SentenceTransformer
         import chromadb
-        from pathlib import Path
 
         # Create a test database
         test_db_path = Path("data/test_rag_db")

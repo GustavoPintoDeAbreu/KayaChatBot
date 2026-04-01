@@ -51,6 +51,42 @@ class AzureProvider(LLMProvider):
 
         return self._retry_with_backoff(_generate)
 
+    def generate_text(self, system_prompt: str, user_prompt: str) -> str:
+        """Generate a raw text response using Azure OpenAI.
+
+        Uses ``generation.azure.extraction_temperature`` (default 0.3) for
+        factual/structured extraction tasks rather than the higher creative
+        temperature used by ``generate_conversations``.
+        """
+        def _generate():
+            response = self.client.chat.completions.create(
+                model=self.azure_config['model'],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=self.azure_config.get('extraction_temperature', 0.3),
+                max_tokens=self.azure_config['max_tokens'],
+                timeout=self.azure_config['timeout']
+            )
+            return response.choices[0].message.content.strip()
+
+        return self._retry_with_backoff(_generate)
+
+    def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+        """Send a chat completion request and return the response text."""
+        def _complete():
+            response = self.client.chat.completions.create(
+                model=self.azure_config['model'],
+                messages=messages,
+                temperature=self.azure_config['temperature'],
+                max_tokens=self.azure_config['max_tokens'],
+                timeout=self.azure_config['timeout']
+            )
+            return response.choices[0].message.content.strip()
+
+        return self._retry_with_backoff(_complete)
+
     def _parse_response(self, content: str) -> List[Dict]:
         """Parse the response content into conversations."""
         # Remove markdown code blocks if present

@@ -60,55 +60,82 @@ class ProgressCallback(TrainerCallback):
 
 class KayaTrainer:
     def __init__(
-        self, model_id: str, max_seq_length: int = 4096, lora_config: dict = None
+        self,
+        model_id: str,
+        max_seq_length: int = 4096,
+        lora_config: dict = None,
+        resume_from_checkpoint: Optional[str] = None,
     ):
         self.model_id = model_id
         self.max_seq_length = max_seq_length
         self.lora_config = lora_config or {}
+        self.resume_from_checkpoint = resume_from_checkpoint
         self.model = None
         self.tokenizer = None
 
     def load_model(self):
-        """Loads the model and tokenizer with 4-bit quantization and LoRA adapters."""
-        print(f"Loading model: {self.model_id}", flush=True)
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.model_id,
-            max_seq_length=self.max_seq_length,
-            dtype=None,  # Auto detection
-            load_in_4bit=True,
-        )
+        """Loads the model and tokenizer with 4-bit quantization and LoRA adapters.
 
-        # Add LoRA adapters
-        lora_r = self.lora_config.get("r", 16)
-        lora_alpha = self.lora_config.get("alpha", 16)
-        lora_dropout = self.lora_config.get("dropout", 0)
-        target_modules = self.lora_config.get(
-            "target_modules",
-            [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-        )
+        When ``resume_from_checkpoint`` is set on the trainer, the existing LoRA
+        weights are loaded from that path (incremental training).  Otherwise a
+        fresh set of LoRA adapters is applied to the base model (full training).
+        """
+        if self.resume_from_checkpoint:
+            print(
+                f"Loading existing LoRA checkpoint for incremental training: {self.resume_from_checkpoint}",
+                flush=True,
+            )
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=self.resume_from_checkpoint,
+                max_seq_length=self.max_seq_length,
+                dtype=None,  # Auto detection
+                load_in_4bit=True,
+            )
+            print(
+                f"✓ Loaded LoRA checkpoint from {self.resume_from_checkpoint}",
+                flush=True,
+            )
+        else:
+            print(f"Loading model: {self.model_id}", flush=True)
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=self.model_id,
+                max_seq_length=self.max_seq_length,
+                dtype=None,  # Auto detection
+                load_in_4bit=True,
+            )
 
-        self.model = FastLanguageModel.get_peft_model(
-            self.model,
-            r=lora_r,
-            target_modules=target_modules,
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            bias="none",
-            use_gradient_checkpointing="unsloth",
-            random_state=3407,
-            use_rslora=False,
-            loftq_config=None,
-        )
+            # Add LoRA adapters
+            lora_r = self.lora_config.get("r", 16)
+            lora_alpha = self.lora_config.get("alpha", 16)
+            lora_dropout = self.lora_config.get("dropout", 0)
+            target_modules = self.lora_config.get(
+                "target_modules",
+                [
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
+            )
 
-        print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})", flush=True)
+            self.model = FastLanguageModel.get_peft_model(
+                self.model,
+                r=lora_r,
+                target_modules=target_modules,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                bias="none",
+                use_gradient_checkpointing="unsloth",
+                random_state=3407,
+                use_rslora=False,
+                loftq_config=None,
+            )
+
+            print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})", flush=True)
+
         print(f"✓ Trainable parameters: {self.model.print_trainable_parameters()}", flush=True)
 
     def train(
@@ -151,6 +178,23 @@ class KayaTrainer:
         # Override with user config
         if training_config:
             config.update(training_config)
+
+        # Apply incremental-training overrides when a checkpoint is loaded
+        is_incremental = self.resume_from_checkpoint is not None
+        if is_incremental:
+            if "incremental_steps" in config:
+                config["max_steps"] = config["incremental_steps"]
+            if "incremental_learning_rate" in config:
+                config["learning_rate"] = config["incremental_learning_rate"]
+
+        # Log training mode
+        if is_incremental:
+            print(
+                f"\n🔄 Mode: INCREMENTAL TRAINING (continuing from {self.resume_from_checkpoint})",
+                flush=True,
+            )
+        else:
+            print("\n🆕 Mode: FULL TRAINING (from scratch)", flush=True)
 
         print(f"\n📋 Training Configuration:", flush=True)
         print(f"   • Max steps: {config['max_steps']}", flush=True)
