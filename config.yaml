@@ -209,3 +209,31 @@ rag:
     file: "./data/group_knowledge.json"
     collection_name: "kaya_knowledge_base"
     top_k: 2  # Fewer than conversation chunks — facts are dense (truncated to 3 sentences per chunk)
+
+# Benchmark Settings
+benchmark:
+  scenarios_per_config: 10  # number of test scenarios per configuration
+  output_dir: "reports/benchmarks/"  # where to save reports
+  dimensions:             # which dimensions to test (comment out to disable)
+    - knowledge_approaches
+    - languages
+    # - context_sizes     # uncomment to also vary max_seq_length and top_k
+    # - models            # uncomment to also vary model IDs
+
+  # Values for each dimension
+  knowledge_approaches:
+    - "both"
+    - "json_only"
+    - "chromadb_only"
+    - "none"
+  languages:
+    - "pt"
+    - "en"
+  context_sizes:
+    - max_seq_length: 2048
+      top_k: 3
+    - max_seq_length: 4096
+      top_k: 5
+    - max_seq_length: 8192
+      top_k: 10
+  models: []   # populated at runtime with checkpoint paths
