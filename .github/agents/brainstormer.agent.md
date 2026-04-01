@@ -33,7 +33,7 @@ Outputs you produce:
 - **Fine-tuned model**: Qwen3-14B with LoRA adapters, trained on RAG-aware synthetic conversations.
 - **Language policy**: European Portuguese only. No emojis. No Brazilian Portuguese.
 - **LLM providers**: xAI (Grok, default) and Azure OpenAI — abstracted in `src/llm_providers/`.
-- **GPU pipeline**: Self-hosted runner handles training. Copilot agents never run training commands.
+- **GPU pipeline**: Self-hosted runner handles GPU/Docker work. Agents dispatch jobs via `bash .github/scripts/trigger-gpu-pipeline.sh <mode> [--wait]`.
 - **Config**: `config.yaml` (local) and `config.docker.yaml` (Docker override).
 
 ## Plan Template
@@ -73,5 +73,6 @@ One-paragraph description of what this plan achieves and why.
 - You **may** read any file in the codebase to inform your design.
 - If you need to understand the current state, use file read tools before designing.
 - Keep plans actionable: every step must be specific enough that an implementing agent can execute it without further clarification.
-- Flag GPU constraints explicitly: any change touching `src/finetuning/`, `config.yaml` model/training sections, or `data/*.jsonl` triggers the GPU pipeline.
-- **No GPU commands**: Never suggest running `python src/finetuning/train.py`, `docker-compose up`, or similar.
+- Flag GPU work explicitly in plans: any change touching `src/finetuning/`, `config.yaml` model/training sections, or `data/*.jsonl` will auto-trigger the GPU pipeline. Also note when a phase should dispatch via `bash .github/scripts/trigger-gpu-pipeline.sh <mode> [--wait]`.
+- **You do not dispatch GPU jobs yourself** — the implementing agent does. Include the dispatch command in the plan step so the agent knows which mode to use.
+- Available dispatch modes: `finetune`, `full-pipeline`, `evaluate`, `inference-test`, `generate-knowledge`, `build-vectordb`, `benchmark`.
