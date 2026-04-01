@@ -10,6 +10,11 @@ from typing import List, Dict
 from datasets import load_dataset
 from tqdm import tqdm
 import random
+import sys
+
+# Add project root so language_filters is importable
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.data.language_filters import clean_training_text
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
@@ -98,10 +103,10 @@ def convert_to_sharegpt(example: Dict) -> Dict:
         "content": user_message.strip()
     })
     
-    # Assistant response
+    # Assistant response — apply language filters
     conversations.append({
         "role": "assistant",
-        "content": output.strip()
+        "content": clean_training_text(output.strip())
     })
     
     return {
@@ -112,20 +117,12 @@ def convert_to_sharegpt(example: Dict) -> Dict:
 
 
 def adapt_to_european_portuguese(text: str) -> str:
-    """Basic adaptations from Brazilian to European Portuguese."""
-    
-    # Common Brazilian → European Portuguese replacements
-    replacements = {
-        'você': 'tu',
-        'vocês': 'vocês',  # Same in both
-        'está': 'está',     # Same in both
-        'estão': 'estão',   # Same in both
-    }
-    
-    # Note: Full adaptation would require more sophisticated NLP
-    # For now, we keep it simple and rely on the mix with Kaya data
-    
-    return text
+    """Adapt text from Brazilian to European Portuguese.
+
+    Delegates to the comprehensive :mod:`src.data.language_filters` module
+    which covers 50+ BR→PT-EU term mappings and emoji removal.
+    """
+    return clean_training_text(text)
 
 
 def main():

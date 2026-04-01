@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.data.generation_utils import load_config, get_base_dir, get_output_paths, get_llm_provider, load_finetune_chunks, save_conversation
+from src.data.language_filters import clean_training_text
 
 
 def get_generation_prompt(finetune_chunk_text: str, num_conversations: int) -> str:
@@ -62,7 +63,9 @@ INSTRUCTIONS:
    - Opinions: "És de esquerda ou de direita?"
    - Events: "O que aconteceu quando...?"
 4. Kaya's responses:
-   - Speak naturally in European Portuguese or English
+   - Speak ONLY in European Portuguese (NEVER English, NEVER Brazilian Portuguese)
+   - FORBIDDEN words/expressions: 'rolê', 'cara', 'legal', 'maneiro', 'mano', 'galera', 'top', 'ônibus', 'você' (use 'tu' instead), 'trem', 'celular', 'bacana'
+   - NEVER use emojis
    - Keep replies concise and conversational (1-3 sentences)
    - **Answer based on the provided context snippet**
    - Reference actual people/events from context
@@ -98,7 +101,9 @@ OUTPUT FORMAT - Return valid JSON:
 INSTRUCTIONS:
 - Generate exactly {depth} exchanges (user asks, assistant responds, repeat)
 - FIRST user message MUST include RAG context format with relevant snippet
-- Kaya answers based on provided context in natural European Portuguese or English
+- Kaya answers based on provided context in European Portuguese ONLY (never English, never Brazilian Portuguese)
+- Never use emojis
+- Never use Brazilian expressions: 'rolê', 'cara', 'legal', 'maneiro', 'mano', 'galera'
 - Follow-ups don't need RAG format
 
 Generate ONLY valid JSON."""
@@ -162,9 +167,17 @@ def generate_conversations_for_finetune_chunk(provider, finetune_chunk: Dict, nu
         if not valid:
             print(f"   ⚠️  Conv {idx+1}: Missing role/content")
             continue
-        
+
+        # Post-process: strip emojis and BR expressions from assistant turns
+        cleaned_turns = []
+        for turn in turns:
+            if turn['role'] == 'assistant':
+                cleaned_turns.append({**turn, 'content': clean_training_text(turn['content'])})
+            else:
+                cleaned_turns.append(turn)
+
         formatted_conversations.append({
-            'conversations': turns,
+            'conversations': cleaned_turns,
             'source': 'synthetic_kaya',
             'chunk_id': chunk_id
         })

@@ -109,22 +109,23 @@ def tester(base_config):
 
 class TestScoreBreakdown:
     def test_average(self):
-        s = ScoreBreakdown(4.0, 5.0, 3.0, 4.0)
+        s = ScoreBreakdown(4.0, 5.0, 3.0, 4.0, 4.0)
         assert s.average == pytest.approx(4.0)
 
     def test_failed_all_pass(self):
-        s = ScoreBreakdown(3.0, 4.0, 5.0, 3.0)
+        s = ScoreBreakdown(3.0, 4.0, 5.0, 3.0, 5.0)
         assert not s.failed
 
     def test_failed_one_below(self):
-        s = ScoreBreakdown(2.9, 4.0, 5.0, 3.0)
+        s = ScoreBreakdown(2.9, 4.0, 5.0, 3.0, 5.0)
         assert s.failed
 
     def test_to_dict_includes_average(self):
-        s = ScoreBreakdown(4.0, 4.0, 4.0, 4.0)
+        s = ScoreBreakdown(4.0, 4.0, 4.0, 4.0, 4.0)
         d = s.to_dict()
         assert "average" in d
         assert d["average"] == pytest.approx(4.0)
+        assert "language_consistency" in d
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,7 @@ class TestParseScores:
         s = parse_scores("not valid json at all")
         assert s.factual_accuracy == 0.0
         assert s.relevance == 0.0
+        assert s.language_consistency == 0.0
 
     def test_clamps_above_5(self):
         s = parse_scores('{"factual_accuracy":9,"relevance":5,"language_quality":5,"tone":5}')
@@ -481,9 +483,9 @@ class TestScenarioResultToDict:
             ConversationTurn(
                 role="model",
                 content="response",
-                scores=ScoreBreakdown(4.0, 4.0, 4.0, 4.0),
+                scores=ScoreBreakdown(4.0, 4.0, 4.0, 4.0, 5.0),
             )
         )
         avg = result.average_scores()
         assert avg is not None
-        assert avg["average"] == pytest.approx(4.0)
+        assert avg["average"] == pytest.approx((4.0 + 4.0 + 4.0 + 4.0 + 5.0) / 5)
