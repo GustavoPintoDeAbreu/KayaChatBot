@@ -44,12 +44,14 @@ class ConversationRetriever:
         if members_file and Path(members_file).exists():
             with open(members_file, 'r', encoding='utf-8') as f:
                 members_data = json.load(f)
+            self._members_data = members_data.get('members', [])
             self.group_members = set()
-            for m in members_data.get('members', []):
+            for m in self._members_data:
                 for alias in m.get('aliases', []):
                     self.group_members.add(alias.lower())
         else:
             # Fallback if JSON not available
+            self._members_data = []
             self.group_members = {
                 'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
                 'mateus', 'rafa', 'bernardo', 'chamusca', 'gilao', 'pedro'
@@ -247,6 +249,31 @@ class ConversationRetriever:
 
         return "\n".join(context_parts)
 
+    def _count_tokens(self, text: str) -> int:
+        """Approximate token count using whitespace word count (words / 0.75)."""
+        if not text:
+            return 0
+        return int(len(text.split()) / 0.75)
+
+    def _format_recent_summaries(self, query_persons: List[str]) -> str:
+        """Format recent summaries for members mentioned in the query."""
+        if not query_persons or not self._members_data:
+            return ""
+
+        summaries = []
+        for member in self._members_data:
+            aliases = [a.lower() for a in member.get('aliases', [])]
+            if any(p in aliases for p in query_persons):
+                summary = member.get('recent_summary', '').strip()
+                if summary:
+                    summaries.append(f"[Resumo recente — {member['name']}] {summary}")
+
+        if not summaries:
+            return ""
+
+        lines = ["=== Resumos recentes dos membros ==="] + summaries + ["=== Fim dos resumos ==="]
+        return "\n".join(lines)
+
     def retrieve_all(self, query: str, knowledge_approach: str = "both") -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
@@ -257,20 +284,55 @@ class ConversationRetriever:
           "chromadb_only"— KB retrieval + conversation RAG (no JSON injection)
           "none"         — conversation RAG only (baseline)
         """
-        context_parts = []
+        max_tokens = self.rag_config.get('max_context_tokens', 3000)
+        inject_recent_summaries = self.rag_config.get('inject_recent_summaries', True)
 
-        # Always retrieve conversation history
+        # Always retrieve conversation history (sorted by similarity descending)
         conv_chunks = self.retrieve(query)
-        if conv_chunks:
-            context_parts.append(self.format_context(conv_chunks))
 
         # Retrieve from knowledge base if approach calls for it
+        kb_chunks = []
         if knowledge_approach in ("both", "chromadb_only"):
             kb_config = self.rag_config.get('knowledge_base', {})
             if kb_config.get('enabled', False):
                 kb_chunks = self.retrieve_knowledge(query)
-                if kb_chunks:
-                    context_parts.insert(0, self.format_knowledge_context(kb_chunks))
+
+        # Inject recent summaries for members mentioned in the query
+        recent_summaries_text = ""
+        if inject_recent_summaries:
+            query_persons = self.extract_query_persons(query)
+            recent_summaries_text = self._format_recent_summaries(query_persons)
+
+        # Enforce token budget — truncate lowest-priority context first:
+        #   1. Conversation chunks (lowest similarity first, i.e. from the end)
+        #   2. Knowledge facts (all at once)
+        #   3. Recent summaries
+        def _total() -> int:
+            return (
+                self._count_tokens(self.format_context(conv_chunks))
+                + self._count_tokens(self.format_knowledge_context(kb_chunks))
+                + self._count_tokens(recent_summaries_text)
+            )
+
+        while conv_chunks and _total() > max_tokens:
+            # retrieve() returns chunks sorted by similarity descending, so the last
+            # item is the lowest-similarity chunk — remove it first.
+            conv_chunks.pop()
+
+        if kb_chunks and _total() > max_tokens:
+            kb_chunks = []
+
+        if recent_summaries_text and _total() > max_tokens:
+            recent_summaries_text = ""
+
+        # Assemble final context: knowledge → recent summaries → conversations
+        context_parts = []
+        if kb_chunks:
+            context_parts.append(self.format_knowledge_context(kb_chunks))
+        if recent_summaries_text:
+            context_parts.append(recent_summaries_text)
+        if conv_chunks:
+            context_parts.append(self.format_context(conv_chunks))
 
         return "\n\n".join(context_parts)
 

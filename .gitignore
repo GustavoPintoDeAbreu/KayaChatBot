@@ -139,6 +139,12 @@ unsloth_compiled_cache/
 actions-runner/
 
 # ===================================
+# Benchmark Reports (generated at runtime)
+# ===================================
+reports/benchmarks/benchmark_*.md
+reports/benchmarks/benchmark_*.json
+
+# ===================================
 # Batch Files
 # ===================================
 *.bat

@@ -28,6 +28,8 @@ def base_config():
         "rag": {
             "top_k": 5,
             "filter_by_person": True,
+            "max_context_tokens": 3000,
+            "inject_recent_summaries": True,
             "knowledge_base": {
                 "enabled": True,
                 "collection_name": "kaya_knowledge_base",
@@ -57,6 +59,60 @@ def retriever(base_config):
     r.knowledge_collection = MagicMock()
     r.knowledge_collection.count.return_value = 50
 
+    return r
+
+
+@pytest.fixture
+def retriever_with_members(tmp_path):
+    """ConversationRetriever backed by a real members JSON file with recent_summary data."""
+    members_data = {
+        "members": [
+            {
+                "name": "Peter",
+                "aliases": ["peter", "pe"],
+                "notes": "Peter likes audio.",
+                "recent_summary": "Peter recently discussed his new speakers.",
+            },
+            {
+                "name": "Gil",
+                "aliases": ["gil", "gilao"],
+                "notes": "Gil plays guitar.",
+                "recent_summary": "",  # empty — should be skipped
+            },
+            {
+                "name": "Rafa",
+                "aliases": ["rafa"],
+                "notes": "Rafa is into football.",
+                "recent_summary": "Rafa organised a poker night.",
+            },
+        ]
+    }
+    members_file = tmp_path / "members.json"
+    members_file.write_text(__import__("json").dumps(members_data), encoding="utf-8")
+
+    config = {
+        "rag": {
+            "top_k": 5,
+            "filter_by_person": True,
+            "max_context_tokens": 3000,
+            "inject_recent_summaries": True,
+            "knowledge_base": {
+                "enabled": True,
+                "collection_name": "kaya_knowledge_base",
+                "top_k": 2,
+            },
+        },
+        "data": {
+            "group_members_file": str(members_file),
+        },
+    }
+    r = ConversationRetriever(config)
+    r.encoder = MagicMock()
+    r.encoder.encode = MagicMock(side_effect=lambda texts: np.ones((len(texts), 8)))
+    r.collection = MagicMock()
+    r.collection.count.return_value = 100
+    r.knowledge_collection = MagicMock()
+    r.knowledge_collection.count.return_value = 50
     return r
 
 
@@ -346,3 +402,169 @@ class TestGetStats:
         r = ConversationRetriever(base_config)
         stats = r.get_stats()
         assert "error" in stats
+
+
+# ---------------------------------------------------------------------------
+# _count_tokens
+# ---------------------------------------------------------------------------
+
+class TestCountTokens:
+    def test_empty_string(self, retriever):
+        assert retriever._count_tokens("") == 0
+
+    def test_none_like_empty(self, retriever):
+        assert retriever._count_tokens("") == 0
+
+    def test_single_word(self, retriever):
+        # 1 word → int(1.333...) = 1
+        assert retriever._count_tokens("hello") == 1
+
+    def test_many_words(self, retriever):
+        text = " ".join(["word"] * 75)  # 75 words → int(75 / 0.75) = 100
+        assert retriever._count_tokens(text) == 100
+
+    def test_proportional(self, retriever):
+        text = " ".join(["w"] * 30)
+        assert retriever._count_tokens(text) == int(30 / 0.75)
+
+
+# ---------------------------------------------------------------------------
+# _format_recent_summaries
+# ---------------------------------------------------------------------------
+
+class TestFormatRecentSummaries:
+    def test_no_persons_returns_empty(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries([])
+        assert result == ""
+
+    def test_no_members_data_returns_empty(self, base_config):
+        r = ConversationRetriever(base_config)
+        # base_config has no members file → _members_data is empty
+        result = r._format_recent_summaries(["peter"])
+        assert result == ""
+
+    def test_member_with_summary_included(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries(["peter"])
+        assert "Peter" in result
+        assert "recently discussed his new speakers" in result
+        assert "Resumos recentes dos membros" in result
+
+    def test_member_with_empty_summary_excluded(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries(["gil"])
+        # Gil has an empty recent_summary — should produce no output
+        assert result == ""
+
+    def test_multiple_members(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries(["peter", "rafa"])
+        assert "Peter" in result
+        assert "Rafa" in result
+        assert "poker night" in result
+
+    def test_alias_matching(self, retriever_with_members):
+        # "pe" is an alias for Peter
+        result = retriever_with_members._format_recent_summaries(["pe"])
+        assert "Peter" in result
+
+    def test_unknown_person_returns_empty(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries(["nobody"])
+        assert result == ""
+
+    def test_output_format(self, retriever_with_members):
+        result = retriever_with_members._format_recent_summaries(["peter"])
+        assert result.startswith("=== Resumos recentes dos membros ===")
+        assert result.endswith("=== Fim dos resumos ===")
+
+
+# ---------------------------------------------------------------------------
+# retrieve_all — recent summaries integration
+# ---------------------------------------------------------------------------
+
+class TestRetrieveAllWithSummaries:
+    def _setup_collections(self, retriever):
+        retriever.collection.query.return_value = _make_query_result(
+            docs=["Peter: hey"],
+            metadatas=[
+                {"participants": "Peter", "mentioned": "", "message_count": 1, "token_count": 5,
+                 "timestamp_start": None, "timestamp_end": None},
+            ],
+            distances=[0.1],
+        )
+        retriever.knowledge_collection.query.return_value = _make_query_result(
+            docs=["Peter is from Lisbon"],
+            metadatas=[{"subject": "Peter", "category": "bio"}],
+            distances=[0.15],
+        )
+
+    def test_summaries_injected_when_member_mentioned(self, retriever_with_members):
+        self._setup_collections(retriever_with_members)
+        ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="both")
+        assert "Resumos recentes dos membros" in ctx
+        assert "recently discussed his new speakers" in ctx
+
+    def test_summaries_not_injected_when_toggle_off(self, retriever_with_members):
+        retriever_with_members.rag_config["inject_recent_summaries"] = False
+        self._setup_collections(retriever_with_members)
+        ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="both")
+        assert "Resumos recentes dos membros" not in ctx
+
+    def test_summaries_not_injected_when_no_member_mentioned(self, retriever_with_members):
+        self._setup_collections(retriever_with_members)
+        ctx = retriever_with_members.retrieve_all("How is the weather?", knowledge_approach="both")
+        assert "Resumos recentes dos membros" not in ctx
+
+    def test_summaries_appear_before_conversations(self, retriever_with_members):
+        self._setup_collections(retriever_with_members)
+        ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="json_only")
+        summaries_pos = ctx.find("Resumos recentes dos membros")
+        conv_pos = ctx.find("Conversas relevantes")
+        assert summaries_pos < conv_pos
+
+
+# ---------------------------------------------------------------------------
+# retrieve_all — token budget enforcement
+# ---------------------------------------------------------------------------
+
+class TestTokenBudget:
+    def _make_long_chunk_result(self, n: int):
+        """Return n conversation chunks, each with ~50 words of text."""
+        long_text = " ".join(["word"] * 50)
+        docs = [f"Chunk {i}: {long_text}" for i in range(n)]
+        metas = [
+            {"participants": "", "mentioned": "", "message_count": 1, "token_count": 50,
+             "timestamp_start": None, "timestamp_end": None}
+            for _ in range(n)
+        ]
+        dists = [0.1 * (i + 1) for i in range(n)]  # increasing distance = decreasing similarity
+        return _make_query_result(docs, metas, dists)
+
+    def test_context_within_budget_with_default_limit(self, retriever):
+        """With default max_context_tokens=3000, 5 small chunks should all fit."""
+        retriever.collection.query.return_value = self._make_long_chunk_result(5)
+        retriever.knowledge_collection.query.return_value = _make_query_result([], [], [])
+        ctx = retriever.retrieve_all("test query", knowledge_approach="none")
+        token_count = retriever._count_tokens(ctx)
+        assert token_count <= 3000
+
+    def test_low_budget_prunes_chunks(self, retriever):
+        """Setting a very low token budget should prune all but the highest-similarity chunk."""
+        retriever.rag_config["max_context_tokens"] = 50  # Very tight budget
+        retriever.collection.query.return_value = self._make_long_chunk_result(10)
+        retriever.knowledge_collection.query.return_value = _make_query_result([], [], [])
+        ctx = retriever.retrieve_all("test query", knowledge_approach="none")
+        token_count = retriever._count_tokens(ctx)
+        # Chunks should have been pruned — result is within budget (or empty if even one is too large)
+        assert token_count <= 50
+
+    def test_knowledge_chunks_pruned_after_conv_chunks(self, retriever):
+        """When budget is exceeded, knowledge facts are removed after all conv chunks are exhausted."""
+        # Give a tiny budget and provide only knowledge (no conv chunks) to confirm knowledge is pruned
+        retriever.rag_config["max_context_tokens"] = 10
+        retriever.collection.query.return_value = _make_query_result([], [], [])  # no conv
+        retriever.knowledge_collection.query.return_value = _make_query_result(
+            docs=[" ".join(["fact"] * 30)],
+            metadatas=[{"subject": "Peter", "category": "bio"}],
+            distances=[0.1],
+        )
+        ctx = retriever.retrieve_all("Tell me about Peter", knowledge_approach="both")
+        # Knowledge (~30 words ≈ 40 tokens) exceeds budget of 10, so it must be pruned
+        assert "Conhecimento" not in ctx
