@@ -10,6 +10,9 @@ permissions:
   issues: write
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   create-issues:
     runs-on: ubuntu-latest
