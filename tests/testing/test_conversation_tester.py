@@ -16,15 +16,18 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.testing.conversation_tester import (
-    ConversationTester,
+    LLMJudgeTester,
     LocalModel,
-    ScenarioResult,
+    LLMScenarioResult,
     ScoreBreakdown,
     ConversationTurn,
     build_scoring_prompt,
     generate_scenarios,
     parse_scores,
 )
+# Aliases to avoid changing all test code
+ConversationTester = LLMJudgeTester
+ScenarioResult = LLMScenarioResult
 
 
 # ---------------------------------------------------------------------------
