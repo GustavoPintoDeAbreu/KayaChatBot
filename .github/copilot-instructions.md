@@ -54,16 +54,50 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 
 ## Custom Agents & Automation
 - **Agent profiles**: `.github/agents/` — specialized agent configurations:
-  - `bug-fixer` — root cause analysis, minimal fixes, regression tests
+  - `bug-fixer` — root cause analysis, minimal fixes, regression tests; also handles auto-created GPU pipeline failure issues
   - `feature-dev` — new features following existing patterns
   - `test-specialist` — test coverage improvements, never modifies production code
   - `model-trainer` — fine-tuning config, LoRA settings, data pipeline improvements
 - **Task intake**: `tasks.json` — JSON file for submitting bugs/features; automatically creates GitHub Issues via `.github/workflows/create-issues-from-tasks.yml`
 - When working on a task, always check which custom agent profile applies based on the issue labels
 
+## Self-Healing GPU Pipeline Cycle
+
+The project has an automated failure→fix→retry loop:
+
+```
+GPU Pipeline fails
+      ↓
+gpu-failure-handler.yml triggers automatically
+      ↓
+Downloads log artifact, extracts error details
+      ↓
+Creates GitHub Issue: "[Auto] GPU Pipeline failed: {mode}"
+  Labels: bug, priority:high, agent:bug-fixer
+  Assignee: copilot
+      ↓
+Copilot bug-fixer agent picks up the issue
+  • Reads log excerpt from issue body
+  • Applies minimal fix (Dockerfile, requirements.txt, config, or source)
+  • Runs pytest (no GPU needed for unit tests)
+  • Opens PR: "fix/gpu-pipeline-{issue_number}"
+  • PR description includes "Fixes #{issue_number}"
+      ↓
+PR triggers GPU Pipeline automatically (touches src/**, Dockerfile, etc.)
+      ↓
+GPU Pipeline succeeds → results posted to PR comment
+      ↓
+Human reviews and approves → merge → issue auto-closes
+```
+
+**Loop guard**: The failure handler refuses to create new auto-issues when 3+ are already open, preventing infinite loops.
+
+**All agents**: When opening fix PRs, always include `Fixes #N` in the description, never self-merge, keep a clean commit history, and ensure tests pass before requesting review.
+
 ## GPU Constraints
 - The Copilot coding agent runs on GitHub-hosted runners — **no GPU available**.
 - For model-related tasks (fine-tuning, inference testing, evaluation), the agent modifies code/config **only**. It must never attempt to run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.).
 - GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (user's local GPU machine) when a PR touches training-related files.
-- Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min).
+- Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min), `benchmark` (60 min).
 - Training results (loss, duration, steps) are posted back to the PR as a comment by the workflow.
+- **PR trigger paths**: Any PR touching `src/**`, `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `config.docker.yaml`, `data/*.jsonl`, `run_full_pipeline.py`, or `.github/scripts/**` automatically triggers the GPU Pipeline on the self-hosted runner.
