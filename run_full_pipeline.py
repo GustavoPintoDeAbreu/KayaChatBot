@@ -66,6 +66,7 @@ def main():
 
     skip_synthetic: bool = config.get('pipeline', {}).get('skip_synthetic', False)
     generate_knowledge: bool = config.get('pipeline', {}).get('generate_knowledge', False)
+    incremental: bool = config.get('pipeline', {}).get('incremental', False)
     test_mode: bool = config.get('test_mode', {}).get('enabled', False)
 
     if test_mode:
@@ -94,14 +95,42 @@ def main():
     print("\n🚀 Starting pipeline...", flush=True)
 
     # ------------------------------------------------------------------
-    # Step 1 — Extract raw messages
+    # Step 1 — Extract raw messages (full or incremental)
     # ------------------------------------------------------------------
-    if not run_script(
-        BASE_DIR / "src/data/extract_all_messages.py",
-        "Step 1: Extract Messages",
-    ):
-        print("\n❌ Pipeline failed at Step 1", flush=True)
-        return
+    if incremental:
+        wpp_dir = BASE_DIR / "data" / "wpp"
+        print(
+            f"\nMode: Incremental  [pipeline.incremental = true]  "
+            f"(input: {wpp_dir})",
+            flush=True,
+        )
+        try:
+            subprocess.run(
+                [
+                    PYTHON,
+                    str(BASE_DIR / "src/data/incremental_update.py"),
+                    "--input", str(wpp_dir),
+                    "--no-rebuild-db",
+                ],
+                cwd=str(BASE_DIR),
+                check=True,
+                capture_output=False,
+                text=True,
+            )
+            print("✅ Step 1: Incremental Update - Complete!", flush=True)
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Pipeline failed at Step 1 (incremental update): {e}", flush=True)
+            return
+        except KeyboardInterrupt:
+            print("\n⚠️  Step 1 - Interrupted by user", flush=True)
+            return
+    else:
+        if not run_script(
+            BASE_DIR / "src/data/extract_all_messages.py",
+            "Step 1: Extract Messages",
+        ):
+            print("\n❌ Pipeline failed at Step 1", flush=True)
+            return
 
     # ------------------------------------------------------------------
     # Step 1b (optional) — Generate knowledge base via Azure LLM
