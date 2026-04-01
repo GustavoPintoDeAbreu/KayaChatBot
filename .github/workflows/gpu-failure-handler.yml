@@ -129,48 +129,52 @@ jobs:
               }
             }
 
-            const title = `[Auto] GPU Pipeline failed: ${mode} — ${shortError}`;
+            const title = `[Auto] GPU Pipeline failed: ${mode} \u2014 ${shortError}`;
 
-            const body = `## GPU Pipeline Failure — Automated Report
-
-**Run:** [#${runId}](${runUrl})
-**Mode:** \`${mode}\`
-**Branch:** \`${headBranch}\` (\`${headSha}\`)
-**Triggered by:** @${triggeredBy}
-**Time:** ${createdAt}
-
----
-
-## Task for Copilot Agent
-
-1. Read the error log below carefully to identify the root cause.
-2. Apply a minimal targeted fix — prefer fixing \`Dockerfile\`, \`requirements.txt\`, \`config.docker.yaml\`, or source code as appropriate.
-3. Run \`python -m pytest tests/ -v\` (via the Copilot environment) to validate any non-GPU changes.
-4. Open a PR with \`Fixes #${context.issue ? context.issue.number : 'THIS_ISSUE'}\` in the description.
-5. The GPU Pipeline will re-run automatically on the PR when it touches training-related files.
-6. Do NOT merge — human approval is required.
-
-### Common Docker/pipeline failure causes to check:
-
-- Missing Python packages in \`Dockerfile\` (pip install step)
-- Python version mismatch (Dockerfile uses 3.10, local may differ)
-- Missing or wrong paths in \`config.docker.yaml\` vs \`config.yaml\`
-- Volume mount issues in \`docker-compose.yml\`
-- Import errors due to missing dependencies in \`requirements.txt\`
-- Environment variables not passed to the container (\`.env\` file)
-
----
-
-## Failure Log (last 80 lines)
-
-\`\`\`
-${logExcerpt}
-\`\`\`
-
----
-
-*This issue was created automatically by the GPU Pipeline Failure Handler workflow.*
-*Assigned to the \`bug-fixer\` Copilot agent. Auto-issues are capped at 3 open at a time.*`;
+            const issueNumber = context.issue ? context.issue.number : 'THIS_ISSUE';
+            const bodyLines = [
+              '## GPU Pipeline Failure \u2014 Automated Report',
+              '',
+              `**Run:** [#${runId}](${runUrl})`,
+              `**Mode:** \`${mode}\``,
+              `**Branch:** \`${headBranch}\` (\`${headSha}\`)`,
+              `**Triggered by:** @${triggeredBy}`,
+              `**Time:** ${createdAt}`,
+              '',
+              '---',
+              '',
+              '## Task for Copilot Agent',
+              '',
+              '1. Read the error log below carefully to identify the root cause.',
+              '2. Apply a minimal targeted fix \u2014 prefer fixing `Dockerfile`, `requirements.txt`, `config.docker.yaml`, or source code as appropriate.',
+              '3. Run `python -m pytest tests/ -v` (via the Copilot environment) to validate any non-GPU changes.',
+              `4. Open a PR with \`Fixes #${issueNumber}\` in the description.`,
+              '5. The GPU Pipeline will re-run automatically on the PR when it touches training-related files.',
+              '6. Do NOT merge \u2014 human approval is required.',
+              '',
+              '### Common Docker/pipeline failure causes to check:',
+              '',
+              '- Missing Python packages in `Dockerfile` (pip install step)',
+              '- Python version mismatch (Dockerfile uses 3.10, local may differ)',
+              '- Missing or wrong paths in `config.docker.yaml` vs `config.yaml`',
+              '- Volume mount issues in `docker-compose.yml`',
+              '- Import errors due to missing dependencies in `requirements.txt`',
+              '- Environment variables not passed to the container (`.env` file)',
+              '',
+              '---',
+              '',
+              '## Failure Log (last 80 lines)',
+              '',
+              '```',
+              logExcerpt,
+              '```',
+              '',
+              '---',
+              '',
+              '*This issue was created automatically by the GPU Pipeline Failure Handler workflow.*',
+              '*Assigned to the `bug-fixer` Copilot agent. Auto-issues are capped at 3 open at a time.*',
+            ];
+            const body = bodyLines.join('\n');
 
             // Try to create the issue with copilot as assignee
             let issue;
