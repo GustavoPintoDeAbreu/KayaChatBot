@@ -95,15 +95,21 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this structur
       "biography_summary": "2-3 sentence factual bio",
       "frequently_discussed_topics": ["topic1", "topic2", "topic3"]
     }
+  },
+  "recent_summaries": {
+    "MemberName": "Short paragraph (1-2 sentences) about their most recent discussion topics, opinions, or notable events in this chunk.",
+    "AnotherMember": "..."
   }
 }
 
 Rules:
 - Only include members that appear in this specific chunk.
 - Only include fields you have evidence for — use null for unknown fields.
+- Do NOT invent facts. Only use what is clearly stated or implied in the messages.
 - Use English for all text values.
 - biography_summary: 2-3 sentences max, factual only.
 - frequently_discussed_topics: up to 10 topics, single words or short phrases.
+- recent_summary: 1-2 sentences capturing the most recent activity or topics for this chunk.
 - If nothing new is found for a member, omit them entirely.
 """
 
@@ -239,8 +245,8 @@ def call_llm_for_profiles(
     user_prompt: str,
     max_retries: int = 3,
     retry_delay: float = 5.0,
-) -> Optional[Dict[str, Dict]]:
-    """Call the LLM provider and return parsed {member: profile_dict} or None."""
+) -> Optional[Dict]:
+    """Call the LLM provider and return parsed dict with 'members' (profile dicts) and 'recent_summaries' or None on failure."""
     for attempt in range(1, max_retries + 1):
         try:
             content = provider.generate_text(EXTRACTION_SYSTEM_PROMPT, user_prompt)
@@ -248,8 +254,12 @@ def call_llm_for_profiles(
 
             result = json.loads(content)
             members_dict = result.get("members", {})
+            recent_summaries_dict = result.get("recent_summaries", {})
             if isinstance(members_dict, dict):
-                return members_dict
+                return {
+                    "members": members_dict,
+                    "recent_summaries": recent_summaries_dict if isinstance(recent_summaries_dict, dict) else {},
+                }
 
         except json.JSONDecodeError as e:
             print(f"  [attempt {attempt}] JSON parse error: {e}. Retrying...", flush=True)
@@ -330,9 +340,10 @@ def merge_profiles(
 
 
 def save_group_members(
-    members_data: Dict, profiles: Dict[str, Dict], profile_fields: List[str]
+    members_data: Dict, profiles: Dict[str, Dict], profile_fields: List[str],
+    recent_summaries: Optional[Dict[str, str]] = None
 ) -> None:
-    """Write updated structured profiles to group_members.json."""
+    """Write updated structured profiles and recent_summaries to group_members.json."""
     public_fields = [f for f in profile_fields if f != "name"]
 
     for member in members_data["members"]:
@@ -353,6 +364,10 @@ def save_group_members(
         # Maintain legacy notes field
         if profile.get("biography_summary"):
             member["notes"] = profile["biography_summary"]
+
+        # Write recent_summary if provided
+        if recent_summaries and name in recent_summaries and recent_summaries[name]:
+            member["recent_summary"] = recent_summaries[name]
 
     with open(GROUP_MEMBERS_FILE, "w", encoding="utf-8") as f:
         json.dump(members_data, f, ensure_ascii=False, indent=2)
@@ -458,6 +473,13 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
             profile["notes"] = m["notes"]
         current_profiles[m["name"]] = profile
 
+    # Current recent summaries (always replaced with latest, not merged).
+    # Messages are processed in chronological order, so later chunks naturally
+    # produce more recent summaries that overwrite earlier ones.
+    current_recent_summaries: Dict[str, str] = {
+        m["name"]: m.get("recent_summary", "") for m in members_data["members"]
+    }
+
     # Chunk messages
     chunks = chunk_messages(messages, chunk_size_words)
     total_chunks = len(chunks)
@@ -502,7 +524,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
         new_profiles = call_llm_for_profiles(provider, user_prompt)
         if new_profiles:
-            for member_name, profile_data in new_profiles.items():
+            for member_name, profile_data in new_profiles["members"].items():
                 if not isinstance(profile_data, dict):
                     continue
                 # Normalise member name
@@ -526,10 +548,25 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
                         flush=True,
                     )
 
+            # recent_summaries always replace (they represent the latest snapshot)
+            for member_name, summary in new_profiles["recent_summaries"].items():
+                matched_name = None
+                if member_name in current_recent_summaries:
+                    matched_name = member_name
+                else:
+                    for name in current_recent_summaries:
+                        if name.lower() == member_name.lower():
+                            matched_name = name
+                            break
+
+                if matched_name and summary:
+                    current_recent_summaries[matched_name] = summary.strip()
+                    print(f"    ✅ Updated recent_summary for {matched_name}", flush=True)
+
         # Checkpoint
         if (i + 1) % checkpoint_every == 0:
             print(f"  💾 Checkpoint after chunk {chunk_idx}...", flush=True)
-            save_group_members(members_data, current_profiles, profile_fields)
+            save_group_members(members_data, current_profiles, profile_fields, current_recent_summaries)
             save_group_knowledge(knowledge_data, current_profiles)
 
         # Rate limit
@@ -538,7 +575,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
     # Final save
     print("\n💾 Saving final results...", flush=True)
-    save_group_members(members_data, current_profiles, profile_fields)
+    save_group_members(members_data, current_profiles, profile_fields, current_recent_summaries)
     save_group_knowledge(knowledge_data, current_profiles)
 
     # Summary
