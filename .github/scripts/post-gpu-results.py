@@ -125,6 +125,38 @@ def format_test_results(metrics: dict, mode: str) -> str:
     return "\n".join(lines)
 
 
+def parse_data_pipeline_log(log_content: str) -> dict:
+    """Extract success/failure for data pipeline modes (generate-knowledge, build-vectordb)."""
+    metrics: dict = {"success": False, "errors": [], "summary_lines": []}
+
+    error_lines = re.findall(r"(?:Error|Exception|Traceback \(most recent)[^\n]*", log_content)
+    metrics["errors"] = error_lines[:5]
+    metrics["success"] = len(error_lines) == 0
+
+    lines = [line.strip() for line in log_content.splitlines() if line.strip()]
+    metrics["summary_lines"] = lines[-6:] if len(lines) >= 6 else lines
+
+    return metrics
+
+
+def format_data_pipeline_results(metrics: dict, mode: str) -> str:
+    lines = [f"## 🖥️ GPU Pipeline Results — `{mode}`\n"]
+    status = "✅ Completed" if metrics["success"] else "❌ Errors detected"
+    lines.append(f"**Status:** {status}\n")
+
+    if metrics["summary_lines"]:
+        lines.append("**Last output lines:**")
+        for line in metrics["summary_lines"]:
+            lines.append(f"> {line}")
+
+    if metrics["errors"]:
+        lines.append("\n**Errors:**")
+        for err in metrics["errors"]:
+            lines.append(f"- `{err[:120]}`")
+
+    return "\n".join(lines)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: post-gpu-results.py <log_file> [mode]")
@@ -145,6 +177,9 @@ def main():
     if mode in ("evaluate", "inference-test"):
         metrics = parse_test_log(log_content)
         print(format_test_results(metrics, mode))
+    elif mode in ("generate-knowledge", "build-vectordb"):
+        metrics = parse_data_pipeline_log(log_content)
+        print(format_data_pipeline_results(metrics, mode))
     else:
         metrics = parse_training_log(log_content)
         print(format_training_results(metrics, mode))

@@ -135,6 +135,16 @@ def main():
             if user_input.lower() in ['exit', 'quit']:
                 break
 
+            # Detect /en dual-language override
+            # If user prefixes message with /en, respond in English for this turn only
+            respond_in_english = False
+            if user_input.lower().startswith('/en '):
+                user_input = user_input[4:].strip()
+                respond_in_english = True
+            elif user_input.strip().lower() == '/en':
+                print("(Use /en <question> to ask a question in English. The bot will reply in English for that message only.)")
+                continue
+
             # Add user message to history
             history.append(f"{user_name}: {user_input}")
 
@@ -170,9 +180,15 @@ def main():
             mode_indicator = "always-on RAG" if (rag_enabled and context) else "no context"
             print(f"   [Mode: {mode_indicator}]")
 
+            # Build effective system prompt (override to English if /en used)
+            effective_system_prompt = system_prompt
+            if respond_in_english:
+                effective_system_prompt = system_prompt + "\n\nThis message only: respond in English."
+                print("   [Language override: English]")
+
             # Format prompt using the tokenizer's chat template (model-agnostic)
             messages = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": effective_system_prompt},
                 {"role": "user", "content": user_message},
             ]
             prompt = tokenizer.apply_chat_template(

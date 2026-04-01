@@ -1,12 +1,14 @@
 # GitHub Copilot Instructions
 
 ## Project Overview
-KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **Kaya**. The bot is NOT a group member — it is an assistant with access to the group's collective memory. It has long-term memory of facts, events, and people learned from real WhatsApp and Instagram conversation history (via RAG + fine-tuning). It communicates in **European Portuguese or English**; it does NOT need to use the group's specific slang or lingo. The focus is on natural language ability and factual memory, not mimicking any particular speech style.
+KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **Kaya**. The bot is NOT a group member — it is an assistant with access to the group's collective memory. It has long-term memory of facts, events, and people learned from real WhatsApp and Instagram conversation history (via RAG + fine-tuning). It communicates in **European Portuguese only** (never Brazilian Portuguese, never emojis). Users can prefix any message with `/en` to receive a one-off English reply. The focus is on natural language ability and factual memory, not mimicking any particular speech style.
 
 **Key architecture decisions:**
 - RAG is **always on** — every message (casual or Q&A) retrieves context from conversation history and the curated knowledge base. The model never answers from fine-tune memory alone.
 - Group member knowledge is stored in `data/group_members.json` (injected into system prompt) and `data/group_knowledge.json` (embedded into ChromaDB `kaya_knowledge_base` collection).
 - The `rag.knowledge_approach` config toggle (`both` / `json_only` / `chromadb_only` / `none`) enables benchmarking different knowledge injection strategies.
+- **Language policy**: Always European Portuguese. No emojis. No Brazilian Portuguese. `/en <message>` prefix triggers English for that turn only.
+- **Knowledge generation** uses xAI Grok (configured via `generation.provider: "xai"` in config.yaml).
 
 ## Environment Setup
 - Always run code using the virtual environment named 'kaya_chatbot' located in the `kaya_chatbot_env/` directory
@@ -46,6 +48,8 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 - **Member profiles**: `data/group_members.json` (injected into system prompt)
 - **Curated knowledge**: `data/group_knowledge.json` (embedded into ChromaDB `kaya_knowledge_base`)
 - **ChromaDB storage**: `data/rag_db/` — persistent vector DB with `kaya_conversations` and `kaya_knowledge_base` collections
+- **Language filters**: `src/data/language_filters.py` — BR→PT-EU substitution, emoji removal
+- **Language validator**: `src/testing/language_validator.py` — response validation for PT-EU compliance
 - **Tests**: `tests/rag/`, `tests/pipeline/`, `tests/test_inference.py`
 
 ## Docker Usage
@@ -54,16 +58,50 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 
 ## Custom Agents & Automation
 - **Agent profiles**: `.github/agents/` — specialized agent configurations:
-  - `bug-fixer` — root cause analysis, minimal fixes, regression tests
-  - `feature-dev` — new features following existing patterns
-  - `test-specialist` — test coverage improvements, never modifies production code
-  - `model-trainer` — fine-tuning config, LoRA settings, data pipeline improvements
+  - `brainstormer` — architecture planning, system design, trade-off analysis (Claude Opus 4.6; produces plans only, never writes code)
+  - `bug-fixer` — root cause analysis, minimal fixes, regression tests (Claude Sonnet 4.6)
+  - `feature-dev` — new features following existing patterns (Claude Sonnet 4.6)
+  - `test-specialist` — test coverage improvements, never modifies production code (Claude Haiku 4.5)
+  - `model-trainer` — fine-tuning config, LoRA settings, data pipeline improvements (Claude Sonnet 4.6)
 - **Task intake**: `tasks.json` — JSON file for submitting bugs/features; automatically creates GitHub Issues via `.github/workflows/create-issues-from-tasks.yml`
 - When working on a task, always check which custom agent profile applies based on the issue labels
+- **Brainstormer workflow**: For complex multi-phase changes, invoke the `brainstormer` agent first to produce a plan, then assign implementation phases to the appropriate specialized agents.
 
-## GPU Constraints
-- The Copilot coding agent runs on GitHub-hosted runners — **no GPU available**.
-- For model-related tasks (fine-tuning, inference testing, evaluation), the agent modifies code/config **only**. It must never attempt to run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.).
-- GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (user's local GPU machine) when a PR touches training-related files.
-- Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min).
-- Training results (loss, duration, steps) are posted back to the PR as a comment by the workflow.
+## GPU & Docker Execution
+
+The project uses a **self-hosted GitHub Actions runner** on the user's local GPU machine. How you access it depends on context:
+
+### Coding agent (GitHub Actions runner)
+Never run `docker-compose`, `python train.py`, or any heavy command directly — the coding agent runs on a GitHub-hosted runner with **no GPU**. Use the dispatch helper script to send jobs to the self-hosted runner:
+
+```bash
+bash .github/scripts/trigger-gpu-pipeline.sh <mode> [--wait]
+```
+
+Available modes:
+
+| Mode | Timeout | Use `--wait`? | Purpose |
+|------|---------|---------------|---------|
+| `finetune` | 240 min | No | LoRA fine-tuning on Qwen3-14B |
+| `full-pipeline` | 240 min | No | Full data + training pipeline |
+| `evaluate` | 10 min | Yes | Full pytest suite in Docker |
+| `inference-test` | 10 min | Yes | Test model inference |
+| `generate-knowledge` | 30 min | Yes | Regenerate group_knowledge.json via xAI Grok |
+| `build-vectordb` | 15 min | Yes | Rebuild ChromaDB vector database |
+| `benchmark` | 60 min | No | Conversation benchmark |
+
+- **Short modes** (`evaluate`, `inference-test`, `generate-knowledge`, `build-vectordb`): use `--wait` to get results inline.
+- **Long modes** (`finetune`, `full-pipeline`, `benchmark`): dispatch without `--wait` — the script prints the Actions run URL for tracking.
+- PRs that touch `src/finetuning/**`, `config.docker.yaml`, or training data files **auto-trigger** the GPU pipeline (`finetune` mode) and post results as a PR comment.
+
+### VS Code Copilot Chat (local)
+When working interactively in VS Code on the local machine, run `docker-compose` commands directly:
+
+```bash
+docker system prune -f                              # clean up before building
+docker-compose build                               # build image
+docker-compose run --rm kaya-chatbot python -m pytest tests/ -v  # run tests
+docker-compose run --rm kaya-chatbot python src/chat/chat.py     # interactive chat
+```
+
+Always clean up after use to prevent storage overload (`docker system prune` or `docker-compose down --rmi local --volumes`).

@@ -41,12 +41,14 @@ class ScoreBreakdown:
     relevance: float
     language_quality: float
     tone: float
+    language_consistency: float  # 5=pure PT-EU, 0=full language switch or heavy BR/emojis
 
     @property
     def average(self) -> float:
         return (
-            self.factual_accuracy + self.relevance + self.language_quality + self.tone
-        ) / 4
+            self.factual_accuracy + self.relevance + self.language_quality
+            + self.tone + self.language_consistency
+        ) / 5
 
     @property
     def failed(self) -> bool:
@@ -58,6 +60,7 @@ class ScoreBreakdown:
                 self.relevance,
                 self.language_quality,
                 self.tone,
+                self.language_consistency,
             ]
         )
 
@@ -67,6 +70,7 @@ class ScoreBreakdown:
             "relevance": self.relevance,
             "language_quality": self.language_quality,
             "tone": self.tone,
+            "language_consistency": self.language_consistency,
             "average": self.average,
         }
 
@@ -109,6 +113,7 @@ class LLMScenarioResult:
             "relevance": sum(s.relevance for s in scored) / n,
             "language_quality": sum(s.language_quality for s in scored) / n,
             "tone": sum(s.tone for s in scored) / n,
+            "language_consistency": sum(s.language_consistency for s in scored) / n,
             "average": sum(s.average for s in scored) / n,
         }
 
@@ -281,7 +286,7 @@ class LocalModel:
 SCORING_SYSTEM_PROMPT = """\
 You are an expert evaluator for a Portuguese friend group chat assistant called KayaBot.
 
-Evaluate the given response on a 0–5 integer scale for each of these four dimensions:
+Evaluate the given response on a 0–5 integer scale for each of these five dimensions:
 
 1. **factual_accuracy** — Does the response contain correct facts consistent with the reference knowledge?
    - 5: All facts correct and complete
@@ -299,8 +304,8 @@ Evaluate the given response on a 0–5 integer scale for each of these four dime
    - 1: Barely relevant
    - 0: Does not address the question at all
 
-3. **language_quality** — Grammar, fluency, and naturalness in Portuguese or English.
-   - 5: Excellent, natural-sounding text
+3. **language_quality** — Grammar, fluency, and naturalness in Portuguese.
+   - 5: Excellent, natural-sounding European Portuguese
    - 4: Good, minor awkwardness
    - 3: Acceptable, some grammatical issues
    - 2: Noticeable errors, hard to follow
@@ -315,8 +320,17 @@ Evaluate the given response on a 0–5 integer scale for each of these four dime
    - 1: Very wrong tone (cold, rude, or inappropriately familiar)
    - 0: Completely inappropriate
 
+5. **language_consistency** — Is the response in European Portuguese only, with no emojis, no Brazilian Portuguese, and no mid-sentence language switches?
+   - 5: Pure European Portuguese, no emojis, no BR expressions, no English switch
+   - 4: Mostly correct, at most one minor lapse (one BR word or one emoji)
+   - 3: Some issues (2-3 BR words, an emoji, or very minor English phrase)
+   - 2: Noticeable violations (multiple BR expressions, several emojis, or partial English)
+   - 1: Heavy violations (many BR terms, heavy emoji use, or multi-sentence English)
+   - 0: Response is entirely in English, or completely dominated by BR Portuguese / emojis
+   Note: BR expressions to penalise include: 'rol\u00ea', 'cara', 'maneiro', 'galera', 'mano', 'legal' (as slang), 'voc\u00ea', 'celular', '\u00f4nibus', 'valeu', etc.
+
 Respond ONLY with a valid JSON object (no markdown, no explanation), for example:
-{"factual_accuracy": 4, "relevance": 5, "language_quality": 4, "tone": 4}
+{"factual_accuracy": 4, "relevance": 5, "language_quality": 4, "tone": 4, "language_consistency": 5}
 """
 
 
@@ -356,6 +370,7 @@ def parse_scores(raw: str) -> ScoreBreakdown:
             relevance=0.0,
             language_quality=0.0,
             tone=0.0,
+            language_consistency=0.0,
         )
 
     def _clamp(val: Any, default: float = 0.0) -> float:
@@ -369,6 +384,7 @@ def parse_scores(raw: str) -> ScoreBreakdown:
         relevance=_clamp(data.get("relevance")),
         language_quality=_clamp(data.get("language_quality")),
         tone=_clamp(data.get("tone")),
+        language_consistency=_clamp(data.get("language_consistency", 5.0)),
     )
 
 
@@ -496,6 +512,7 @@ class LLMJudgeTester:
                         ("relevance", scores.relevance),
                         ("language_quality", scores.language_quality),
                         ("tone", scores.tone),
+                        ("language_consistency", scores.language_consistency),
                     ]
                     for dim, val in dim_names:
                         if val < 3:
@@ -540,7 +557,8 @@ class LLMJudgeTester:
                         f"fa={avg['factual_accuracy']:.1f}  "
                         f"rel={avg['relevance']:.1f}  "
                         f"lq={avg['language_quality']:.1f}  "
-                        f"tone={avg['tone']:.1f}"
+                        f"tone={avg['tone']:.1f}  "
+                        f"lc={avg['language_consistency']:.1f}"
                     )
                 if result.failure:
                     print(
@@ -562,6 +580,7 @@ class LLMJudgeTester:
                 "relevance": sum(a["relevance"] for a in all_avgs) / n,
                 "language_quality": sum(a["language_quality"] for a in all_avgs) / n,
                 "tone": sum(a["tone"] for a in all_avgs) / n,
+                "language_consistency": sum(a["language_consistency"] for a in all_avgs) / n,
                 "average": sum(a["average"] for a in all_avgs) / n,
             }
         else:
@@ -820,6 +839,31 @@ SCENARIOS: List[dict] = [
         "question_pt": "Resume a última conversa do grupo em três frases.",
         "question_en": "Summarize the last group conversation in three sentences.",
         "expected_keywords": ["conversa", "conversation", "grupo", "group"],
+    },
+    # --- language_consistency (must respond in PT-EU with no emojis / no BR) ---
+    {
+        "id": "s017",
+        "category": "language_consistency",
+        "question_pt": "What do you know about the Kaya group?",
+        "question_en": "What do you know about the Kaya group?",
+        "expected_keywords": ["kaya", "grupo", "amigos"],
+        # An English question should still yield a Portuguese answer
+    },
+    {
+        "id": "s018",
+        "category": "language_consistency",
+        "question_pt": "Conta-me sobre uma festa ou saída do grupo.",
+        "question_en": "Tell me about a party or outing the group had.",
+        "expected_keywords": ["saída", "festa", "grupo"],
+        # This type of question historically triggers BR expressions like 'rolê'
+    },
+    {
+        "id": "s019",
+        "category": "language_consistency",
+        "question_pt": "Diz qualquer coisa sobre o Peter de forma entusiasmada.",
+        "question_en": "Say something enthusiastic about Peter.",
+        "expected_keywords": ["peter"],
+        # Enthusiasm historically triggers emojis in the response
     },
 ]
 
