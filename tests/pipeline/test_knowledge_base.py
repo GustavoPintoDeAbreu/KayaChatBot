@@ -584,8 +584,8 @@ class TestCallLlmForProfiles:
 
         result = call_llm_for_profiles(mock_provider, "test prompt")
         assert result is not None
-        assert "Peter" in result
-        assert result["Peter"]["age"] == "late 20s"
+        assert "Peter" in result["members"]
+        assert result["members"]["Peter"]["age"] == "late 20s"
 
     def test_handles_markdown_fences(self):
         from data.generate_knowledge_base import call_llm_for_profiles
@@ -599,7 +599,7 @@ class TestCallLlmForProfiles:
 
         result = call_llm_for_profiles(mock_provider, "prompt")
         assert result is not None
-        assert "Gil" in result
+        assert "Gil" in result["members"]
 
     def test_returns_none_on_invalid_json(self):
         from data.generate_knowledge_base import call_llm_for_profiles
