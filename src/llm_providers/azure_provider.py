@@ -73,6 +73,20 @@ class AzureProvider(LLMProvider):
 
         return self._retry_with_backoff(_generate)
 
+    def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+        """Send a chat completion request and return the response text."""
+        def _complete():
+            response = self.client.chat.completions.create(
+                model=self.azure_config['model'],
+                messages=messages,
+                temperature=self.azure_config['temperature'],
+                max_tokens=self.azure_config['max_tokens'],
+                timeout=self.azure_config['timeout']
+            )
+            return response.choices[0].message.content.strip()
+
+        return self._retry_with_backoff(_complete)
+
     def _parse_response(self, content: str) -> List[Dict]:
         """Parse the response content into conversations."""
         # Remove markdown code blocks if present
