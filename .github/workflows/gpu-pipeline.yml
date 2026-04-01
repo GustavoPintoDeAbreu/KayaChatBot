@@ -4,13 +4,15 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "src/finetuning/**"
+      - "src/**"
       - "config.docker.yaml"
       - "data/train_synthetic.jsonl"
       - "data/val_synthetic.jsonl"
       - "run_full_pipeline.py"
       - "Dockerfile"
       - "docker-compose.yml"
+      - "requirements.txt"
+      - ".github/scripts/**"
   workflow_dispatch:
     inputs:
       mode:
@@ -33,6 +35,9 @@ jobs:
   gpu-pipeline:
     runs-on: self-hosted
     timeout-minutes: 240
+    outputs:
+      failed: ${{ steps.outcome.outputs.failed }}
+      mode: ${{ steps.outcome.outputs.mode }}
 
     steps:
       - name: Checkout code
@@ -41,7 +46,7 @@ jobs:
       - name: Determine run mode
         id: mode
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[  "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=finetune" >> "$GITHUB_OUTPUT"
@@ -91,6 +96,33 @@ jobs:
         continue-on-error: true
         run: |
           docker-compose run --rm kaya-chatbot python src/testing/benchmark.py 2>&1 | tee pipeline_output.log
+
+      - name: Detect pipeline outcome
+        id: outcome
+        if: always()
+        run: |
+          # Determine whether the pipeline step itself succeeded.
+          # We check for the presence of success markers in the log; absence means failure.
+          LOG=pipeline_output.log
+          if [[ -f "$LOG" ]]; then
+            if grep -qiE "(Training Completed|passed|Benchmark complete)" "$LOG"; then
+              echo "failed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "failed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "mode=${{ steps.mode.outputs.mode }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pipeline log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output-${{ github.run_id }}
+          path: pipeline_output.log
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Parse and post results
         if: always()
