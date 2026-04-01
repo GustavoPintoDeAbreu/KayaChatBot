@@ -67,9 +67,41 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 - When working on a task, always check which custom agent profile applies based on the issue labels
 - **Brainstormer workflow**: For complex multi-phase changes, invoke the `brainstormer` agent first to produce a plan, then assign implementation phases to the appropriate specialized agents.
 
-## GPU Constraints
-- The Copilot coding agent runs on GitHub-hosted runners — **no GPU available**.
-- For model-related tasks (fine-tuning, inference testing, evaluation), the agent modifies code/config **only**. It must never attempt to run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.).
-- GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (user's local GPU machine) when a PR touches training-related files.
-- Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min).
-- Training results (loss, duration, steps) are posted back to the PR as a comment by the workflow.
+## GPU & Docker Execution
+
+The project uses a **self-hosted GitHub Actions runner** on the user's local GPU machine. How you access it depends on context:
+
+### Coding agent (GitHub Actions runner)
+Never run `docker-compose`, `python train.py`, or any heavy command directly — the coding agent runs on a GitHub-hosted runner with **no GPU**. Use the dispatch helper script to send jobs to the self-hosted runner:
+
+```bash
+bash .github/scripts/trigger-gpu-pipeline.sh <mode> [--wait]
+```
+
+Available modes:
+
+| Mode | Timeout | Use `--wait`? | Purpose |
+|------|---------|---------------|---------|
+| `finetune` | 240 min | No | LoRA fine-tuning on Qwen3-14B |
+| `full-pipeline` | 240 min | No | Full data + training pipeline |
+| `evaluate` | 10 min | Yes | Full pytest suite in Docker |
+| `inference-test` | 10 min | Yes | Test model inference |
+| `generate-knowledge` | 30 min | Yes | Regenerate group_knowledge.json via xAI Grok |
+| `build-vectordb` | 15 min | Yes | Rebuild ChromaDB vector database |
+| `benchmark` | 60 min | No | Conversation benchmark |
+
+- **Short modes** (`evaluate`, `inference-test`, `generate-knowledge`, `build-vectordb`): use `--wait` to get results inline.
+- **Long modes** (`finetune`, `full-pipeline`, `benchmark`): dispatch without `--wait` — the script prints the Actions run URL for tracking.
+- PRs that touch `src/finetuning/**`, `config.docker.yaml`, or training data files **auto-trigger** the GPU pipeline (`finetune` mode) and post results as a PR comment.
+
+### VS Code Copilot Chat (local)
+When working interactively in VS Code on the local machine, run `docker-compose` commands directly:
+
+```bash
+docker system prune -f                              # clean up before building
+docker-compose build                               # build image
+docker-compose run --rm kaya-chatbot python -m pytest tests/ -v  # run tests
+docker-compose run --rm kaya-chatbot python src/chat/chat.py     # interactive chat
+```
+
+Always clean up after use to prevent storage overload (`docker system prune` or `docker-compose down --rmi local --volumes`).

@@ -31,4 +31,10 @@ You are a feature implementation specialist for the KayaChatBot project — a Py
 - New config options go in `config.yaml` with comments explaining the options.
 - If adding a new module, place it in the appropriate `src/` subdirectory.
 - Update `README.md` if the feature changes user-facing behavior or adds new commands.
-- **GPU constraint**: Never run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.). If the feature involves model training or evaluation, delegate to the `model-trainer` agent or note that the `GPU Pipeline` workflow will handle execution.
+- **GPU dispatch**: To validate your feature in the dockerised environment on the self-hosted runner, use:
+  ```bash
+  bash .github/scripts/trigger-gpu-pipeline.sh evaluate --wait     # run full pytest suite
+  bash .github/scripts/trigger-gpu-pipeline.sh inference-test --wait  # test model inference
+  bash .github/scripts/trigger-gpu-pipeline.sh build-vectordb --wait  # rebuild ChromaDB after RAG changes
+  ```
+  Never run Docker or training commands directly (`docker-compose up`, `python train.py`). Always dispatch via the script. For training changes, use `model-trainer` agent or dispatch `finetune` / `full-pipeline` (no `--wait` — these can take hours).

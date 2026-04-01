@@ -24,10 +24,13 @@ on:
           - inference-test
           - full-pipeline
           - benchmark
+          - generate-knowledge
+          - build-vectordb
 
 permissions:
   contents: read
   pull-requests: write
+  actions: read
 
 jobs:
   gpu-pipeline:
@@ -91,6 +94,20 @@ jobs:
         continue-on-error: true
         run: |
           docker-compose run --rm kaya-chatbot python src/testing/benchmark.py 2>&1 | tee pipeline_output.log
+
+      - name: Generate knowledge base
+        if: steps.mode.outputs.mode == 'generate-knowledge'
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/data/generate_knowledge_base.py 2>&1 | tee pipeline_output.log
+
+      - name: Build vector database
+        if: steps.mode.outputs.mode == 'build-vectordb'
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/data/build_vector_db.py 2>&1 | tee pipeline_output.log
 
       - name: Parse and post results
         if: always()

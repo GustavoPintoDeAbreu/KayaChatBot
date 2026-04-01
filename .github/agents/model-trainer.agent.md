@@ -47,17 +47,33 @@ training:
   logging_steps: 25
 ```
 
-## GPU Pipeline Workflow
+## GPU Dispatch
 
-When your PR touches `src/finetuning/**`, `config.yaml`, `config.docker.yaml`, `data/train_synthetic.jsonl`, `data/val_synthetic.jsonl`, or `run_full_pipeline.py`, the `.github/workflows/gpu-pipeline.yml` workflow **automatically runs on the self-hosted runner** (the user's local GPU machine). Training results are posted back to the PR as a comment.
+The GPU pipeline runs on the **self-hosted runner** (the user's local machine with a GPU). You dispatch jobs to it using the helper script:
 
-You can also ask for a specific mode in the PR description, e.g.: "Please trigger GPU pipeline with mode: `evaluate`".
+```bash
+bash .github/scripts/trigger-gpu-pipeline.sh <mode> [--wait]
+```
+
+Available modes and when to use them:
+
+| Mode | Timeout | Use `--wait`? | Purpose |
+|------|---------|---------------|---------|
+| `finetune` | 240 min | No — dispatch only | Run LoRA fine-tuning on Qwen3-14B |
+| `full-pipeline` | 240 min | No — dispatch only | Run full data + training pipeline |
+| `evaluate` | 10 min | Yes | Run full pytest suite in Docker |
+| `inference-test` | 10 min | Yes | Test model inference end-to-end |
+| `generate-knowledge` | 30 min | Yes | Regenerate group_knowledge.json via xAI Grok |
+| `build-vectordb` | 15 min | Yes | Rebuild ChromaDB vector database |
+| `benchmark` | 60 min | No — dispatch only | Run conversation benchmark |
+
+When a PR touches `src/finetuning/**`, `config.yaml`, `config.docker.yaml`, `data/train_synthetic.jsonl`, `data/val_synthetic.jsonl`, or `run_full_pipeline.py`, the GPU pipeline **also triggers automatically** and posts results to the PR.
 
 ## Rules
 
-- **Never run** `python src/finetuning/train.py`, `docker-compose up`, or any training command — GPU execution is handled by the workflow.
+- **Never run Docker or training commands directly** (`docker-compose up`, `python src/finetuning/train.py`, etc.). Always use `trigger-gpu-pipeline.sh` to dispatch to the self-hosted runner.
 - Keep changes to `config.yaml` minimal and always add inline comments explaining the change.
 - If changing LoRA rank, learning rate, or batch size, explain the expected tradeoff (capacity vs. VRAM, convergence speed, etc.) in the PR description.
 - `data/` files (`.jsonl`, `group_knowledge.json`, `group_members.json`) are **gitignored** — do not create or modify them.
 - The `Dockerfile` and `docker-compose.yml` are GPU-configured (NVIDIA runtime, CUDA 12.4). Only change them if adding new Python dependencies or system packages.
-- If a task requires GPU compute to validate (e.g., testing a new LoRA rank), note this clearly in the PR — the GPU pipeline will provide the validation.
+- After any RAG or knowledge base change, dispatch `build-vectordb` or `generate-knowledge` (with `--wait`) to validate the result.
