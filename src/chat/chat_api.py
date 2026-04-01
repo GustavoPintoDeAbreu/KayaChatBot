@@ -126,6 +126,16 @@ def main():
         if user_input.lower() in ('exit', 'quit'):
             break
 
+        # Detect /en dual-language override
+        # Prefix /en makes Kaya reply in English for that turn only
+        respond_in_english = False
+        if user_input.lower().startswith('/en '):
+            user_input = user_input[4:].strip()
+            respond_in_english = True
+        elif user_input.strip().lower() == '/en':
+            print("(Use /en <question> to ask a question in English. The bot will reply in English for that message only.)")
+            continue
+
         # RAG retrieval
         context = ""
         if rag_enabled and retriever:
@@ -152,8 +162,14 @@ def main():
         mode = "always-on RAG" if (rag_enabled and context) else "no context"
         print(f"   [Mode: {mode}]")
 
+        # Build effective system prompt (override to English if /en used)
+        effective_system_prompt = system_prompt
+        if respond_in_english:
+            effective_system_prompt = system_prompt + "\n\nThis message only: respond in English."
+            print("   [Language override: English]")
+
         # Build full messages list: system + trimmed history + current user turn
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": effective_system_prompt}]
         # Trim history to last N turns (each turn = user + assistant)
         trimmed = history[-(max_history_turns * 2):]
         messages.extend(trimmed)

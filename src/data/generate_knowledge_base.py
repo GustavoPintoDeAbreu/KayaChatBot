@@ -106,10 +106,11 @@ Rules:
 - Only include members that appear in this specific chunk.
 - Only include fields you have evidence for — use null for unknown fields.
 - Do NOT invent facts. Only use what is clearly stated or implied in the messages.
-- Use English for all text values.
-- biography_summary: 2-3 sentences max, factual only.
-- frequently_discussed_topics: up to 10 topics, single words or short phrases.
-- recent_summary: 1-2 sentences capturing the most recent activity or topics for this chunk.
+- Use European Portuguese (português europeu) for ALL text values. Never use English. Never use Brazilian Portuguese.
+- biography_summary: 2-3 sentences max, factual only, in European Portuguese.
+- frequently_discussed_topics: up to 10 topics, single words or short phrases, in European Portuguese.
+- recent_summary: 1-2 sentences capturing the most recent activity or topics for this chunk, in European Portuguese.
+- Never include emojis in any text values.
 - If nothing new is found for a member, omit them entirely.
 """
 

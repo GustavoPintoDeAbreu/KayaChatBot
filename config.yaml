@@ -72,7 +72,7 @@ data:
   train_test_split: 0.9  # 90% train, 10% validation
   
   # Persona settings
-  system_prompt: "És o bot assistente do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Fala em português europeu ou inglês de forma natural. Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo."
+  system_prompt: "És o bot assistente do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Responde SEMPRE em português europeu. Não uses emojis nas respostas. Não uses expressões do português do Brasil (como 'rolê', 'cara', 'legal', 'maneiro', 'mano', 'galera', 'top', 'saudade' quando usada de forma brasileira). Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo. Se o utilizador usar o prefixo /en na mensagem, responde essa mensagem em inglês."
   group_members_file: "./data/group_members.json"
 
 # Pipeline Settings
@@ -81,9 +81,10 @@ pipeline:
   # This avoids any API calls and builds training data straight from the extracted chat messages.
   skip_synthetic: true
 
-  # Set generate_knowledge: true to run the LLM knowledge extraction step (Azure GPT-4.1-mini).
+  # Set generate_knowledge: true to run the LLM knowledge extraction step (uses xAI Grok by default).
   # This reads all_messages_cleaned.jsonl and populates group_members.json + group_knowledge.json.
-  # Requires AZURE_OPENAI_API_KEY_gpt_41_mini in .env. Set to false to skip (use existing data).
+  # Requires XAI_API_KEY in .env (or AZURE_OPENAI_API_KEY_gpt_41_mini if generation.provider: azure).
+  # Set to false to skip (use existing data).
   generate_knowledge: false
 
   # Set incremental: true to run the incremental update pipeline instead of full extraction.
