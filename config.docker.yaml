@@ -135,6 +135,11 @@ training:
   dataset_num_proc: 2
   packing: false
 
+  # Incremental retraining settings
+  resume_from_checkpoint: null  # Path to existing LoRA checkpoint (e.g. /app/models/kaya_v2_synthetic/); null = train from scratch
+  incremental_steps: 500  # Fewer steps for incremental training (vs 1500 for full retrain)
+  incremental_learning_rate: 0.00005  # Lower LR to avoid catastrophic forgetting (5e-5 vs 1e-4)
+
 # Inference Settings
 inference:
   max_new_tokens: 256
