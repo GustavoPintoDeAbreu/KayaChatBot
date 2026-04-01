@@ -5,11 +5,12 @@ on:
     branches: [main]
     paths:
       - "src/finetuning/**"
-      - "config.yaml"
       - "config.docker.yaml"
       - "data/train_synthetic.jsonl"
       - "data/val_synthetic.jsonl"
       - "run_full_pipeline.py"
+      - "Dockerfile"
+      - "docker-compose.yml"
   workflow_dispatch:
     inputs:
       mode:
