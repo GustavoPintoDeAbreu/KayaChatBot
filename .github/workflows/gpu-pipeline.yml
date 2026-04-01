@@ -23,6 +23,7 @@ on:
           - evaluate
           - inference-test
           - full-pipeline
+          - benchmark
 
 permissions:
   contents: read
@@ -83,6 +84,13 @@ jobs:
         continue-on-error: true
         run: |
           docker-compose run --rm kaya-chatbot python src/chat/inference.py 2>&1 | tee pipeline_output.log
+
+      - name: Run benchmark
+        if: steps.mode.outputs.mode == 'benchmark'
+        timeout-minutes: 60
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/testing/benchmark.py 2>&1 | tee pipeline_output.log
 
       - name: Parse and post results
         if: always()
