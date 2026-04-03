@@ -59,7 +59,7 @@ data:
   val_file: "/app/data/val_synthetic.jsonl"
   
   # Legacy files (for reference)
-  input_file: "/app/data/wpp/WhatsApp Chat with Kaya 👀.txt"
+  input_file: "/app/data/wpp/WhatsApp Chat with Kaya \ud83d\udc40.txt"
   output_file: "/app/data/processed_chat.jsonl"
   
   # Token-based chunking settings
@@ -70,7 +70,7 @@ data:
   train_test_split: 0.9
   
   # Persona settings
-  system_prompt: "És o bot assistente do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amigável. Fala em português europeu ou inglês de forma natural. Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo."
+  system_prompt: "\u00c9s o bot assistente do grupo de amigos 'Kaya'. Tens mem\u00f3ria de factos, eventos e pessoas que aprendeste atrav\u00e9s das conversas passadas do grupo. Quando te fazem perguntas, respondes com base no que sabes dessas conversas. Podes conversar de forma casual e amig\u00e1vel. Fala em portugu\u00eas europeu ou ingl\u00eas de forma natural. N\u00e3o \u00e9s um membro do grupo \u2014 \u00e9s um bot com acesso \u00e0 mem\u00f3ria coletiva do grupo."
   group_members_file: "/app/data/group_members.json"
   
   # LLM-based data cleaning settings
@@ -84,6 +84,28 @@ data:
 # Pipeline Settings
 pipeline:
   skip_synthetic: true
+  generate_knowledge: true  # Run LLM knowledge extraction (generate_knowledge_base.py)
+  incremental: false        # Full extraction, not incremental
+
+# Knowledge Generation Settings
+knowledge_generation:
+  chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the LLM
+  checkpoint_every: 5        # Save progress every N chunks
+  rate_limit_delay: 2        # Seconds to wait between API calls
+
+# Knowledge Base Profile Settings
+knowledge_base:
+  profile_fields:
+    - name
+    - age
+    - interests
+    - occupation
+    - living_place
+    - marital_status
+    - political_preference
+    - state_of_mind
+    - biography_summary
+    - frequently_discussed_topics
 
 # Model Settings
 model:
@@ -152,7 +174,7 @@ rag:
   enabled: true
   always_on: true
   vector_db: "chromadb"
-  embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
+  embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality \u2014 best for messy chat retrieval
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 5
