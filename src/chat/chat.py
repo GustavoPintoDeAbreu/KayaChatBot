@@ -14,6 +14,16 @@ from peft import PeftModel
 # Add parent directory to path for imports (Docker compatibility)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+try:
+    from src.chat.memory import SessionMemory
+    _memory_enabled = True
+except ImportError:
+    try:
+        from chat.memory import SessionMemory
+        _memory_enabled = True
+    except ImportError:
+        _memory_enabled = False
+
 def main():
     print("=" * 60)
     print("Kaya Chat Interface with RAG")
@@ -104,12 +114,27 @@ def main():
             print("   Continuing without RAG...")
             rag_enabled = False
 
-    # Setup chat
-    try:
-        user_name = input("\nEnter your name (default: User): ").strip() or "User"
-    except (EOFError, OSError):
+    # Setup chat — skip interactive prompts in non-TTY environments (Docker, piped input)
+    if sys.stdin.isatty():
+        try:
+            user_name = input("\nEnter your name (default: User): ").strip() or "User"
+        except (EOFError, OSError):
+            user_name = "User"
+    else:
         user_name = "User"
-        print("\n⚠️  Non-interactive mode detected. Using default name: User")
+        print("\n[Non-interactive mode] Using default name: User")
+
+    # Load local session history (privacy: stored locally only, never sent to external services)
+    history = []
+    max_history_lines = 10
+    session_memory = None
+    if _memory_enabled:
+        history_file = config.get('chat', {}).get('history_file', 'data/chat_history.json')
+        session_memory = SessionMemory(history_file)
+        loaded = session_memory.load()
+        if loaded:
+            history = loaded
+            print(f"✓ Loaded {len(history)} messages from previous session")
 
     bot_name = "Kaya Bot"
 
@@ -118,8 +143,6 @@ def main():
     print("-" * 60)
 
     # Keep a short history buffer to fit in context
-    history = []
-    max_history_lines = 10
 
     while True:
         try:
@@ -209,8 +232,12 @@ def main():
 
             if response_text:
                 history.append(f"{bot_name}: {response_text}")
+                if session_memory:
+                    session_memory.save(history)
 
         except KeyboardInterrupt:
+            if session_memory:
+                session_memory.save(history)
             print("\nExiting...")
             break
         except Exception as e:

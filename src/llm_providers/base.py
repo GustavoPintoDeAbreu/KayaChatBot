@@ -35,7 +35,11 @@ class LLMProvider(ABC):
         """Send a chat completion request and return the response text."""
 
     def _retry_with_backoff(self, func, *args, **kwargs):
-        """Retry a function with exponential backoff."""
+        """Retry a function with exponential backoff on rate-limit errors."""
+        import logging
+        import random as _random
+        logger = logging.getLogger(__name__)
+        base_delay = self.delay_seconds
         for attempt in range(self.max_attempts):
             try:
                 return func(*args, **kwargs)
@@ -43,11 +47,16 @@ class LLMProvider(ABC):
                 error_msg = str(e).lower()
                 if 'rate' in error_msg or '429' in error_msg or 'quota' in error_msg:
                     if attempt < self.max_attempts - 1:
-                        print(f"Rate limit hit, retrying in {self.delay_seconds} seconds... (attempt {attempt + 1}/{self.max_attempts})")
-                        time.sleep(self.delay_seconds)
+                        # Exponential backoff with jitter: base * 2^attempt + jitter
+                        delay = base_delay * (2 ** attempt) + _random.uniform(0, base_delay * 0.1)
+                        logger.warning(
+                            "Rate limit hit, retrying in %.1fs... (attempt %d/%d)",
+                            delay, attempt + 1, self.max_attempts
+                        )
+                        time.sleep(delay)
                         continue
                     else:
                         raise e
                 else:
-                    # Non-rate-limit errors, don't retry
+                    # Non-rate-limit errors: fail immediately
                     raise e
