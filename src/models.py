@@ -278,10 +278,11 @@ class MemberProfile(BaseModel):
         Excludes sensitive fields (political_preference) that must not be
         stored in vector embeddings.
         """
-        sensitive_fields = {"political_preference"}
+        sensitive_fields = {"political_preference", "state_of_mind", "mental_health_notes"}
         return {
             k: v for k, v in self.model_dump().items()
             if v is not None and k not in sensitive_fields
+            and "health" not in k
         }
 
 
@@ -303,3 +304,34 @@ class TopicMapping(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for JSON serialization."""
         return self.model_dump()
+
+
+# ============================================================================
+# Configuration Model
+# ============================================================================
+
+class _ConfigRAG(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    enabled: bool = False
+    always_on: bool = True
+    top_k: int = 5
+    knowledge_approach: str = "both"
+
+
+class _ConfigTraining(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    output_dir: str
+
+
+class _ConfigData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    system_prompt: str
+
+
+class ConfigModel(BaseModel):
+    """Validates top-level config.yaml structure. Use: ConfigModel(**config) at startup."""
+    model_config = ConfigDict(extra="allow")
+
+    training: _ConfigTraining
+    data: _ConfigData
+    rag: _ConfigRAG = Field(default_factory=_ConfigRAG)
