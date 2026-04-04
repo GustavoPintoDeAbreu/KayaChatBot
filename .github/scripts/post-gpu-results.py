@@ -148,7 +148,7 @@ def parse_benchmark_log(log_content: str) -> dict:
         metrics["configs"] = int(complete_match.group(1))
 
     regression_match = re.search(
-        r"BENCHMARK_REGRESSION:\s*avg_score=([\d.]+)\s+baseline=([\d.nan]+)\s+delta=([^\s]+)",
+        r"BENCHMARK_REGRESSION:\s*avg_score=([\d.]+)\s+baseline=(none|nan|[\d.]+)\s+delta=([^\s]+)",
         log_content,
     )
     if regression_match:
