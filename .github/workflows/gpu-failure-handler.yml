@@ -27,7 +27,7 @@ jobs:
 
       - name: Download pipeline log artifact
         id: download
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -68,7 +68,7 @@ jobs:
 
       - name: Check existing auto-issues (loop guard)
         id: guard
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -88,7 +88,7 @@ jobs:
 
       - name: Create failure issue for Copilot agent
         if: steps.guard.outputs.skip == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
