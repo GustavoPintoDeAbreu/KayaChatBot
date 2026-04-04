@@ -55,36 +55,42 @@ jobs:
       - name: Prepare environment
         run: |
           # ---------------------------------------------------------------
-          # Data directories: gitignored, so the checkout lacks them.
-          # Since this runner IS the project machine, we symlink from the
-          # real project directory so Docker gets the actual source data.
+          # Data directories are gitignored so the checkout lacks them.
+          # Since this runner IS the project machine, we write a
+          # docker-compose.override.yml that mounts the real project's
+          # data/ and models/ directories directly. Docker Compose merges
+          # the override automatically \u2014 no symlinks needed inside Docker.
           # ---------------------------------------------------------------
           REAL_PROJECT=/home/gustavo/Desktop/KayaChatBot
 
-          mkdir -p models reports/benchmarks
+          mkdir -p models reports/benchmarks data
 
-          # Sync data files from real project into checkout
-          mkdir -p data
-          for item in wpp insta facebook all_messages_cleaned.jsonl finetune_chunks.jsonl cleaning_stats.json; do
-            SRC="$REAL_PROJECT/data/$item"
-            DST="data/$item"
-            if [[ -e "$SRC" && ! -e "$DST" ]]; then
-              ln -sf "$SRC" "$DST"
-              echo "  Linked: $DST -> $SRC"
-            fi
-          done
+          # Write docker-compose.override.yml using echo to avoid heredoc
+          # column-0 lines that break the YAML literal block scalar.
+          {
+            echo "services:"
+            echo "  kaya-chatbot:"
+            echo "    volumes:"
+            echo "      - $REAL_PROJECT/data:/app/data"
+            echo "      - $REAL_PROJECT/models:/app/models"
+          } > docker-compose.override.yml
 
-          # Use real .env (contains API keys needed inside Docker)
-          if [[ -f "$REAL_PROJECT/.env" && ! -f ".env" ]]; then
-            ln -sf "$REAL_PROJECT/.env" .env
-            echo "  Linked: .env -> $REAL_PROJECT/.env"
-          elif [[ ! -f "$REAL_PROJECT/.env" ]]; then
+          echo "docker-compose.override.yml written:"
+          cat docker-compose.override.yml
+
+          echo ""
+          echo "Real data directory contents:"
+          ls -la "$REAL_PROJECT/data/"
+
+          # Copy .env from real project so docker-compose env_file works
+          # (env_file requires a plain file in CWD, not a symlink to elsewhere)
+          if [[ -f "$REAL_PROJECT/.env" ]]; then
+            cp "$REAL_PROJECT/.env" .env
+            echo "Copied .env from $REAL_PROJECT"
+          else
             touch .env
-            echo "  Warning: no .env found in $REAL_PROJECT, created empty .env"
+            echo "Warning: no .env found in $REAL_PROJECT, using empty .env"
           fi
-
-          echo "Data directory contents:"
-          ls -la data/
 
       - name: Build Docker image
         run: docker-compose build
@@ -132,7 +138,7 @@ jobs:
           # We check for the presence of success markers in the log; absence means failure.
           LOG=pipeline_output.log
           if [[ -f "$LOG" ]]; then
-            if grep -qiE "(Training Completed|passed|Benchmark complete)" "$LOG"; then
+            if grep -qiE "(Training Completed|FULL PIPELINE COMPLETE|Pipeline finished successfully|passed|Benchmark complete)" "$LOG"; then
               echo "failed=false" >> "$GITHUB_OUTPUT"
             else
               echo "failed=true" >> "$GITHUB_OUTPUT"
