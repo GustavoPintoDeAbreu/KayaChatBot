@@ -28,7 +28,7 @@ def main():
     print("=" * 60)
     
     # Check CUDA availability
-    print(f"\n🔍 GPU Check:")
+    print(f"\n\U0001f50d GPU Check:")
     print(f"   CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"   CUDA version: {torch.version.cuda}")
@@ -36,7 +36,7 @@ def main():
         print(f"   GPU name: {torch.cuda.get_device_name(0)}")
         print(f"   GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
-        print("   ⚠️  WARNING: No CUDA GPU detected!")
+        print("   \u26a0\ufe0f  WARNING: No CUDA GPU detected!")
         response = input("   Continue anyway? (y/n): ")
         if response.lower() != 'y':
             print("   Exiting...")
@@ -51,7 +51,7 @@ def main():
     # Check test mode
     test_mode = config['test_mode']['enabled']
     if test_mode:
-        print("\n⚠️  TEST MODE ENABLED - Using reduced parameters for quick validation")
+        print("\n\u26a0\ufe0f  TEST MODE ENABLED - Using reduced parameters for quick validation")
         print("   Set test_mode.enabled: false in config.yaml for full training\n")
     
     # Extract settings
@@ -69,13 +69,13 @@ def main():
     train_file = os.path.join(data_dir, "train_synthetic.jsonl")
     val_file = os.path.join(data_dir, "val_synthetic.jsonl")
     
-    print(f"   ✓ Model: {model_id}")
-    print(f"   ✓ Max sequence length: {max_seq_length}")
-    print(f"   ✓ Output directory: {output_dir}")
+    print(f"   \u2713 Model: {model_id}")
+    print(f"   \u2713 Max sequence length: {max_seq_length}")
+    print(f"   \u2713 Output directory: {output_dir}")
     
     # Check if datasets exist
     if not os.path.exists(train_file) or not os.path.exists(val_file):
-        print(f"\n❌ Error: Dataset files not found!")
+        print(f"\n\u274c Error: Dataset files not found!")
         print(f"   Expected: {train_file}")
         print(f"   Expected: {val_file}")
         
@@ -88,7 +88,7 @@ def main():
         print(f"   1. python src/data/extract_all_messages.py")
         print(f"   2. python src/data/generate_synthetic_data.py")
         print(f"   3. python src/data/prepare_portuguese_data.py")
-        print(f"   4. python src/data/merge_datasets.py  ← Creates train_synthetic.jsonl and val_synthetic.jsonl")
+        print(f"   4. python src/data/merge_datasets.py  \u2190 Creates train_synthetic.jsonl and val_synthetic.jsonl")
         print(f"\n   Or run: python validate_pipeline.py to check which steps are missing")
         return
     
@@ -96,8 +96,8 @@ def main():
     print(f"\n2. Loading datasets...")
     train_dataset = load_dataset("json", data_files=train_file, split="train")
     val_dataset = load_dataset("json", data_files=val_file, split="train")
-    print(f"   ✓ Train samples: {len(train_dataset)}")
-    print(f"   ✓ Validation samples: {len(val_dataset)}")
+    print(f"   \u2713 Train samples: {len(train_dataset)}")
+    print(f"   \u2713 Validation samples: {len(val_dataset)}")
     
     # Initialize trainer with LoRA config
     print(f"\n3. Initializing trainer with LoRA configuration...")
@@ -142,17 +142,26 @@ def main():
     if resume_from_checkpoint:
         training_config["incremental_steps"] = config['training']['incremental_steps']
         training_config["incremental_learning_rate"] = config['training']['incremental_learning_rate']
-        print(f"\n   🔄 Incremental training enabled:")
-        print(f"   ✓ Checkpoint: {resume_from_checkpoint}")
-        print(f"   ✓ Steps: {config['training']['incremental_steps']} (vs full: {config['training']['max_steps']})")
-        print(f"   ✓ Learning rate: {config['training']['incremental_learning_rate']} (vs full: {config['training']['learning_rate']})")
+        print(f"\n   \U0001f504 Incremental training enabled:")
+        print(f"   \u2713 Checkpoint: {resume_from_checkpoint}")
+        print(f"   \u2713 Steps: {config['training']['incremental_steps']} (vs full: {config['training']['max_steps']})")
+        print(f"   \u2713 Learning rate: {config['training']['incremental_learning_rate']} (vs full: {config['training']['learning_rate']})")
     
-    # Start training — resume from latest checkpoint if one exists
+    # Auto-detect latest checkpoint to resume from, but only when
+    # resume_from_checkpoint is explicitly configured (non-null).
+    # When it is null the intent is "start fresh" -- we must NOT
+    # resume even if checkpoint-* directories happen to exist in the
+    # output dir (e.g. because the models/ volume is mounted from a
+    # previous local training run in the Docker pipeline).
     import glob as _glob
-    checkpoints = sorted(_glob.glob(os.path.join(output_dir, "checkpoint-*")), key=lambda p: int(p.split("-")[-1]))
-    resume_checkpoint = checkpoints[-1] if checkpoints else None
-    if resume_checkpoint:
-        print(f"\n   ↩️  Resuming from checkpoint: {resume_checkpoint}")
+    resume_checkpoint = None
+    if resume_from_checkpoint:
+        checkpoints = sorted(_glob.glob(os.path.join(output_dir, "checkpoint-*")), key=lambda p: int(p.split("-")[-1]))
+        resume_checkpoint = checkpoints[-1] if checkpoints else None
+        if resume_checkpoint:
+            print(f"\n   \u21a9\ufe0f  Resuming from checkpoint: {resume_checkpoint}")
+    else:
+        print(f"\n   \U0001f195 Starting fresh -- checkpoint auto-detection skipped (resume_from_checkpoint is null)")
 
     print(f"\n5. Starting training...")
     trainer, stats = trainer_wrapper.train(
@@ -168,7 +177,7 @@ def main():
     trainer_wrapper.save_model(output_dir)
     
     print("\n" + "=" * 60)
-    print("✅ Fine-tuning complete!")
+    print("\u2705 Fine-tuning complete!")
     print(f"   Model saved to: {output_dir}")
     print("=" * 60)
 
