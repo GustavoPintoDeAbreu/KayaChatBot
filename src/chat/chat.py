@@ -213,12 +213,13 @@ def main():
             # Use a streamer to show text as it generates
             streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
+            inf_config = config.get('inference', {})
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=128,
-                temperature=0.7,
+                max_new_tokens=inf_config.get('max_new_tokens', 256),
+                temperature=inf_config.get('temperature', 0.7),
                 do_sample=True,
-                top_p=0.9,
+                top_p=inf_config.get('top_p', 0.9),
                 streamer=streamer
             )
 

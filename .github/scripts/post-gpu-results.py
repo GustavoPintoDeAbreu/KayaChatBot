@@ -126,7 +126,7 @@ def format_test_results(metrics: dict, mode: str) -> str:
 
 
 def parse_benchmark_log(log_content: str) -> dict:
-    """Extract benchmark metrics from benchmark.py output."""
+    """Extract benchmark metrics from benchmark.py output, including golden test results."""
     metrics = {
         "configs": 0,
         "avg_score": None,
@@ -134,6 +134,12 @@ def parse_benchmark_log(log_content: str) -> dict:
         "delta": None,
         "regression": False,
         "completed": False,
+        # Golden test metrics
+        "golden_run": None,
+        "golden_passed": None,
+        "golden_failed": None,
+        "identity_failures": None,
+        "tasks_written": 0,
     }
 
     complete_match = re.search(r"Benchmark complete[^\n]*(\d+) configs", log_content)
@@ -155,6 +161,21 @@ def parse_benchmark_log(log_content: str) -> dict:
         except ValueError:
             pass
         metrics["regression"] = "REGRESSION" in regression_match.group(0)
+
+    # Golden test results line: BENCHMARK_GOLDEN_RESULTS: run=N passed=N failed=N identity_failures=N
+    golden_match = re.search(
+        r"BENCHMARK_GOLDEN_RESULTS:\s*run=(\d+)\s+passed=(\d+)\s+failed=(\d+)\s+identity_failures=(\d+)",
+        log_content,
+    )
+    if golden_match:
+        metrics["golden_run"] = int(golden_match.group(1))
+        metrics["golden_passed"] = int(golden_match.group(2))
+        metrics["golden_failed"] = int(golden_match.group(3))
+        metrics["identity_failures"] = int(golden_match.group(4))
+
+    tasks_match = re.search(r"BENCHMARK_TASKS_WRITTEN:\s*(\d+)", log_content)
+    if tasks_match:
+        metrics["tasks_written"] = int(tasks_match.group(1))
 
     return metrics
 
@@ -182,16 +203,20 @@ def format_benchmark_results(metrics: dict, mode: str) -> str:
 
 
 def parse_judge_log(log_content: str) -> dict:
-    """Extract LLM judge evaluation metrics from conversation_tester.py output."""
+    """Extract LLM judge evaluation metrics from conversation_tester.py output (6 dimensions)."""
     metrics = {
         "completed": False,
         "total_scenarios": None,
         "total_failures": None,
         "overall_avg": None,
+        "extended_avg": None,
         "factual_accuracy": None,
         "relevance": None,
         "language_quality": None,
         "tone": None,
+        "identity_adherence": None,
+        "factual_grounding": None,
+        "identity_pattern_matches": None,
     }
 
     if "Evaluation complete!" in log_content:
@@ -209,6 +234,10 @@ def parse_judge_log(log_content: str) -> dict:
     if m:
         metrics["overall_avg"] = float(m.group(1))
 
+    m = re.search(r"Extended average\s*:\s*([\d.]+)", log_content)
+    if m:
+        metrics["extended_avg"] = float(m.group(1))
+
     m = re.search(r"Factual accuracy\s*:\s*([\d.]+)", log_content)
     if m:
         metrics["factual_accuracy"] = float(m.group(1))
@@ -225,6 +254,18 @@ def parse_judge_log(log_content: str) -> dict:
     if m:
         metrics["tone"] = float(m.group(1))
 
+    m = re.search(r"Identity adherence\s*:\s*([\d.]+)", log_content)
+    if m:
+        metrics["identity_adherence"] = float(m.group(1))
+
+    m = re.search(r"Factual grounding\s*:\s*([\d.]+)", log_content)
+    if m:
+        metrics["factual_grounding"] = float(m.group(1))
+
+    m = re.search(r"Identity pattern matches\s*:\s*(\d+)", log_content)
+    if m:
+        metrics["identity_pattern_matches"] = int(m.group(1))
+
     return metrics
 
 
@@ -234,25 +275,56 @@ def format_judge_results(metrics: dict, mode: str) -> str:
     if metrics.get("completed"):
         failures = metrics.get("total_failures", 0) or 0
         total = metrics.get("total_scenarios", 0) or 0
+        idm = metrics.get("identity_pattern_matches") or 0
         status = "✅" if failures == 0 else ("⚠️" if failures < total / 2 else "❌")
         lines.append(f"**Status:** {status} Evaluation complete\n")
         if total:
             lines.append(f"- **Scenarios:** {total}")
         if failures:
             lines.append(f"- **Failures:** {failures}")
+        if idm:
+            lines.append(f"- 🛑 **Identity pattern matches:** {idm} (bot spoke as member)")
         if metrics.get("overall_avg") is not None:
-            lines.append(f"- **Overall avg score:** `{metrics['overall_avg']:.2f} / 5`")
-        if metrics.get("factual_accuracy") is not None:
-            lines.append(f"- **Factual accuracy:** `{metrics['factual_accuracy']:.2f}`")
-        if metrics.get("relevance") is not None:
-            lines.append(f"- **Relevance:** `{metrics['relevance']:.2f}`")
-        if metrics.get("language_quality") is not None:
-            lines.append(f"- **Language quality:** `{metrics['language_quality']:.2f}`")
-        if metrics.get("tone") is not None:
-            lines.append(f"- **Tone:** `{metrics['tone']:.2f}`")
+            lines.append(f"- **Overall avg (4-dim):** `{metrics['overall_avg']:.2f} / 5`")
+        if metrics.get("extended_avg") is not None:
+            lines.append(f"- **Extended avg (6-dim):** `{metrics['extended_avg']:.2f} / 5`")
+        for label, key in [
+            ("Factual accuracy", "factual_accuracy"),
+            ("Relevance", "relevance"),
+            ("Language quality", "language_quality"),
+            ("Tone", "tone"),
+            ("Identity adherence", "identity_adherence"),
+            ("Factual grounding", "factual_grounding"),
+        ]:
+            if metrics.get(key) is not None:
+                icon = " 🛑" if key == "identity_adherence" and metrics[key] < 3 else ""
+                lines.append(f"- **{label}:** `{metrics[key]:.2f}`{icon}")
     else:
         lines.append("**Status:** ⚠️ Could not parse judge-eval output\n")
 
+    return "\n".join(lines)
+
+
+def parse_comparison_log(log_content: str) -> dict:
+    """Parse output from the compare pipeline mode (A/B dataset comparison)."""
+    return {
+        "completed": "COMPARE_COMPLETE" in log_content,
+        "has_variant_a": "variant 'a'" in log_content.lower() or "dataset_a" in log_content.lower(),
+        "has_variant_b": "variant 'b'" in log_content.lower() or "dataset_b" in log_content.lower(),
+    }
+
+
+def format_comparison_results(metrics: dict, mode: str) -> str:
+    lines = [f"## 🖥️ GPU Pipeline Results — `{mode}`\n"]
+    if metrics.get("completed"):
+        lines.append("**Status:** ✅ A/B dataset comparison complete\n")
+        if metrics.get("has_variant_a"):
+            lines.append("- ✅ Variant A built successfully")
+        if metrics.get("has_variant_b"):
+            lines.append("- ✅ Variant B built successfully")
+        lines.append("\nSee `data/train_synthetic_a.jsonl` and `data/train_synthetic_b.jsonl`.")
+    else:
+        lines.append("**Status:** ⚠️ Comparison did not complete\n")
     return "\n".join(lines)
 
 
@@ -282,6 +354,9 @@ def main():
     elif mode == "judge-eval":
         metrics = parse_judge_log(log_content)
         print(format_judge_results(metrics, mode))
+    elif mode == "compare":
+        metrics = parse_comparison_log(log_content)
+        print(format_comparison_results(metrics, mode))
     else:
         metrics = parse_training_log(log_content)
         print(format_training_results(metrics, mode))

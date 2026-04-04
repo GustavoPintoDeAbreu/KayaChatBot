@@ -35,29 +35,54 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 @dataclass
 class ScoreBreakdown:
-    """Per-response scores on the 0–5 rubric."""
+    """Per-response scores on the 0–5 rubric.
+
+    ``identity_adherence`` and ``factual_grounding`` are new dimensions added for
+    golden-test evaluation.  They default to 5.0 (pass) so that existing code
+    paths that do not ask the judge for them are not penalised.
+    """
 
     factual_accuracy: float
     relevance: float
     language_quality: float
     tone: float
+    # New dimensions — default 5.0 (pass) for backward compatibility
+    identity_adherence: float = 5.0
+    factual_grounding: float = 5.0
+    # Set to True when a forbidden pattern was matched (auto-fails identity)
+    identity_pattern_matched: bool = False
 
     @property
     def average(self) -> float:
+        """Average of the original four dimensions (backward-compatible)."""
         return (
             self.factual_accuracy + self.relevance + self.language_quality + self.tone
         ) / 4
 
     @property
+    def extended_average(self) -> float:
+        """Average across all six scored dimensions."""
+        return (
+            self.factual_accuracy
+            + self.relevance
+            + self.language_quality
+            + self.tone
+            + self.identity_adherence
+            + self.factual_grounding
+        ) / 6
+
+    @property
     def failed(self) -> bool:
-        """True if any single dimension scores below 3."""
-        return any(
+        """True if any single dimension scores below 3 or a forbidden pattern matched."""
+        return self.identity_pattern_matched or any(
             v < 3
             for v in [
                 self.factual_accuracy,
                 self.relevance,
                 self.language_quality,
                 self.tone,
+                self.identity_adherence,
+                self.factual_grounding,
             ]
         )
 
@@ -67,7 +92,11 @@ class ScoreBreakdown:
             "relevance": self.relevance,
             "language_quality": self.language_quality,
             "tone": self.tone,
+            "identity_adherence": self.identity_adherence,
+            "factual_grounding": self.factual_grounding,
+            "identity_pattern_matched": self.identity_pattern_matched,
             "average": self.average,
+            "extended_average": self.extended_average,
         }
 
 
@@ -109,7 +138,11 @@ class LLMScenarioResult:
             "relevance": sum(s.relevance for s in scored) / n,
             "language_quality": sum(s.language_quality for s in scored) / n,
             "tone": sum(s.tone for s in scored) / n,
+            "identity_adherence": sum(s.identity_adherence for s in scored) / n,
+            "factual_grounding": sum(s.factual_grounding for s in scored) / n,
             "average": sum(s.average for s in scored) / n,
+            "extended_average": sum(s.extended_average for s in scored) / n,
+            "identity_patterns_matched": sum(1 for s in scored if s.identity_pattern_matched),
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -281,7 +314,11 @@ class LocalModel:
 SCORING_SYSTEM_PROMPT = """\
 You are an expert evaluator for a Portuguese friend group chat assistant called KayaBot.
 
-Evaluate the given response on a 0–5 integer scale for each of these four dimensions:
+KayaBot is a BOT assistant with access to group conversation history.
+It is NOT a group member — it should always refer to members in the THIRD PERSON.
+It must NEVER say things like "meu amigo", "vivemos juntos", "conheço-o desde...", or any first-person claim.
+
+Evaluate the given response on a 0–5 integer scale for each of these six dimensions:
 
 1. **factual_accuracy** — Does the response contain correct facts consistent with the reference knowledge?
    - 5: All facts correct and complete
@@ -315,8 +352,24 @@ Evaluate the given response on a 0–5 integer scale for each of these four dime
    - 1: Very wrong tone (cold, rude, or inappropriately familiar)
    - 0: Completely inappropriate
 
+5. **identity_adherence** — Does the bot speak as a bot (third person), NOT as a group member?
+   - 5: Always third person ("O Peter trabalha em..."); no first-person claims
+   - 4: Mostly third person; one borderline phrase
+   - 3: Mostly OK but some ambiguous phrasing
+   - 2: Some first-person claims about members
+   - 1: Frequent first-person claims ("meu amigo", "vivemos juntos")
+   - 0: Speaks entirely as a group member with personal memories
+
+6. **factual_grounding** — Are statements grounded in the provided context, not hallucinated?
+   - 5: All claims traceable to the provided reference knowledge
+   - 4: One minor detail not in reference but plausible
+   - 3: Mix of grounded and unverifiable claims
+   - 2: Several claims not supported by reference
+   - 1: Mostly unsupported claims
+   - 0: Entirely hallucinated, contradicts reference
+
 Respond ONLY with a valid JSON object (no markdown, no explanation), for example:
-{"factual_accuracy": 4, "relevance": 5, "language_quality": 4, "tone": 4}
+{"factual_accuracy": 4, "relevance": 5, "language_quality": 4, "tone": 4, "identity_adherence": 5, "factual_grounding": 4}
 """
 
 
@@ -369,7 +422,36 @@ def parse_scores(raw: str) -> ScoreBreakdown:
         relevance=_clamp(data.get("relevance")),
         language_quality=_clamp(data.get("language_quality")),
         tone=_clamp(data.get("tone")),
+        identity_adherence=_clamp(data.get("identity_adherence", 5.0), default=5.0),
+        factual_grounding=_clamp(data.get("factual_grounding", 5.0), default=5.0),
     )
+
+
+# Regex patterns that indicate the bot is speaking as a group member (auto-fail identity)
+_IDENTITY_LEAK_PATTERNS: List[re.Pattern] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bme[uu]\s+(amigo|colega)\b",       # "meu amigo", "meu colega"
+        r"\bvivemos\s+juntos\b",               # "vivemos juntos"
+        r"\bja\s+vivemos\b",                   # "já vivemos"
+        r"\bconhe[cç]o.{0,20}\bdesde\b",      # "conheço-o desde..."
+        r"\bsomos\s+amigos\s+desde\b",         # "somos amigos desde"
+        r"\bfui\s+(?:ao|para|com)\b.{0,20}\bele\b",  # "fui com ele"
+        r"\bcasa\s+(?:dele|deles|nossa)\b",   # "casa nossa"
+        r"\bnos\s+conhecemos\b",               # "nos conhecemos"
+        r"\blong[- ]time\s+friend\b",          # "long-time friend"
+        r"\bmy\s+(?:friend|buddy|mate)\b",    # "my friend" (English)
+        r"\bwe\s+(?:lived|grew|went)\b",      # "we lived", "we went" (English)
+        r"\bi\s+know\s+him\s+since\b",        # "I know him since"
+    ]
+]
+
+
+def check_identity_leaks(text: str) -> List[str]:
+    """Return a list of matched forbidden patterns in ``text`` (empty = clean)."""
+    return [
+        p.pattern for p in _IDENTITY_LEAK_PATTERNS if p.search(text)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -378,16 +460,20 @@ def parse_scores(raw: str) -> ScoreBreakdown:
 
 
 def load_provider(provider_name: str, config: Dict[str, Any]):
-    """Instantiate the configured LLM provider."""
+    """Instantiate the configured LLM provider.
+
+    Supported names: ``'xai'``, ``'azure'``, ``'azure_gpt53'``.
+    """
     if provider_name == "xai":
         from src.llm_providers.xai_provider import XAIProvider
-
         return XAIProvider(config)
     if provider_name == "azure":
         from src.llm_providers.azure_provider import AzureProvider
-
-        return AzureProvider(config)
-    raise ValueError(f"Unknown provider: {provider_name!r}. Use 'xai' or 'azure'.")
+        return AzureProvider(config, config_key='azure')
+    if provider_name == "azure_gpt53":
+        from src.llm_providers.azure_provider import AzureProvider
+        return AzureProvider(config, config_key='azure_gpt53')
+    raise ValueError(f"Unknown provider: {provider_name!r}. Use 'xai', 'azure', or 'azure_gpt53'.")
 
 
 # ---------------------------------------------------------------------------
@@ -488,14 +574,26 @@ class LLMJudgeTester:
                 scores = self._score_response(question, fact_text, model_resp)
                 result.turns[-1].scores = scores
 
-                # Track failures (any dimension below 3)
+                # Check forbidden identity patterns before LLM scoring
+                leaked = check_identity_leaks(model_resp)
+                if leaked:
+                    scores.identity_adherence = 0.0
+                    scores.identity_pattern_matched = True
+
+                # Track failures (any dimension below 3 or identity pattern matched)
                 if scores.failed:
                     result.failure = True
+                    if scores.identity_pattern_matched:
+                        result.failure_reasons.append(
+                            f"Identity leak: matched pattern(s): {', '.join(leaked[:2])}"
+                        )
                     dim_names = [
                         ("factual_accuracy", scores.factual_accuracy),
                         ("relevance", scores.relevance),
                         ("language_quality", scores.language_quality),
                         ("tone", scores.tone),
+                        ("identity_adherence", scores.identity_adherence),
+                        ("factual_grounding", scores.factual_grounding),
                     ]
                     for dim, val in dim_names:
                         if val < 3:
@@ -562,7 +660,13 @@ class LLMJudgeTester:
                 "relevance": sum(a["relevance"] for a in all_avgs) / n,
                 "language_quality": sum(a["language_quality"] for a in all_avgs) / n,
                 "tone": sum(a["tone"] for a in all_avgs) / n,
+                "identity_adherence": sum(a["identity_adherence"] for a in all_avgs) / n,
+                "factual_grounding": sum(a["factual_grounding"] for a in all_avgs) / n,
                 "average": sum(a["average"] for a in all_avgs) / n,
+                "extended_average": sum(a["extended_average"] for a in all_avgs) / n,
+                "total_identity_pattern_matches": sum(
+                    a.get("identity_patterns_matched", 0) for a in all_avgs
+                ),
             }
         else:
             overall = {}
@@ -574,6 +678,224 @@ class LLMJudgeTester:
             "overall_averages": overall,
             "failure_analysis": [r.to_dict() for r in failures],
             "scenarios": [r.to_dict() for r in results],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Golden Test Runner
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GoldenTestResult:
+    """Result of running a single golden test case."""
+
+    test_id: str
+    category: str
+    question: str
+    response: str
+    passed: bool
+    identity_leak_patterns: List[str]  # matched forbidden patterns (empty = clean)
+    scores: Optional[ScoreBreakdown]
+    failure_reasons: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "test_id": self.test_id,
+            "category": self.category,
+            "question": self.question,
+            "response": self.response[:500] + "..." if len(self.response) > 500 else self.response,
+            "passed": self.passed,
+            "identity_leak_patterns": self.identity_leak_patterns,
+            "scores": self.scores.to_dict() if self.scores else None,
+            "failure_reasons": self.failure_reasons,
+        }
+
+
+class GoldenTestRunner:
+    """Runs curated golden regression tests against the local model.
+
+    Golden tests are loaded from ``data/golden_test_conversations.json``.
+    Each test case may specify:
+      - ``question``: The user message to send
+      - ``reference``: Ground-truth context given to the judge
+      - ``forbidden_patterns``: Regex strings \u2014 any match auto-fails identity (no LLM call)
+      - ``category``: e.g. "identity", "factual", "coherence", "regression"
+      - ``min_score``: Minimum acceptable LLM judge average score (default 3.0)
+    """
+
+    def __init__(
+        self,
+        provider,
+        local_model,
+        config: Dict[str, Any],
+        golden_tests_file: Optional[str] = None,
+    ):
+        self.provider = provider
+        self.local_model = local_model
+        self.config = config
+
+        if golden_tests_file is None:
+            golden_tests_file = str(
+                Path(__file__).parent.parent.parent / "data" / "golden_test_conversations.json"
+            )
+        self.golden_tests_file = golden_tests_file
+        self.test_cases: List[Dict[str, Any]] = self._load_tests()
+
+    def _load_tests(self) -> List[Dict[str, Any]]:
+        path = Path(self.golden_tests_file)
+        if not path.exists():
+            return []
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("tests", data) if isinstance(data, dict) else data
+
+    def _get_model_response(self, question: str) -> str:
+        """Get response from local model (or mock)."""
+        if self.local_model.available:
+            return self.local_model.respond(question)
+        # Mock response for when no GPU model is loaded
+        return f"[MOCK] Response to: {question}"
+
+    def _judge_response(
+        self,
+        question: str,
+        reference: str,
+        response: str,
+        forbidden_patterns: Optional[List[str]] = None,
+    ) -> ScoreBreakdown:
+        """Score a response via the LLM judge, with mandatory identity pre-check."""
+        # Pre-check: test user-specified forbidden patterns + global identity patterns
+        all_leaks = check_identity_leaks(response)
+        if forbidden_patterns:
+            for pat in forbidden_patterns:
+                try:
+                    if re.search(pat, response, re.IGNORECASE):
+                        all_leaks.append(pat)
+                except re.error:
+                    pass
+
+        if all_leaks:
+            # Auto-fail identity dimension \u2014 skip LLM call to save cost
+            return ScoreBreakdown(
+                factual_accuracy=0.0,
+                relevance=0.0,
+                language_quality=0.0,
+                tone=0.0,
+                identity_adherence=0.0,
+                factual_grounding=0.0,
+                identity_pattern_matched=True,
+            )
+
+        # Ask the LLM judge for all 6 dimensions
+        user_msg = build_scoring_prompt(question, reference, response)
+        try:
+            messages = [
+                {"role": "system", "content": SCORING_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ]
+            raw = self.provider.generate(messages)
+            scores = parse_scores(raw)
+        except Exception as exc:
+            # If judge call fails, mark all dimensions as 0
+            scores = ScoreBreakdown(
+                factual_accuracy=0.0,
+                relevance=0.0,
+                language_quality=0.0,
+                tone=0.0,
+                identity_adherence=0.0,
+                factual_grounding=0.0,
+            )
+        return scores
+
+    def run(self, verbose: bool = True) -> Dict[str, Any]:
+        """Run all golden tests and return a structured report."""
+        if not self.test_cases:
+            return {
+                "golden_tests_run": 0,
+                "golden_tests_passed": 0,
+                "golden_tests_failed": 0,
+                "results": [],
+                "summary": "No golden tests found.",
+            }
+
+        results: List[GoldenTestResult] = []
+        for idx, tc in enumerate(self.test_cases):
+            test_id = tc.get("id", f"golden_{idx + 1:03d}")
+            category = tc.get("category", "general")
+            question = tc["question"]
+            reference = tc.get("reference", "")
+            forbidden_patterns = tc.get("forbidden_patterns", [])
+            min_score = tc.get("min_score", 3.0)
+
+            if verbose:
+                print(f"  [{test_id}] {category}: {question[:60]}...")
+
+            response = self._get_model_response(question)
+            leaked = check_identity_leaks(response)
+            if forbidden_patterns:
+                for pat in forbidden_patterns:
+                    try:
+                        if re.search(pat, response, re.IGNORECASE):
+                            leaked.append(pat)
+                    except re.error:
+                        pass
+
+            failure_reasons: List[str] = []
+            if leaked:
+                failure_reasons.append(f"Identity leak: {', '.join(leaked[:3])}")
+
+            # Only call LLM judge if there's a reference and no instant-fail
+            scores = None
+            if reference and not leaked:
+                scores = self._judge_response(question, reference, response, forbidden_patterns)
+                if scores.failed:
+                    failure_reasons.extend([
+                        f"{dim}={val:.1f}/5 (below 3)"
+                        for dim, val in [
+                            ("factual_accuracy", scores.factual_accuracy),
+                            ("relevance", scores.relevance),
+                            ("language_quality", scores.language_quality),
+                            ("tone", scores.tone),
+                            ("identity_adherence", scores.identity_adherence),
+                            ("factual_grounding", scores.factual_grounding),
+                        ]
+                        if val < 3
+                    ])
+                elif scores.extended_average < min_score:
+                    failure_reasons.append(
+                        f"Extended average {scores.extended_average:.2f} < min_score {min_score}"
+                    )
+
+            passed = len(failure_reasons) == 0
+            result = GoldenTestResult(
+                test_id=test_id,
+                category=category,
+                question=question,
+                response=response,
+                passed=passed,
+                identity_leak_patterns=leaked,
+                scores=scores,
+                failure_reasons=failure_reasons,
+            )
+            results.append(result)
+
+            if verbose:
+                status = "\u2705 PASS" if passed else "\u274c FAIL"
+                print(f"    {status}" + (f" \u2014 {failure_reasons[0]}" if failure_reasons else ""))
+
+        passed_count = sum(1 for r in results if r.passed)
+        failed_results = [r for r in results if not r.passed]
+        identity_failures = [r for r in results if r.identity_leak_patterns]
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "golden_tests_run": len(results),
+            "golden_tests_passed": passed_count,
+            "golden_tests_failed": len(failed_results),
+            "identity_failures": len(identity_failures),
+            "results": [r.to_dict() for r in results],
+            "failures": [r.to_dict() for r in failed_results],
         }
 
 

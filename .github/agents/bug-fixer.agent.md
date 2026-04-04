@@ -32,7 +32,7 @@ You are a bug-fixing specialist for the KayaChatBot project — a Python RAG-bas
 - **PR description must include `Fixes #N`** referencing the issue number so it auto-closes when merged.
 - **Manual merge only** — do not attempt to merge the PR yourself. Open it and wait for human approval.
 
-## GPU Pipeline Failure Issues (`[Auto] GPU Pipeline failed`)
+### GPU Pipeline Failure Issues (`[Auto] GPU Pipeline failed`) and Golden Test Failures (`[Golden] Identity leak`)
 
 When you receive an issue with the `[Auto] GPU Pipeline failed` title prefix, the failure occurred inside Docker on the self-hosted GPU runner. Follow this checklist:
 
@@ -72,3 +72,40 @@ If the fix touches only `Dockerfile`, `docker-compose.yml`, or `config.docker.ya
 - PR description must include `Fixes #{issue_number}` so the issue auto-closes on merge
 - Add label `bug` to the PR
 - The GPU Pipeline will auto-run on the PR when it touches any file under `src/**`, `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `config.docker.yaml`, or `.github/scripts/**`
+
+## Identity Confusion Bugs (`[Golden] Identity leak`)
+
+These issues mean the model responded as a group member (first-person claims) instead of as a bot.
+
+### Root causes investigated in order:
+
+1. **Training data leak** — `src/data/format_direct_training.py` did not filter a first-person response.
+   - Check: `grep -i "meu amigo\|vivemos juntos\|conheço.*desde" data/synthetic_kaya.jsonl`
+   - Fix: tighten `_IDENTITY_LEAK_RE` in `format_direct_training.py`
+
+2. **System prompt regression** — `config.yaml` or `config.docker.yaml` dropped the guardrail text.
+   - Check: `data.system_prompt` must contain "Não és um membro" and "terceira pessoa"
+   - Fix: restore the guardrail sentences
+
+3. **Synthetic data without guardrails** — `src/data/generate_synthetic_data.py` prompt weakened.
+   - Check: `get_generation_prompt()` must have explicit BAD/GOOD examples
+   - Fix: re-add the identity guardrail section to `get_generation_prompt()`
+
+4. **Readers.py system prompt** — `src/data/readers.py` `SyntheticDatasetMerger.format_conversation()` uses a hardcoded system prompt.
+   - Check: same function — it must have "NOT a group member" and "third person" phrases.
+
+### Adding the regression to golden tests:
+
+After fixing, add a new entry to `data/golden_test_conversations.json` with the exact failing question and the leaked patterns:
+
+```json
+{
+  "id": "identity_NNNN",
+  "category": "identity",
+  "description": "Regression: <describe what failed>",
+  "question": "<exact question that triggered the bug>",
+  "reference": "<relevant fact from knowledge base>",
+  "forbidden_patterns": ["<exact phrase that appeared>"],
+  "min_score": 3.5
+}
+```
