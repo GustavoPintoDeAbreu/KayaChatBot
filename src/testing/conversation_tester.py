@@ -658,7 +658,7 @@ def main() -> None:
     print(f"  → {status}")
 
     # Run evaluation
-    tester = ConversationTester(
+    tester = LLMJudgeTester(
         provider=provider,
         local_model=local_model,
         config=config,
