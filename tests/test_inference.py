@@ -26,11 +26,22 @@ else:
     BASE_MODEL = "unsloth/qwen3-14b-bnb-4bit"
 MAX_NEW_TOKENS = 256
 
-SYSTEM_PROMPT = (
-    "You are Kaya, an extra member of a Portuguese friend group chat. "
-    "You have long-term memory of the group's shared history, events, and people. "
-    "You communicate naturally in European Portuguese or English, depending on what the user writes."
-)
+# Load system prompt from config to stay in sync with production
+import yaml as _yaml
+try:
+    _cfg_path = Path(__file__).parent.parent / "config.yaml"
+    with open(_cfg_path, 'r', encoding='utf-8') as _f:
+        _cfg = _yaml.safe_load(_f)
+    SYSTEM_PROMPT = _cfg['data']['system_prompt']
+except Exception:
+    # Fallback — mirrors config.yaml system_prompt exactly
+    SYSTEM_PROMPT = (
+        "És o bot assistente do grupo de amigos 'Kaya'. "
+        "Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. "
+        "Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo. "
+        "Nunca fales na primeira pessoa sobre experiências pessoais com membros do grupo. "
+        "Refere-te sempre aos membros na terceira pessoa."
+    )
 
 # A few representative test conversations
 TESTS = [

@@ -1,5 +1,9 @@
 """
 Azure OpenAI provider implementation.
+Supports both standard Azure OpenAI (chat.openai.azure.com) and
+Azure Cognitive Services endpoints (cognitiveservices.azure.com).
+
+Pass ``config_key='azure_gpt53'`` to use the GPT-5.3-chat deployment.
 """
 
 import json
@@ -12,32 +16,54 @@ from .base import LLMProvider
 
 
 class AzureProvider(LLMProvider):
-    """Azure OpenAI provider for conversation generation."""
+    """Azure OpenAI provider for conversation generation.
 
-    def __init__(self, config: Dict[str, Any]):
+    Args:
+        config:      Full config dict (``config.yaml``).
+        config_key:  Which sub-key under ``generation`` to read.
+                     Defaults to ``'azure'`` (gpt-4.1-mini).
+                     Pass ``'azure_gpt53'`` for the GPT-5.3-chat deployment.
+    """
+
+    def __init__(self, config: Dict[str, Any], config_key: str = 'azure'):
         super().__init__(config)
-        self.azure_config = config['generation']['azure']
+        if config_key not in config.get('generation', {}):
+            raise ValueError(
+                f"Config section 'generation.{config_key}' not found. "
+                "Check config.yaml."
+            )
+        self.azure_config = config['generation'][config_key]
         self.client = self._initialize_client()
 
     def _initialize_client(self) -> AzureOpenAI:
-        """Initialize Azure OpenAI client."""
+        """Initialize Azure OpenAI client, supporting model-specific API keys."""
         load_dotenv()
 
-        api_key = os.getenv('AZURE_OPENAI_API_KEY')
+        # Model-specific key takes precedence; fall back to generic key.
+        api_key_env = self.azure_config.get('api_key_env', 'AZURE_OPENAI_API_KEY')
+        api_key = os.getenv(api_key_env) or os.getenv('AZURE_OPENAI_API_KEY')
         if not api_key:
-            raise ValueError("Azure OpenAI API key not found! Set AZURE_OPENAI_API_KEY in .env")
-
-        endpoint = self.azure_config.get('endpoint', '')
-        if not (endpoint.startswith('https://') and '.openai.azure.com' in endpoint):
             raise ValueError(
-                f"Invalid Azure OpenAI endpoint: '{endpoint}'. "
-                "Must be https://<resource-name>.openai.azure.com/"
+                f"Azure OpenAI API key not found! "
+                f"Set {api_key_env} (or AZURE_OPENAI_API_KEY) in .env"
             )
+
+        endpoint = self.azure_config.get('endpoint', '').rstrip('/')
+        if not endpoint.startswith('https://'):
+            raise ValueError(
+                f"Invalid Azure endpoint: '{endpoint}'. "
+                "Must start with https://"
+            )
+
+        # Strip any path component — the AzureOpenAI SDK needs the base host only.
+        from urllib.parse import urlparse
+        parsed = urlparse(endpoint)
+        base_endpoint = f"{parsed.scheme}://{parsed.netloc}/"
 
         return AzureOpenAI(
             api_key=api_key,
             api_version=self.azure_config['api_version'],
-            azure_endpoint=self.azure_config['endpoint']
+            azure_endpoint=base_endpoint,
         )
 
     def generate_conversations(self, prompt: str) -> List[Dict]:
