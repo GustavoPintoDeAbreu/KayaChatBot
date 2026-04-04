@@ -94,5 +94,9 @@ COPY run_full_pipeline.py /app/
 # Create necessary directories
 RUN mkdir -p /app/data /app/models /app/outputs
 
+# Health check: verify the Python environment is functional
+HEALTHCHECK --interval=60s --timeout=30s --retries=3 \
+    CMD python -c "import torch; import transformers; import chromadb; print('OK')" || exit 1
+
 # Default command
 CMD ["/bin/bash"]

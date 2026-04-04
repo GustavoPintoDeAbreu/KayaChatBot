@@ -27,6 +27,13 @@ class AzureProvider(LLMProvider):
         if not api_key:
             raise ValueError("Azure OpenAI API key not found! Set AZURE_OPENAI_API_KEY in .env")
 
+        endpoint = self.azure_config.get('endpoint', '')
+        if not (endpoint.startswith('https://') and '.openai.azure.com' in endpoint):
+            raise ValueError(
+                f"Invalid Azure OpenAI endpoint: '{endpoint}'. "
+                "Must be https://<resource-name>.openai.azure.com/"
+            )
+
         return AzureOpenAI(
             api_key=api_key,
             api_version=self.azure_config['api_version'],

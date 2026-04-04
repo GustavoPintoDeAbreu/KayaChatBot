@@ -50,7 +50,12 @@ class ConversationRetriever:
                 for alias in m.get('aliases', []):
                     self.group_members.add(alias.lower())
         else:
-            # Fallback if JSON not available
+            # Fallback if JSON not available — log a warning
+            import logging as _logging
+            _logging.warning(
+                "group_members.json not found at '%s' — using hardcoded member fallback. "
+                "Member-filtered RAG may be incomplete.", members_file or "(not configured)"
+            )
             self._members_data = []
             self.group_members = {
                 'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
@@ -85,7 +90,14 @@ class ConversationRetriever:
         # Load embedding model (GTE requires trust_remote_code)
         self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
 
-        print(f"✅ RAG Retriever initialized with {self.collection.count()} conversation chunks")
+        conv_count = self.collection.count()
+        if conv_count == 0:
+            import logging as _logging
+            _logging.warning(
+                "Collection 'kaya_conversations' is empty — RAG will return no results. "
+                "Run build_vector_db.py first."
+            )
+        print(f"✅ RAG Retriever initialized with {conv_count} conversation chunks")
 
     def extract_query_persons(self, query: str) -> List[str]:
         """Extract person names mentioned in the query."""
