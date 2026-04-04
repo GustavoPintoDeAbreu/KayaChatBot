@@ -138,7 +138,7 @@ jobs:
           # We check for the presence of success markers in the log; absence means failure.
           LOG=pipeline_output.log
           if [[ -f "$LOG" ]]; then
-            if grep -qiE "(Training Completed|FULL PIPELINE COMPLETE|Pipeline finished successfully|passed|Benchmark complete)" "$LOG"; then
+            if grep -qiE "(Training Completed|FULL PIPELINE COMPLETE|Pipeline finished successfully|passed|Benchmark complete|Evaluation complete|Inference tests complete)" "$LOG"; then
               echo "failed=false" >> "$GITHUB_OUTPUT"
             else
               echo "failed=true" >> "$GITHUB_OUTPUT"
