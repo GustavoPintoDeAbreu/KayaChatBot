@@ -110,12 +110,13 @@ jobs:
             if (fs.existsSync(logPath)) {
               const log = fs.readFileSync(logPath, 'utf8');
 
-              // Try to detect mode from log content
-              if (log.includes('train.py') || log.includes('Training Started')) mode = 'finetune';
+              // Detect mode from log content -- check more-specific patterns first
+              // to avoid misclassification (full-pipeline logs also contain train.py)
+              if (log.includes('run_full_pipeline.py')) mode = 'full-pipeline';
               else if (log.includes('pytest') || log.includes('test session starts')) mode = 'evaluate';
               else if (log.includes('benchmark.py')) mode = 'benchmark';
-              else if (log.includes('run_full_pipeline.py')) mode = 'full-pipeline';
-              else if (log.includes('inference.py')) mode = 'inference-test';
+              else if (log.includes('inference.py') && !log.includes('run_full_pipeline.py')) mode = 'inference-test';
+              else if (log.includes('train.py') || log.includes('Training Started')) mode = 'finetune';
 
               // Extract last 80 lines as the most relevant excerpt
               const lines = log.split('\n');
@@ -131,7 +132,8 @@ jobs:
 
             const title = `[Auto] GPU Pipeline failed: ${mode} \u2014 ${shortError}`;
 
-            const issueNumber = context.issue ? context.issue.number : 'THIS_ISSUE';
+            // issueNumber is not known until after creation; use a placeholder
+            // and update the body immediately after.
             const bodyLines = [
               '## GPU Pipeline Failure \u2014 Automated Report',
               '',
@@ -148,7 +150,7 @@ jobs:
               '1. Read the error log below carefully to identify the root cause.',
               '2. Apply a minimal targeted fix \u2014 prefer fixing `Dockerfile`, `requirements.txt`, `config.docker.yaml`, or source code as appropriate.',
               '3. Run `python -m pytest tests/ -v` (via the Copilot environment) to validate any non-GPU changes.',
-              `4. Open a PR with \`Fixes #${issueNumber}\` in the description.`,
+              '4. Open a PR with `Fixes #ISSUE_NUMBER` in the description (replace ISSUE_NUMBER with this issue\'s number).',
               '5. The GPU Pipeline will re-run automatically on the PR when it touches training-related files.',
               '6. Do NOT merge \u2014 human approval is required.',
               '',
@@ -200,6 +202,16 @@ jobs:
 
             console.log(`Created issue #${issue.data.number}: ${title}`);
             console.log(`Issue URL: ${issue.data.html_url}`);
+
+            // Update the body to replace the ISSUE_NUMBER placeholder with the real number
+            const realBody = body.replace('Fixes #ISSUE_NUMBER', `Fixes #${issue.data.number}`)
+                                 .replace('replace ISSUE_NUMBER with this issue\'s number', `i.e. \`Fixes #${issue.data.number}\``);
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.data.number,
+              body: realBody,
+            });
 
             // Write to job summary
             await core.summary
