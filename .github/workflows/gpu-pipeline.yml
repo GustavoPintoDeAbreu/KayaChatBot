@@ -46,7 +46,7 @@ jobs:
       - name: Determine run mode
         id: mode
         run: |
-          if [[  "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=finetune" >> "$GITHUB_OUTPUT"
@@ -54,10 +54,37 @@ jobs:
 
       - name: Prepare environment
         run: |
-          # Ensure .env exists (docker-compose env_file requires it, even if empty)
-          touch .env
-          # Ensure output directories exist (gitignored, not in checkout)
-          mkdir -p models data
+          # ---------------------------------------------------------------
+          # Data directories: gitignored, so the checkout lacks them.
+          # Since this runner IS the project machine, we symlink from the
+          # real project directory so Docker gets the actual source data.
+          # ---------------------------------------------------------------
+          REAL_PROJECT=/home/gustavo/Desktop/KayaChatBot
+
+          mkdir -p models reports/benchmarks
+
+          # Sync data files from real project into checkout
+          mkdir -p data
+          for item in wpp insta facebook all_messages_cleaned.jsonl finetune_chunks.jsonl cleaning_stats.json; do
+            SRC="$REAL_PROJECT/data/$item"
+            DST="data/$item"
+            if [[ -e "$SRC" && ! -e "$DST" ]]; then
+              ln -sf "$SRC" "$DST"
+              echo "  Linked: $DST -> $SRC"
+            fi
+          done
+
+          # Use real .env (contains API keys needed inside Docker)
+          if [[ -f "$REAL_PROJECT/.env" && ! -f ".env" ]]; then
+            ln -sf "$REAL_PROJECT/.env" .env
+            echo "  Linked: .env -> $REAL_PROJECT/.env"
+          elif [[ ! -f "$REAL_PROJECT/.env" ]]; then
+            touch .env
+            echo "  Warning: no .env found in $REAL_PROJECT, created empty .env"
+          fi
+
+          echo "Data directory contents:"
+          ls -la data/
 
       - name: Build Docker image
         run: docker-compose build
@@ -143,7 +170,7 @@ jobs:
                 { cwd: workspace, timeout: 30000 }
               ).toString().trim();
             } catch (err) {
-              markdown = `## 🖥️ GPU Pipeline Results — \`${mode}\`\n\n❌ Failed to parse pipeline output.\n\n\`\`\`\n${err.stderr || err.message}\n\`\`\``;
+              markdown = `## \ud83d\udda5\ufe0f GPU Pipeline Results \u2014 \`${mode}\`\n\n\u274c Failed to parse pipeline output.\n\n\`\`\`\n${err.stderr || err.message}\n\`\`\``;
             }
 
             // Write to job summary
@@ -163,3 +190,15 @@ jobs:
         if: always()
         run: |
           docker-compose down --rmi local --volumes --remove-orphans 2>/dev/null || true
+
+      - name: Fail job if pipeline failed
+        # This must be the LAST step. It causes the GitHub job to report
+        # conclusion=failure so the GPU Pipeline Failure Handler triggers
+        # and creates an auto-issue for the Copilot bug-fixer agent.
+        # continue-on-error on pipeline steps is intentional (lets us capture
+        # logs and artifacts even when the command exits non-zero); this step
+        # converts the log-detected failure back into a real job failure.
+        if: always() && steps.outcome.outputs.failed == 'true'
+        run: |
+          echo "Pipeline reported failure. Failing the job to activate the self-healing handler."
+          exit 1
