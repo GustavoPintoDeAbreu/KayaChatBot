@@ -356,6 +356,12 @@ def main() -> None:
         help="Number of scenarios per configuration",
     )
 
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="Save current results as the new regression baseline",
+    )
+
     args = parser.parse_args()
 
     # Load config
@@ -384,6 +390,43 @@ def main() -> None:
     print(f"  ✅ {len(matrix)} configurations to test\n")
 
     results = runner.run(matrix)
+
+    # --- Regression detection ---
+    output_dir = Path(config["benchmark"].get("output_dir", "reports/benchmarks"))
+    baseline_file = output_dir / "baseline.json"
+    current_avg = sum(r.avg_score for r in results) / len(results) if results else 0.0
+
+    baseline_avg = None
+    if baseline_file.exists() and not args.update_baseline:
+        try:
+            import json as _json
+            baseline_data = _json.loads(baseline_file.read_text(encoding="utf-8"))
+            baseline_avg = baseline_data.get("overall_avg_score")
+        except Exception:
+            pass
+
+    if baseline_avg is not None:
+        delta = current_avg - baseline_avg
+        delta_str = f"+{delta:.4f}" if delta >= 0 else f"{delta:.4f}"
+        regression_flag = " ⚠️ REGRESSION" if delta < -0.05 else ""
+        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline={baseline_avg:.4f} delta={delta_str}{regression_flag}")
+    else:
+        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline=none delta=none")
+
+    # Save new baseline when requested or when none exists yet
+    if args.update_baseline or not baseline_file.exists():
+        try:
+            import json as _json
+            baseline_file.parent.mkdir(parents=True, exist_ok=True)
+            baseline_file.write_text(
+                _json.dumps({"overall_avg_score": round(current_avg, 4), "generated": datetime.now(timezone.utc).isoformat()},
+                            indent=2),
+                encoding="utf-8",
+            )
+            action = "updated" if args.update_baseline else "initialised"
+            print(f"📄 Baseline {action}: {baseline_file}")
+        except Exception as exc:
+            print(f"⚠️ Could not save baseline: {exc}")
 
     md_path, json_path = runner.save_reports(results)
 
