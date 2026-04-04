@@ -1,18 +1,1 @@
-[
-  {
-    "title": "feat: WhatsApp Business API integration layer",
-    "description": "Add a WhatsApp integration layer so the KayaBot can respond directly in the group chat. Implement a `src/integrations/whatsapp.py` module that bridges the existing `src/chat/chat.py` logic to the WhatsApp Business Cloud API (Meta). Requirements:\n- Receive incoming messages via webhook (Flask/FastAPI endpoint)\n- Route messages through the RAG+model pipeline\n- Send responses back via WhatsApp API\n- Support group chat (single bot responding to the group)\n- Add `integrations.whatsapp` config section in config.yaml\n- All conversation data stays local (no cloud DB)\n- Add tests in tests/integrations/\n\nRelevant files: `src/chat/chat.py`, `src/chat/retriever.py`, `config.yaml`",
-    "type": "feature",
-    "priority": "medium",
-    "agent": "feature-dev",
-    "files_hint": ["src/integrations/whatsapp.py", "src/chat/chat.py", "config.yaml", "requirements.txt"]
-  },
-  {
-    "title": "feat: incremental knowledge base auto-refresh",
-    "description": "Add an incremental knowledge extraction mode that processes only new messages since the last pipeline run, rather than requiring a full pipeline execution. Requirements:\n- Track last-processed message timestamp in `data/kb_checkpoint.json`\n- In `src/data/knowledge_base.py`, add `run_incremental_update()` that only processes messages newer than the checkpoint\n- After extraction, upsert new facts into ChromaDB `kaya_knowledge_base` collection without rebuilding from scratch\n- Update `src/data/build_vector_db.py` to support `--incremental` flag\n- Add config option `knowledge_base.incremental: true` to config.yaml\n- Add tests in tests/pipeline/test_incremental_kb.py\n\nRelevant files: `src/data/knowledge_base.py`, `src/data/build_vector_db.py`, `config.yaml`",
-    "type": "feature",
-    "priority": "low",
-    "agent": "feature-dev",
-    "files_hint": ["src/data/knowledge_base.py", "src/data/build_vector_db.py", "config.yaml", "data/kb_checkpoint.json"]
-  }
-]
+[]
