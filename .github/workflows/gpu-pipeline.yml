@@ -201,18 +201,18 @@ jobs:
 
           if [[ -f "$TASKS_GEN" ]] && [[ -s "$TASKS_GEN" ]]; then
             echo "Found benchmark tasks in $TASKS_GEN"
-            # Use Python to merge without creating duplicates by title
+            # Merge new tasks into tasks.json without duplicates
             python3 -c "
-import json, pathlib, sys
-new_tasks = json.loads(pathlib.Path('$TASKS_GEN').read_text())
-existing_file = pathlib.Path('$TASKS_TRACKED')
-existing = json.loads(existing_file.read_text()) if existing_file.exists() else []
-existing_titles = {t.get('title') for t in existing}
-added = [t for t in new_tasks if t.get('title') not in existing_titles]
-merged = existing + added
-existing_file.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
-print(f'Merged {len(added)} new task(s) into tasks.json ({len(merged)} total)')
-"
+            import json, pathlib, os
+            tg = pathlib.Path(os.environ['TASKS_GEN'])
+            tt = pathlib.Path(os.environ['TASKS_TRACKED'])
+            new = json.loads(tg.read_text())
+            old = json.loads(tt.read_text()) if tt.exists() else []
+            titles = {t.get('title') for t in old}
+            added = [t for t in new if t.get('title') not in titles]
+            tt.write_text(json.dumps(old + added, indent=2, ensure_ascii=False))
+            print(f'Merged {len(added)} new task(s) into tasks.json ({len(old)+len(added)} total)')
+            "
             # Commit and push if anything was added
             cd "$GITHUB_WORKSPACE"
             git config user.name "github-actions[bot]"
