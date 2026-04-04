@@ -26,6 +26,7 @@ on:
           - inference-test
           - full-pipeline
           - benchmark
+          - judge-eval
 
 permissions:
   contents: read
@@ -130,6 +131,13 @@ jobs:
         run: |
           docker-compose run --rm kaya-chatbot python src/testing/benchmark.py 2>&1 | tee pipeline_output.log
 
+      - name: Run judge-eval
+        if: steps.mode.outputs.mode == 'judge-eval'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/testing/conversation_tester.py --scenarios 10 --provider xai 2>&1 | tee pipeline_output.log
+
       - name: Detect pipeline outcome
         id: outcome
         if: always()
@@ -150,7 +158,7 @@ jobs:
 
       - name: Upload pipeline log artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pipeline-output-${{ github.run_id }}
           path: pipeline_output.log
@@ -159,7 +167,7 @@ jobs:
 
       - name: Parse and post results
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
