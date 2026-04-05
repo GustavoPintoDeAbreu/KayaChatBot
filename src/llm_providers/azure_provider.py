@@ -4,12 +4,14 @@ Supports both standard Azure OpenAI (chat.openai.azure.com) and
 Azure Cognitive Services endpoints (cognitiveservices.azure.com).
 
 Pass ``config_key='azure_gpt53'`` to use the GPT-5.3-chat deployment.
+GPT-5.x models use the Azure Responses API (``client.responses.create``);
+set ``use_responses_api: true`` in the config section to enable this.
 """
 
 import json
 import os
 from typing import List, Dict, Any
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 from dotenv import load_dotenv
 
 from .base import LLMProvider
@@ -33,10 +35,11 @@ class AzureProvider(LLMProvider):
                 "Check config.yaml."
             )
         self.azure_config = config['generation'][config_key]
+        self.use_responses_api = self.azure_config.get('use_responses_api', False)
         self.client = self._initialize_client()
 
-    def _initialize_client(self) -> AzureOpenAI:
-        """Initialize Azure OpenAI client, supporting model-specific API keys."""
+    def _initialize_client(self):
+        """Initialize client, supporting model-specific API keys and Responses API."""
         load_dotenv()
 
         # Model-specific key takes precedence; fall back to generic key.
@@ -55,68 +58,103 @@ class AzureProvider(LLMProvider):
                 "Must start with https://"
             )
 
-        # Strip any path component — the AzureOpenAI SDK needs the base host only.
         from urllib.parse import urlparse
         parsed = urlparse(endpoint)
-        base_endpoint = f"{parsed.scheme}://{parsed.netloc}/"
+        base_host = f"{parsed.scheme}://{parsed.netloc}"
 
-        return AzureOpenAI(
-            api_key=api_key,
-            api_version=self.azure_config['api_version'],
-            azure_endpoint=base_endpoint,
-        )
+        if self.use_responses_api:
+            # GPT-5.x models: use plain OpenAI client pointed at /openai/v1/
+            # The Responses API lives at {host}/openai/v1/responses
+            return OpenAI(
+                api_key=api_key,
+                base_url=f"{base_host}/openai/v1/",
+            )
+        else:
+            # Standard Chat Completions via AzureOpenAI SDK
+            return AzureOpenAI(
+                api_key=api_key,
+                api_version=self.azure_config['api_version'],
+                azure_endpoint=f"{base_host}/",
+            )
 
     def generate_conversations(self, prompt: str) -> List[Dict]:
         """Generate conversations using Azure OpenAI."""
         def _generate():
-            response = self.client.chat.completions.create(
-                model=self.azure_config['model'],
-                messages=[
-                    {"role": "system", "content": "You generate training data in JSON format. Output only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.azure_config['temperature'],
-                max_tokens=self.azure_config['max_tokens'],
-                timeout=self.azure_config['timeout']
-            )
-
-            return self._parse_response(response.choices[0].message.content.strip())
+            if self.use_responses_api:
+                response = self.client.responses.create(
+                    model=self.azure_config['model'],
+                    input=[
+                        {"role": "system", "content": "You generate training data in JSON format. Output only valid JSON."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=self.azure_config['temperature'],
+                    max_output_tokens=self.azure_config['max_tokens'],
+                )
+                return self._parse_response(response.output_text)
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.azure_config['model'],
+                    messages=[
+                        {"role": "system", "content": "You generate training data in JSON format. Output only valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.azure_config['temperature'],
+                    max_tokens=self.azure_config['max_tokens'],
+                    timeout=self.azure_config['timeout']
+                )
+                return self._parse_response(response.choices[0].message.content.strip())
 
         return self._retry_with_backoff(_generate)
 
     def generate_text(self, system_prompt: str, user_prompt: str) -> str:
-        """Generate a raw text response using Azure OpenAI.
-
-        Uses ``generation.azure.extraction_temperature`` (default 0.3) for
-        factual/structured extraction tasks rather than the higher creative
-        temperature used by ``generate_conversations``.
-        """
+        """Generate a raw text response using Azure OpenAI."""
         def _generate():
-            response = self.client.chat.completions.create(
-                model=self.azure_config['model'],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=self.azure_config.get('extraction_temperature', 0.3),
-                max_tokens=self.azure_config['max_tokens'],
-                timeout=self.azure_config['timeout']
-            )
-            return response.choices[0].message.content.strip()
+            if self.use_responses_api:
+                response = self.client.responses.create(
+                    model=self.azure_config['model'],
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=self.azure_config.get('extraction_temperature', 0.3),
+                    max_output_tokens=self.azure_config['max_tokens'],
+                )
+                return response.output_text
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.azure_config['model'],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=self.azure_config.get('extraction_temperature', 0.3),
+                    max_tokens=self.azure_config['max_tokens'],
+                    timeout=self.azure_config['timeout']
+                )
+                return response.choices[0].message.content.strip()
 
         return self._retry_with_backoff(_generate)
 
     def chat_completion(self, messages: List[Dict[str, str]]) -> str:
         """Send a chat completion request and return the response text."""
         def _complete():
-            response = self.client.chat.completions.create(
-                model=self.azure_config['model'],
-                messages=messages,
-                temperature=self.azure_config['temperature'],
-                max_tokens=self.azure_config['max_tokens'],
-                timeout=self.azure_config['timeout']
-            )
-            return response.choices[0].message.content.strip()
+            if self.use_responses_api:
+                response = self.client.responses.create(
+                    model=self.azure_config['model'],
+                    input=messages,
+                    temperature=self.azure_config['temperature'],
+                    max_output_tokens=self.azure_config['max_tokens'],
+                )
+                return response.output_text
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.azure_config['model'],
+                    messages=messages,
+                    temperature=self.azure_config['temperature'],
+                    max_tokens=self.azure_config['max_tokens'],
+                    timeout=self.azure_config['timeout']
+                )
+                return response.choices[0].message.content.strip()
 
         return self._retry_with_backoff(_complete)
 
