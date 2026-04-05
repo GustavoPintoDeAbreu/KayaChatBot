@@ -50,9 +50,10 @@ generation:
   # Azure GPT-5.3-chat (Cognitive Services endpoint, Responses API)
   azure_gpt53:
     endpoint: "https://guga-mnkv0hr7-eastus2.cognitiveservices.azure.com/"
-    api_version: "2025-04-01-preview"
+    api_version: "2025-04-01-preview"  # kept for reference; Responses API uses /openai/v1/ path
     model: "gpt-5.3-chat"
     api_key_env: "AZURE_OPENAI_API_KEY_gpt_53_chat"  # env var name for the key
+    use_responses_api: true  # GPT-5.x uses /openai/v1/responses instead of chat completions
     max_tokens: 16000
     temperature: 0.85
     extraction_temperature: 0.3

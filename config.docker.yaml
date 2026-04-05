@@ -46,6 +46,18 @@ generation:
     max_tokens: 30000  # Grok-4 max output: 32K tokens (using 30K to be safe)
     temperature: 0.85
     timeout: 120  # Increased for larger outputs
+
+  # Azure GPT-5.3-chat (Cognitive Services endpoint, Responses API)
+  azure_gpt53:
+    endpoint: "https://guga-mnkv0hr7-eastus2.cognitiveservices.azure.com/"
+    api_version: "2025-04-01-preview"
+    model: "gpt-5.3-chat"
+    api_key_env: "AZURE_OPENAI_API_KEY_gpt_53_chat"
+    use_responses_api: true  # GPT-5.x uses /openai/v1/responses
+    max_tokens: 16000
+    temperature: 0.85
+    extraction_temperature: 0.3
+    timeout: 120
   
   # Retry settings (applies to both providers)
   retry:
