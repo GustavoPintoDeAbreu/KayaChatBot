@@ -29,6 +29,8 @@ data/wpp/
 data/rag_db/
 *.jsonl
 *.json
+# Golden test conversations are tracked intentionally
+!data/golden_test_conversations.json
 # Exception: project config JSON files should be tracked
 !data/group_members.json
 !data/group_knowledge.json

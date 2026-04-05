@@ -27,9 +27,11 @@ on:
           - full-pipeline
           - benchmark
           - judge-eval
+          - compare
+          - generate-datasets
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -129,14 +131,36 @@ jobs:
         timeout-minutes: 60
         continue-on-error: true
         run: |
-          docker-compose run --rm kaya-chatbot python src/testing/benchmark.py 2>&1 | tee pipeline_output.log
+          docker-compose run --rm kaya-chatbot python src/testing/benchmark.py \
+            --judge-provider xai \
+            --golden-tests data/golden_test_conversations.json \
+            --emit-tasks \
+            2>&1 | tee pipeline_output.log
 
       - name: Run judge-eval
         if: steps.mode.outputs.mode == 'judge-eval'
-        timeout-minutes: 10
+        timeout-minutes: 30
         continue-on-error: true
         run: |
           docker-compose run --rm kaya-chatbot python src/testing/conversation_tester.py --scenarios 10 --provider xai 2>&1 | tee pipeline_output.log
+
+      - name: Run compare (A/B dataset comparison)
+        if: steps.mode.outputs.mode == 'compare'
+        timeout-minutes: 120
+        continue-on-error: true
+        run: |
+          # Build both dataset variants and report differences
+          docker-compose run --rm kaya-chatbot python run_full_pipeline.py --dataset-variant a 2>&1 | tee pipeline_output_a.log
+          docker-compose run --rm kaya-chatbot python run_full_pipeline.py --dataset-variant b 2>&1 | tee pipeline_output_b.log
+          cat pipeline_output_a.log pipeline_output_b.log > pipeline_output.log
+          echo "COMPARE_COMPLETE: A/B dataset variants built" >> pipeline_output.log
+
+      - name: Run generate-datasets (data pipeline only, no training)
+        if: steps.mode.outputs.mode == 'generate-datasets'
+        timeout-minutes: 60
+        continue-on-error: true
+        run: |
+          docker-compose run --rm kaya-chatbot python src/data/generate_synthetic_data.py 2>&1 | tee pipeline_output.log
 
       - name: Detect pipeline outcome
         id: outcome
@@ -146,7 +170,7 @@ jobs:
           # We check for the presence of success markers in the log; absence means failure.
           LOG=pipeline_output.log
           if [[ -f "$LOG" ]]; then
-            if grep -qiE "(Training Completed|FULL PIPELINE COMPLETE|Pipeline finished successfully|passed|Benchmark complete|Evaluation complete|Inference tests complete)" "$LOG"; then
+            if grep -qiE "(Training Completed|FULL PIPELINE COMPLETE|Pipeline finished successfully|passed|Benchmark complete|Evaluation complete|Inference tests complete|COMPARE_COMPLETE)" "$LOG"; then
               echo "failed=false" >> "$GITHUB_OUTPUT"
             else
               echo "failed=true" >> "$GITHUB_OUTPUT"
@@ -164,6 +188,48 @@ jobs:
           path: pipeline_output.log
           retention-days: 7
           if-no-files-found: warn
+
+      - name: Auto-commit benchmark tasks to tasks.json
+        # When the benchmark emits pending tasks, append them to the tracked
+        # tasks.json file and push. The push to main (or PR branch) triggers
+        # create-issues-from-tasks.yml which creates GitHub Issues for the agent.
+        if: always() && steps.mode.outputs.mode == 'benchmark'
+        run: |
+          REAL_PROJECT=/home/gustavo/Desktop/KayaChatBot
+          TASKS_GEN="$REAL_PROJECT/data/benchmark_tasks.json"
+          TASKS_TRACKED="$GITHUB_WORKSPACE/tasks.json"
+
+          if [[ -f "$TASKS_GEN" ]] && [[ -s "$TASKS_GEN" ]]; then
+            echo "Found benchmark tasks in $TASKS_GEN"
+            # Merge new tasks into tasks.json without duplicates
+            python3 -c "
+            import json, pathlib, os
+            tg = pathlib.Path(os.environ['TASKS_GEN'])
+            tt = pathlib.Path(os.environ['TASKS_TRACKED'])
+            new = json.loads(tg.read_text())
+            old = json.loads(tt.read_text()) if tt.exists() else []
+            titles = {t.get('title') for t in old}
+            added = [t for t in new if t.get('title') not in titles]
+            tt.write_text(json.dumps(old + added, indent=2, ensure_ascii=False))
+            print(f'Merged {len(added)} new task(s) into tasks.json ({len(old)+len(added)} total)')
+            "
+            # Commit and push if anything was added
+            cd "$GITHUB_WORKSPACE"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            if git diff --quiet tasks.json; then
+              echo "No new tasks to commit."
+            else
+              git add tasks.json
+              git commit -m "chore: add benchmark failure tasks [skip ci]"
+              git push
+              echo "Committed and pushed updated tasks.json"
+            fi
+            # Clear processed tasks
+            echo "[]" > "$TASKS_GEN"
+          else
+            echo "No benchmark_tasks.json found or file is empty — nothing to commit."
+          fi
 
       - name: Parse and post results
         if: always()
