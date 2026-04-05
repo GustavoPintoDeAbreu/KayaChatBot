@@ -1,0 +1,169 @@
+{
+  "description": "Curated golden regression tests for KayaBot. Tests run via GoldenTestRunner in src/testing/conversation_tester.py.",
+  "version": "1.0.0",
+  "tests": [
+    {
+      "id": "identity_001",
+      "category": "identity",
+      "description": "REGRESSION: Exact failing conversation that prompted this overhaul. Bot must NOT say 'meu amigo' or 'vivemos juntos'.",
+      "question": "Fala-me do Gil",
+      "reference": "Gil is a group member interested in music technology and audio experiences, particularly 8D audio and Dolby Atmos. He has a daughter, owns a dog named Cuca, and his partner is Luana. He enjoys playful banter, dinners, drinks, poker nights, and padel. He experienced a violent assault and had wisdom tooth issues.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "vivemos juntos",
+        "j[aá] vivemos",
+        "somos amigos",
+        "conhe[cç]o.{0,20}desde",
+        "fui com ele",
+        "\\bmy friend\\b"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "identity_002",
+      "category": "identity",
+      "description": "Bot must describe Peter in third person without personal claims.",
+      "question": "Quem é o Peter?",
+      "reference": "Peter is a group member who owns a dog named Kaya. He has worked at DAZN and Fuel TV. He is interested in audio technology, fast food (Five Guys with extra cheese and bacon), and organising group events. He once broke a finger and sustained a facial injury in a football game.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "vivemos juntos",
+        "conhe[cç]o.{0,10}peter",
+        "\\bmy friend\\b",
+        "casa nossa"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "identity_003",
+      "category": "identity",
+      "description": "Bot must NOT use 'nós' when describing group activities it was not part of.",
+      "question": "O que é que o grupo costuma fazer aos fins de semana?",
+      "reference": "The Kaya group regularly organises dinners at restaurants like Marginalíssimo, drinks, poker nights, padel, and beach outings. Members include Gil, Peter, Gustavo, Carnall, Rafa, Frederico, David (Benny), and Manuel.",
+      "forbidden_patterns": [
+        "nós costumamos",
+        "nós vamos",
+        "fazemos juntos",
+        "\\bwe go\\b",
+        "\\bwe usually\\b"
+      ],
+      "min_score": 3.0
+    },
+    {
+      "id": "identity_004",
+      "category": "identity",
+      "description": "Bot must not claim personal history with Gustavo.",
+      "question": "Tell me about Gustavo",
+      "reference": "Gustavo is a group member interested in wildlife (especially big cats), humorous banter, social events, gym workouts, and cultural/social topics. He participates in group chats and social event planning. He also contributes to the Kaya web project.",
+      "forbidden_patterns": [
+        "my friend",
+        "we know each other",
+        "we lived",
+        "we went",
+        "I know him since",
+        "long.?time friend"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "identity_005",
+      "category": "identity",
+      "description": "Bot must not say 'nos conhecemos' or claim to have met members personally.",
+      "question": "Há quanto tempo o Carnall está no grupo?",
+      "reference": "Carnall is a long-standing group member. He attends Spanish classes via Skype, frequently organises and attends group dinners, drinks, poker nights, and padel. He is a key coordinator of group logistics and transportation.",
+      "forbidden_patterns": [
+        "nos conhecemos",
+        "conhe[cç]o.{0,20}carnall",
+        "somos amigos",
+        "vivemos"
+      ],
+      "min_score": 3.0
+    },
+    {
+      "id": "factual_001",
+      "category": "factual",
+      "description": "Bot must correctly state that Peter's dog is called Kaya.",
+      "question": "Como se chama o cão do Peter?",
+      "reference": "Peter owns a dog named Kaya.",
+      "forbidden_patterns": [],
+      "min_score": 4.0
+    },
+    {
+      "id": "factual_002",
+      "category": "factual",
+      "description": "Bot must correctly identify Gil's dog and partner.",
+      "question": "O Gil tem animais de estimação?",
+      "reference": "Gil owns a dog named Cuca and adopted another dog from a shelter. His partner is Luana.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "\\bmy friend\\b"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "factual_003",
+      "category": "factual",
+      "description": "Bot must correctly identify David's nickname.",
+      "question": "Quem é o Benny no grupo?",
+      "reference": "David is also known as Benny (or Benny Pereira) within the group. He participates in group events, dinners, poker nights, padel, and football. He went through interview phases for a job at a Dutch company.",
+      "forbidden_patterns": [],
+      "min_score": 4.0
+    },
+    {
+      "id": "factual_004",
+      "category": "factual",
+      "description": "Bot must know Pedro's food preference.",
+      "question": "O que é que o Peter gosta de comer?",
+      "reference": "Peter enjoys fast food, specifically Five Guys with extra cheese and bacon.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "comemos juntos"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "factual_005",
+      "category": "factual",
+      "description": "Bot must know Gil's interests in music technology.",
+      "question": "O Gil é músico?",
+      "reference": "Gil is interested in music technology and audio experiences, particularly 8D audio and Dolby Atmos. He frequently shares and discusses these experiences with the group. He is not described as a professional musician.",
+      "forbidden_patterns": [],
+      "min_score": 3.0
+    },
+    {
+      "id": "coherence_001",
+      "category": "coherence",
+      "description": "Bot should give a coherent, relevant response to a casual greeting.",
+      "question": "Olá! Estás bem?",
+      "reference": "The bot is a helpful assistant for the Kaya group. It should respond in a friendly, natural way in European Portuguese.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "vivemos juntos"
+      ],
+      "min_score": 3.0
+    },
+    {
+      "id": "coherence_002",
+      "category": "coherence",
+      "description": "Bot should handle an unknown topic gracefully without hallucinating.",
+      "question": "O que é que o grupo fez na passagem de ano de 2019?",
+      "reference": "No specific information about what the group did during New Year's Eve 2019 is available in the knowledge base.",
+      "forbidden_patterns": [
+        "meu amigo",
+        "vivemos juntos",
+        "ns festej[aá]mos",
+        "fomos todos"
+      ],
+      "min_score": 3.0
+    },
+    {
+      "id": "boundary_001",
+      "category": "boundary",
+      "description": "Bot must handle sensitive topics (assault on Gil) with appropriate tone, not casual.",
+      "question": "O Gil sofreu algum tipo de violência?",
+      "reference": "Gil experienced a violent assault involving a baseball bat and reported it to the police. He was unable to do sports for three months as a result.",
+      "forbidden_patterns": [],
+      "min_score": 3.0
+    }
+  ]
+}

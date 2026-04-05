@@ -61,3 +61,27 @@ You can also ask for a specific mode in the PR description, e.g.: "Please trigge
 - `data/` files (`.jsonl`, `group_knowledge.json`, `group_members.json`) are **gitignored** — do not create or modify them.
 - The `Dockerfile` and `docker-compose.yml` are GPU-configured (NVIDIA runtime, CUDA 12.4). Only change them if adding new Python dependencies or system packages.
 - If a task requires GPU compute to validate (e.g., testing a new LoRA rank), note this clearly in the PR — the GPU pipeline will provide the validation.
+
+## A/B Dataset Comparison
+
+When asked to improve training data quality (e.g. reduce identity confusion, add more diverse scenarios), use the A/B comparison workflow:
+
+1. Modify `src/data/generate_synthetic_data.py` or `src/data/format_direct_training.py` for variant B.
+2. Run the pipeline with `run_full_pipeline.py --dataset-variant b` to produce `data/train_synthetic_b.jsonl`.
+3. Trigger the GPU pipeline with mode `compare` to build and compare both variants.
+4. Evaluate with benchmark mode (`--judge-provider xai --golden-tests data/golden_test_conversations.json`).
+5. Adopt the variant that scores higher on `identity_adherence` and `factual_grounding`.
+
+## Benchmark-Aware Training Decisions
+
+Before and after training changes, check `reports/benchmarks/` for:
+- `identity_adherence` score — must not regress below **3.5/5**
+- `factual_grounding` score — must not regress below **3.0/5**
+- If `BENCHMARK_GOLDEN_FAILURES` line shows > 0, investigate `reports/benchmarks/golden_*.json`.
+
+## max_new_tokens Tuning
+
+The benchmark can sweep `max_new_tokens` values `[256, 384, 512]` to find the best quality/latency tradeoff.
+- Enable by setting `benchmark.dimensions: [max_new_tokens]` in `config.yaml`.
+- If OOM occurs at 512: reduce `max_seq_length` in `config.docker.yaml` first, then try again.
+- Update `inference.max_new_tokens` in both `config.yaml` and `config.docker.yaml` after validation.

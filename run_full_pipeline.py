@@ -5,8 +5,14 @@ Orchestrates the complete data processing and training pipeline.
 Supports two modes (controlled by pipeline.skip_synthetic in config.yaml):
   skip_synthetic: false  — full pipeline with API-based synthetic generation
   skip_synthetic: true   — direct pipeline, no API calls required
+
+A/B dataset comparison:
+  --dataset-variant a  — outputs train_synthetic_a.jsonl / val_synthetic_a.jsonl
+  --dataset-variant b  — outputs train_synthetic_b.jsonl / val_synthetic_b.jsonl
+  (omit flag for default train_synthetic.jsonl)
 """
 
+import argparse
 import subprocess
 import sys
 import os
@@ -55,6 +61,16 @@ def run_script(script_path: Path, description: str) -> bool:
 
 def main():
     """Run the full pipeline."""
+    parser = argparse.ArgumentParser(description="KayaChatBot full pipeline runner.")
+    parser.add_argument(
+        "--dataset-variant",
+        type=str,
+        default=None,
+        choices=["a", "b"],
+        help="A/B variant label for output dataset files (e.g. 'a' → train_synthetic_a.jsonl).",
+    )
+    args = parser.parse_args()
+    dataset_variant = args.dataset_variant
 
     print("=" * 60, flush=True)
     print("🎯 KAYA CHATBOT - FULL PIPELINE", flush=True)
@@ -187,11 +203,19 @@ def main():
     # ------------------------------------------------------------------
     # Merge step
     # ------------------------------------------------------------------
-    if not run_script(
-        BASE_DIR / "src/data/merge_datasets.py",
-        f"Step {step_merge}: Merge Datasets",
-    ):
-        print(f"\n❌ Pipeline failed at Step {step_merge}", flush=True)
+    merge_cmd = [PYTHON, str(BASE_DIR / "src/data/merge_datasets.py")]
+    if dataset_variant:
+        merge_cmd += ["--variant", dataset_variant]
+        print(f"\n📦 Using dataset variant '{dataset_variant}' for merge step", flush=True)
+
+    print("\n" + "=" * 60, flush=True)
+    print(f"🚀 Step {step_merge}: Merge Datasets", flush=True)
+    print("=" * 60, flush=True)
+    try:
+        subprocess.run(merge_cmd, cwd=str(BASE_DIR), check=True, text=True)
+        print(f"✅ Step {step_merge}: Merge Datasets - Complete!", flush=True)
+    except (subprocess.CalledProcessError, KeyboardInterrupt) as e:
+        print(f"\n❌ Pipeline failed at Step {step_merge}: {e}", flush=True)
         return
 
     # ------------------------------------------------------------------

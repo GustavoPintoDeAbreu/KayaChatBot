@@ -14,6 +14,7 @@ Kaya system prompt and handles it correctly.
 
 import json
 import random
+import re
 import os
 from pathlib import Path
 from datetime import datetime
@@ -38,6 +39,21 @@ SESSION_GAP_MINUTES = 30  # Silence gap that signals a new conversation session
 MIN_SESSION_MSGS = 4      # Skip sessions shorter than this
 MIN_RESPONSE_CHARS = 10   # Skip responses shorter than this
 RANDOM_SEED = 3407
+
+# ---------------------------------------------------------------------------
+# Identity-leak filter: skip any response that looks like first-person member
+# claims (these would teach the bot to impersonate group members).
+# ---------------------------------------------------------------------------
+_IDENTITY_LEAK_RE = re.compile(
+    r"\bmeu\s+(amigo|colega|parceiro)\b"         # "meu amigo"
+    r"|\bvivemos\s+juntos\b"                       # "vivemos juntos"
+    r"|\bj[aá]\s+vivemos\b"                        # "já vivemos"
+    r"|\bconhe[cç]o.{0,20}\bdesde\b"              # "conheço-o desde"
+    r"|\bsomos\s+amigos\s+desde\b"                 # "somos amigos desde"
+    r"|\bnos\s+conhecemos\s+h[aá]\b"               # "nos conhecemos há"
+    r"|\b(fui|fomos)\s+(ao|para|com).{0,20}\bele\b",  # "fui com ele"
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +134,12 @@ def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
                 continue
 
             context_text = format_context(context_msgs)
+            response_text = response_msg['text']
+
+            # Skip responses that contain first-person member claims — these
+            # would teach the bot to speak as a member rather than as a bot.
+            if _IDENTITY_LEAK_RE.search(response_text):
+                continue
 
             example = {
                 "conversations": [
@@ -127,7 +149,7 @@ def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
                     },
                     {
                         "role": "assistant",
-                        "content": response_msg['text']
+                        "content": response_text
                     }
                 ],
                 "source": "synthetic_kaya"

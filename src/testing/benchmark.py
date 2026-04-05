@@ -24,7 +24,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 # Ensure project root is importable when running as a script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.testing.conversation_tester import ConversationTester, ScenarioResult
+from src.testing.conversation_tester import (
+    ConversationTester,
+    ScenarioResult,
+    LLMJudgeTester,
+    GoldenTestRunner,
+    load_provider,
+    LocalModel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +47,7 @@ class BenchmarkConfig:
     max_seq_length: int      # e.g. 2048, 4096, 8192
     top_k: int               # e.g. 3, 5, 10
     model_id: str            # model path or ID
+    max_new_tokens: int = 256  # generation length to test
 
 
 @dataclass
@@ -51,6 +59,7 @@ class BenchmarkResult:
     avg_score: float
     duration_seconds: float
     timestamp: str  # ISO-8601
+    tokens_per_second: Optional[float] = None  # throughput (None if not measured)
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +131,17 @@ class BenchmarkRunner:
             if raw_models:
                 models = raw_models
 
+        # max_new_tokens sweep: produce one config per value in the list
+        default_mnt = self.config.get("inference", {}).get("max_new_tokens", 256)
+        max_new_tokens_values = [default_mnt]
+        if "max_new_tokens" in dimensions:
+            raw_mnt = bench.get("max_new_tokens_values", [256, 384, 512])
+            if raw_mnt:
+                max_new_tokens_values = raw_mnt
+
         matrix: List[BenchmarkConfig] = []
-        for ka, lang, ctx, model in itertools.product(
-            knowledge_approaches, languages, context_sizes, models
+        for ka, lang, ctx, model, mnt in itertools.product(
+            knowledge_approaches, languages, context_sizes, models, max_new_tokens_values
         ):
             matrix.append(
                 BenchmarkConfig(
@@ -133,6 +150,7 @@ class BenchmarkRunner:
                     max_seq_length=ctx.get("max_seq_length", 4096),
                     top_k=ctx.get("top_k", 5),
                     model_id=model,
+                    max_new_tokens=mnt,
                 )
             )
 
@@ -164,7 +182,7 @@ class BenchmarkRunner:
         for i, cfg in enumerate(matrix, 1):
             print(f"📊 Running config {i}/{len(matrix)}: "
                   f"{cfg.knowledge_approach} / {cfg.language} / "
-                  f"seq={cfg.max_seq_length} top_k={cfg.top_k}")
+                  f"seq={cfg.max_seq_length} top_k={cfg.top_k} max_new_tokens={cfg.max_new_tokens}")
 
             response_fn: Callable[[str], str]
             if self.response_fn_factory is not None:
@@ -219,8 +237,8 @@ class BenchmarkRunner:
         lines.append("")
 
         # Table header
-        lines.append("| Knowledge Approach | Language | Context | Model | Avg Score | Scenarios | Duration |")
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("| Knowledge Approach | Language | Context | max_new_tokens | Model | Avg Score | Scenarios | Duration |")
+        lines.append("|---|---|---|---|---|---|---|---|")
 
         for r in results:
             ctx = f"{r.config.max_seq_length} / top_k={r.config.top_k}"
@@ -232,6 +250,7 @@ class BenchmarkRunner:
                 f"| {r.config.knowledge_approach} "
                 f"| {r.config.language} "
                 f"| {ctx} "
+                f"| {r.config.max_new_tokens} "
                 f"| {model} "
                 f"| {r.avg_score:.2%} "
                 f"| {len(r.scenario_results)} "
@@ -361,6 +380,26 @@ def main() -> None:
         action="store_true",
         help="Save current results as the new regression baseline",
     )
+    parser.add_argument(
+        "--judge-provider",
+        type=str,
+        default=None,
+        help="LLM judge provider for quality scoring: 'xai', 'azure', or 'azure_gpt53'. "
+             "When set, runs LLMJudgeTester after keyword benchmark.",
+    )
+    parser.add_argument(
+        "--golden-tests",
+        type=str,
+        default=None,
+        help="Path to golden_test_conversations.json (default: auto-detect from config). "
+             "Requires --judge-provider.",
+    )
+    parser.add_argument(
+        "--emit-tasks",
+        action="store_true",
+        help="Write failing golden tests as tasks to data/benchmark_tasks.json "
+             "(requires --golden-tests + --judge-provider).",
+    )
 
     args = parser.parse_args()
 
@@ -433,6 +472,122 @@ def main() -> None:
     print(f"\n📊 Benchmark complete — {len(results)} configs evaluated.")
     print(f"   Markdown: {md_path}")
     print(f"   JSON:     {json_path}")
+
+    # ------------------------------------------------------------------
+    # Golden test evaluation (optional — requires --judge-provider)
+    # ------------------------------------------------------------------
+    golden_failures = 0
+    pending_tasks = []
+
+    if args.judge_provider:
+        golden_tests_file = (
+            args.golden_tests
+            or config.get("benchmark", {}).get(
+                "golden_tests_file",
+                "data/golden_test_conversations.json",
+            )
+        )
+        print(f"\n🎯 Running golden tests with judge '{args.judge_provider}' …")
+        try:
+            judge_provider = load_provider(args.judge_provider, config)
+            local_model = LocalModel(config)
+            golden_runner = GoldenTestRunner(
+                provider=judge_provider,
+                local_model=local_model,
+                config=config,
+                golden_tests_file=golden_tests_file,
+            )
+            golden_report = golden_runner.run(verbose=True)
+            golden_failures = golden_report["golden_tests_failed"]
+            identity_failures = golden_report.get("identity_failures", 0)
+
+            # Print machine-readable summary line (parsed by post-gpu-results.py)
+            print(
+                f"BENCHMARK_GOLDEN_RESULTS: "
+                f"run={golden_report['golden_tests_run']} "
+                f"passed={golden_report['golden_tests_passed']} "
+                f"failed={golden_failures} "
+                f"identity_failures={identity_failures}"
+            )
+
+            # Save golden report alongside regular reports
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            golden_path = Path(config.get("benchmark", {}).get("output_dir", "reports/benchmarks"))
+            golden_path.mkdir(parents=True, exist_ok=True)
+            golden_out = golden_path / f"golden_{ts}.json"
+            golden_out.write_text(
+                json.dumps(golden_report, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            print(f"✅ Golden test report saved to {golden_out}")
+
+            # Build pending tasks for failures (for --emit-tasks)
+            if args.emit_tasks:
+                identity_fail_threshold = config.get("benchmark", {}).get(
+                    "identity_failure_threshold", 3.0
+                )
+                for r in golden_report.get("failures", []):
+                    category = r.get("category", "general")
+                    score_info = ""
+                    if r.get("scores"):
+                        s = r["scores"]
+                        score_info = (
+                            f" identity_adherence={s.get('identity_adherence', '?'):.1f}"
+                            f" factual_grounding={s.get('factual_grounding', '?'):.1f}"
+                        ) if isinstance(s.get("identity_adherence"), float) else ""
+
+                    leaked = r.get("identity_leak_patterns", [])
+                    is_identity = bool(leaked) or category == "identity"
+                    task = {
+                        "title": (
+                            f"[Golden] Identity leak in response to '{r['question'][:50]}'"
+                            if is_identity
+                            else f"[Golden] Low quality response to '{r['question'][:50]}'"
+                        ),
+                        "description": (
+                            f"Golden test {r['test_id']} ({category}) failed.\n\n"
+                            f"Question: {r['question']}\n\n"
+                            f"Failure reasons: {'; '.join(r.get('failure_reasons', []))}\n\n"
+                            f"Response excerpt: {r.get('response', '')[:300]}"
+                            + (f"\n\nLeaked patterns: {leaked}" if leaked else "")
+                            + score_info
+                        ),
+                        "type": "bug" if is_identity else "improvement",
+                        "priority": "high" if is_identity else "medium",
+                        "agent": "bug-fixer" if is_identity else "model-trainer",
+                        "files_hint": [
+                            "src/data/format_direct_training.py",
+                            "src/data/generate_synthetic_data.py",
+                            "config.yaml",
+                        ] if is_identity else [
+                            "src/data/generate_synthetic_data.py",
+                            "config.yaml",
+                        ],
+                    }
+                    pending_tasks.append(task)
+
+        except Exception as exc:
+            print(f"⚠️  Golden test runner failed: {exc}")
+            import traceback; traceback.print_exc()
+
+    print(f"BENCHMARK_FAILURES: {golden_failures}")
+
+    # Write pending_tasks to data/benchmark_tasks.json (for GPU pipeline to pick up)
+    if pending_tasks:
+        tasks_out = Path("data/benchmark_tasks.json")
+        existing = []
+        if tasks_out.exists():
+            try:
+                existing = json.loads(tasks_out.read_text(encoding="utf-8"))
+            except Exception:
+                existing = []
+        merged = existing + pending_tasks
+        tasks_out.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"📋 Wrote {len(pending_tasks)} pending task(s) to {tasks_out}")
+        print(f"BENCHMARK_TASKS_WRITTEN: {len(pending_tasks)}")
 
 
 if __name__ == "__main__":
