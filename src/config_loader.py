@@ -16,14 +16,13 @@ Usage::
 """
 
 import copy
-import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
 
-def deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively merge *override* into *base* (override wins on conflict).
 
     Nested dicts are merged recursively; all other types are replaced.
@@ -32,10 +31,14 @@ def deep_merge(base: dict, override: dict) -> dict:
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge(result[key], value)
+            result[key] = _deep_merge(result[key], value)
         else:
             result[key] = copy.deepcopy(value)
     return result
+
+
+# Public alias so callers that imported `deep_merge` continue to work.
+deep_merge = _deep_merge
 
 
 def load_config(path: Optional[str] = None, profile_override: Optional[str] = None) -> dict:
@@ -72,20 +75,18 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
 
     profiles = config.get("model_profiles", {})
     if profile_name not in profiles:
-        warnings.warn(
-            f"Model profile '{profile_name}' not found in config. "
-            "Using top-level settings.",
-            UserWarning,
-            stacklevel=2,
+        available = sorted(profiles.keys())
+        raise ValueError(
+            f"Model profile '{profile_name}' not found. "
+            f"Available profiles: {available}"
         )
-        return config
 
     profile = profiles[profile_name]
 
     # Deep-merge profile's model: and training: into the top-level sections.
     if "model" in profile:
-        config["model"] = deep_merge(config.get("model", {}), profile["model"])
+        config["model"] = _deep_merge(config.get("model", {}), profile["model"])
     if "training" in profile:
-        config["training"] = deep_merge(config.get("training", {}), profile["training"])
+        config["training"] = _deep_merge(config.get("training", {}), profile["training"])
 
     return config
