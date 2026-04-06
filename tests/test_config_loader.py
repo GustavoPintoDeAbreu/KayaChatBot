@@ -128,10 +128,9 @@ class TestLoadConfig:
         config = load_config(tmp_config, profile_override="")
         assert config["model"]["model_id"] == "base_model"
 
-    def test_unknown_profile_falls_back_gracefully(self, tmp_config):
-        with pytest.warns(UserWarning, match="nonexistent"):
-            config = load_config(tmp_config, profile_override="nonexistent")
-        assert config["model"]["model_id"] == "base_model"
+    def test_unknown_profile_raises_value_error(self, tmp_config):
+        with pytest.raises(ValueError, match="nonexistent"):
+            load_config(tmp_config, profile_override="nonexistent")
 
     def test_default_path_resolves_to_project_root(self):
         """load_config() with no arguments should resolve to the real config.yaml."""
