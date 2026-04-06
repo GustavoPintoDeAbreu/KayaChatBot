@@ -2,19 +2,19 @@
 # KayaChatBot Python Dependencies — version-pinned for
 # reproducible Docker builds and local development.
 #
-# Pinned against: torch==2.6.0, CUDA 12.4, unsloth==2026.4.2
+# Pinned against: torch==2.9.1, CUDA 12.8, unsloth==2026.4.2
 #
 # To upgrade: bump the version here AND in Dockerfile, then
 # rebuild the image with --no-cache to test compatibility.
 # ============================================================
 
 # --- Unsloth fine-tuning stack ---
-# unsloth 2026.4.2: Gemma 4 support; xformers 0.0.29.post3 requires torch==2.6.0
-# torchao 0.17.0: required by unsloth-zoo 2026.4.2 (must NOT be uninstalled)
+# unsloth 2026.4.2: Gemma 4 support; xformers 0.0.33.post2 requires torch==2.9.1
+# torchao 0.17.0: requires torch>=2.7 (register_constant); compatible with torch 2.9.x
 unsloth==2026.4.2
 unsloth-zoo==2026.4.2
-xformers==0.0.29.post3  # requires torch==2.6.0
-torchao==0.17.0          # required by unsloth-zoo>=2026.4.2 (do NOT uninstall)
+xformers==0.0.33.post2  # requires torch==2.9.1
+torchao==0.17.0          # required by unsloth-zoo>=2026.4.2; needs torch>=2.7
 
 # --- Transformers ecosystem ---
 # 4.57.6: >=4.56.2 required by trl 0.29.1; not in unsloth-zoo blocklist

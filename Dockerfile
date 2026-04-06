@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -35,13 +35,14 @@ RUN pip install --no-cache-dir \
     "packaging==24.2" \
     "ninja==1.11.1.1"
 
-# Install PyTorch with CUDA 12.4 support (pinned for reproducibility)
-# torch 2.6.0: required by xformers 0.0.29.post3 and torchao 0.17.0 (unsloth-zoo 2026.4.2 dep)
+# Install PyTorch with CUDA 12.8 support (pinned for reproducibility)
+# torch 2.9.1: required by xformers 0.0.33.post2; torchao 0.17.0 now works (register_constant added in torch 2.7+)
+# unsloth-zoo 2026.4.2 requires torch>=2.4.0,<2.11.0 — torch 2.9.1 is within range
 RUN pip install --no-cache-dir \
-    torch==2.6.0 \
-    torchvision==0.21.0 \
-    torchaudio==2.6.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+    torch==2.9.1 \
+    torchvision==0.24.1 \
+    torchaudio==2.9.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 # Copy requirements file with pinned versions
 COPY requirements.txt ./
@@ -74,12 +75,12 @@ RUN pip install --no-cache-dir \
 
 # Install unsloth, unsloth-zoo and xformers
 # unsloth 2026.4.2 adds Gemma 4 support
-# xformers 0.0.29.post3 requires exactly torch==2.6.0
-# torchao>=0.13.0 is required by unsloth-zoo 2026.4.2 (do NOT uninstall)
+# xformers 0.0.33.post2 requires exactly torch==2.9.1
+# torchao 0.17.0: requires torch 2.7+ (register_constant); works with torch 2.9.1
 RUN pip install --no-cache-dir \
     unsloth==2026.4.2 \
     unsloth-zoo==2026.4.2 \
-    xformers==0.0.29.post3 \
+    xformers==0.0.33.post2 \
     torchao==0.17.0
 
 # Build and install flash-attention from source (takes ~5-10 minutes)
