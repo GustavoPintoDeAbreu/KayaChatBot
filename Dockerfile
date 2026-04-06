@@ -59,7 +59,7 @@ RUN pip install --no-cache-dir \
     "pandas==2.2.3" \
     "scipy==1.14.1" \
     "sentencepiece==0.2.1" \
-    "protobuf==5.29.2" \
+    "protobuf==5.29.6" \
     "tiktoken==0.9.0" \
     "python-dotenv==1.0.1" \
     "openai==1.109.1" \
