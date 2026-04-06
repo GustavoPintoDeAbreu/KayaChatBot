@@ -1,5 +1,5 @@
 """
-Quick inference test for the fine-tuned Kaya model (LoRA adapter on Qwen3-14B).
+Quick inference test for the fine-tuned Kaya model.
 Uses standard transformers + peft + bitsandbytes (no Unsloth needed for inference).
 
 Run locally:
@@ -14,27 +14,20 @@ from pathlib import Path
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Point HF to the model cache that was populated during Docker training
-ADAPTER_PATH = str(Path(__file__).parent.parent / "models" / "kaya_v2_synthetic")
-
-# Resolve base model from local snapshot cache (avoids permission issues with root-owned Docker volume)
-_cache_hub = Path(__file__).parent.parent / "models" / ".cache" / "hub"
-_model_cache = _cache_hub / "models--unsloth--qwen3-14b-bnb-4bit" / "snapshots"
-if _model_cache.exists():
-    BASE_MODEL = str(next(_model_cache.iterdir()))  # local path, no download needed
-else:
-    BASE_MODEL = "unsloth/qwen3-14b-bnb-4bit"
-MAX_NEW_TOKENS = 256
-
-# Load system prompt from config to stay in sync with production
+# Load adapter path and base model from config so this test always
+# stays in sync with the active model without manual edits here.
 import yaml as _yaml
+_PROJECT_ROOT = Path(__file__).parent.parent
 try:
-    _cfg_path = Path(__file__).parent.parent / "config.yaml"
+    _cfg_path = _PROJECT_ROOT / "config.yaml"
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
         _cfg = _yaml.safe_load(_f)
     SYSTEM_PROMPT = _cfg['data']['system_prompt']
+    _output_dir = _cfg['training']['output_dir'].lstrip('./')
+    ADAPTER_PATH = str(_PROJECT_ROOT / _output_dir)
+    _model_id = _cfg['model']['model_id']
 except Exception:
-    # Fallback — mirrors config.yaml system_prompt exactly
+    # Fallback defaults
     SYSTEM_PROMPT = (
         "És o bot assistente do grupo de amigos 'Kaya'. "
         "Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. "
@@ -42,6 +35,20 @@ except Exception:
         "Nunca fales na primeira pessoa sobre experiências pessoais com membros do grupo. "
         "Refere-te sempre aos membros na terceira pessoa."
     )
+    ADAPTER_PATH = str(_PROJECT_ROOT / "models" / "kaya_qwen3_14b")
+    _model_id = "unsloth/Qwen3-14B-bnb-4bit"
+
+# Resolve base model from local snapshot cache when available
+# (avoids permission issues with root-owned Docker volume)
+_cache_hub = _PROJECT_ROOT / "models" / ".cache" / "hub"
+_model_slug = _model_id.lower().replace("/", "--").replace("_", "-")
+_model_cache = _cache_hub / f"models--{_model_slug}" / "snapshots"
+if _model_cache.exists():
+    BASE_MODEL = str(next(_model_cache.iterdir()))  # local path, no download needed
+else:
+    BASE_MODEL = _model_id
+
+MAX_NEW_TOKENS = 256
 
 # A few representative test conversations
 TESTS = [

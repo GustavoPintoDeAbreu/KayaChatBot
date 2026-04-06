@@ -3,6 +3,11 @@ FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Image version label
+LABEL version="2.0.0" \
+      description="KayaChatBot — fine-tuning + RAG pipeline" \
+      maintainer="GustavoPintoDeAbreu"
+
 # Set working directory
 WORKDIR /app
 
@@ -22,62 +27,62 @@ RUN apt-get update && apt-get install -y \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
     update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
-# Upgrade pip, setuptools, wheel
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging ninja
+# Upgrade pip, setuptools, wheel (pinned for reproducibility)
+RUN pip install --no-cache-dir \
+    "pip==24.3.1" \
+    "setuptools==75.6.0" \
+    "wheel==0.45.1" \
+    "packaging==24.2" \
+    "ninja==1.11.1.1"
 
-# Install PyTorch with CUDA 12.4 support
+# Install PyTorch with CUDA 12.4 support (pinned for reproducibility)
 RUN pip install --no-cache-dir \
     torch==2.4.0 \
     torchvision==0.19.0 \
     torchaudio==2.4.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Copy requirements files
+# Copy requirements file with pinned versions
 COPY requirements.txt ./
 
-# Install core ML dependencies (flexible versions to avoid conflicts)
+# Install core ML dependencies (all versions pinned — see requirements.txt)
 RUN pip install --no-cache-dir \
-    transformers \
-    datasets \
-    peft \
-    trl \
-    accelerate \
-    bitsandbytes \
-    scikit-learn \
-    PyYAML \
-    numpy \
-    pandas \
-    scipy \
-    sentencepiece \
-    protobuf \
-    tiktoken \
-    python-dotenv \
-    openai \
-    xai-sdk \
-    chromadb \
-    sentence-transformers
+    transformers==4.51.3 \
+    trl==0.29.1 \
+    peft==0.15.2 \
+    accelerate==1.5.2 \
+    bitsandbytes==0.45.5 \
+    datasets==3.6.0 \
+    scikit-learn==1.6.1 \
+    "PyYAML==6.0.2" \
+    "numpy==1.26.4" \
+    "pandas==2.2.3" \
+    "scipy==1.14.1" \
+    "sentencepiece==0.2.1" \
+    "protobuf==5.29.2" \
+    "tiktoken==0.9.0" \
+    "python-dotenv==1.0.1" \
+    "openai==1.109.1" \
+    "xai-sdk==1.1.0" \
+    "chromadb==1.0.0" \
+    "sentence-transformers==3.4.1" \
+    "tqdm==4.67.1" \
+    "colorama==0.4.6" \
+    "ipython==8.30.0"
 
-# Install unsloth and unsloth-zoo
+# Install unsloth, unsloth-zoo and xformers
+# unsloth 2026.4.2 adds Gemma 4 support; xformers pinned for torch 2.4.0
 RUN pip install --no-cache-dir \
-    unsloth==2025.12.7 \
-    unsloth-zoo==2025.12.7 \
+    unsloth==2026.4.2 \
+    unsloth-zoo==2026.4.2 \
     xformers==0.0.27.post2
 
-# FIX: Uninstall torchao to avoid torch.int1 error with torch 2.4.0
-RUN pip uninstall -y torchao
-
-# FIX: Patch unsloth_zoo for torch._inductor.config error
-RUN sed -i "s/inductor_config_source = inspect.getsource(torch._inductor.config)/import torch._inductor.config; inductor_config_source = inspect.getsource(torch._inductor.config)/" /usr/local/lib/python3.10/dist-packages/unsloth_zoo/temporary_patches/common.py
+# FIX: Uninstall torchao to avoid torch.int1 incompatibility with torch 2.4.0
+RUN pip uninstall -y torchao 2>/dev/null || true
 
 # Build and install flash-attention from source (takes ~5-10 minutes)
 # This ensures compatibility with the specific CUDA/PyTorch setup
 RUN pip install --no-cache-dir flash-attn --no-build-isolation
-
-# Install additional utilities
-RUN pip install --no-cache-dir \
-    ipython \
-    tqdm \
-    colorama
 
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \
@@ -90,9 +95,10 @@ COPY src/ /app/src/
 COPY tests/ /app/tests/
 COPY config.docker.yaml /app/config.yaml
 COPY run_full_pipeline.py /app/
+COPY configs/ /app/configs/
 
 # Create necessary directories
-RUN mkdir -p /app/data /app/models /app/outputs
+RUN mkdir -p /app/data /app/models /app/outputs /app/reports/benchmarks
 
 # Health check: verify the Python environment is functional
 HEALTHCHECK --interval=60s --timeout=30s --retries=3 \

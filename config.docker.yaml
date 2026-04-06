@@ -120,9 +120,24 @@ knowledge_base:
     - frequently_discussed_topics
 
 # Model Settings
+# ─────────────────────────────────────────────────────────────────────────────
+# Model presets are stored in /app/configs/models/*.yaml for easy reference.
+# Set model_id below to switch between models.  Both options below fit in
+# 24 GB VRAM (RTX 3090) at 4-bit quantization.
+#
+# Option A — Qwen3-14B  (default / lighter, ~9 GB VRAM, 4096 context)
+#   model_id: "unsloth/Qwen3-14B-bnb-4bit"
+#   max_seq_length: 4096
+#   output_dir: "/app/models/kaya_qwen3_14b"
+#
+# Option B — Gemma 4 12B  (April 2026, ~8 GB VRAM, 8192 context)
+#   model_id: "unsloth/gemma-4-12b-it-bnb-4bit"
+#   max_seq_length: 8192
+#   output_dir: "/app/models/kaya_gemma4_12b"
+# ─────────────────────────────────────────────────────────────────────────────
 model:
   model_id: "unsloth/Qwen3-14B-bnb-4bit"
-  max_seq_length: 4096  # Start at 4096; test 8192 if VRAM allows (Qwen3 supports up to 128K)
+  max_seq_length: 4096  # Qwen3 supports up to 128K; raise to 8192 if VRAM allows
   load_in_4bit: true
   
   # LoRA settings
@@ -140,7 +155,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "/app/models/kaya_v2_synthetic"
+  output_dir: "/app/models/kaya_qwen3_14b"
   
   # Training hyperparameters (optimized for 2000+ synthetic examples)
   max_steps: 1500  # Reduced from 6000 to prevent overfitting (~1 epoch for larger dataset)
@@ -170,7 +185,7 @@ training:
   packing: false
 
   # Incremental retraining settings
-  resume_from_checkpoint: null  # Path to existing LoRA checkpoint (e.g. /app/models/kaya_v2_synthetic/); null = train from scratch
+  resume_from_checkpoint: null  # Path to existing LoRA checkpoint (e.g. /app/models/kaya_qwen3_14b/); null = train from scratch
   incremental_steps: 500  # Fewer steps for incremental training (vs 1500 for full retrain)
   incremental_learning_rate: 0.00005  # Lower LR to avoid catastrophic forgetting (5e-5 vs 1e-4)
 
