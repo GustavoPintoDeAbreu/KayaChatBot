@@ -178,26 +178,27 @@ jobs:
             ];
             const body = bodyLines.join('\n');
 
-            // Try to create the issue with copilot as assignee
-            let issue;
+            // Try to create the issue without assignee first, then assign Copilot separately
+            // (assignees: ['copilot'] in the create call silently fails — use the dedicated endpoint)
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['bug', 'priority:high', 'agent:bug-fixer'],
+            });
+
+            // Assign Copilot via the dedicated endpoint that triggers the coding agent
             try {
-              issue = await github.rest.issues.create({
+              await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: ['bug', 'priority:high', 'agent:bug-fixer'],
+                issue_number: issue.data.number,
                 assignees: ['copilot'],
               });
+              console.log(`Assigned Copilot to issue #${issue.data.number}`);
             } catch (assignErr) {
-              console.log('Could not assign to copilot, creating without assignee:', assignErr.message);
-              issue = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: ['bug', 'priority:high', 'agent:bug-fixer'],
-              });
+              console.log('Copilot assignment failed (agent will need manual assignment):', assignErr.message);
             }
 
             console.log(`Created issue #${issue.data.number}: ${title}`);
