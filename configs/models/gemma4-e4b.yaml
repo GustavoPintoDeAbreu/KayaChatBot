@@ -1,4 +1,4 @@
-# Model profile: Gemma 4 E4B (8B, fits on RTX 3090 24 GB)
+# Model profile: Gemma 4 E4B variant (approximately 8 billion active parameters, fits on RTX 3090 24 GB)
 # RTX 3090 VRAM budget: ~11 GB in 4-bit + LoRA (comfortable headroom)
 # NOTE: Gemma 4 uses <|turn> chat template tokens; thinking mode is disabled
 #       for SFT (do NOT add <|think|> to the system prompt during training).

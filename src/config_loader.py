@@ -16,13 +16,14 @@ Usage::
 """
 
 import copy
+import warnings
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict, override: dict) -> dict:
     """Recursively merge *override* into *base* (override wins on conflict).
 
     Nested dicts are merged recursively; all other types are replaced.
@@ -31,7 +32,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+            result[key] = deep_merge(result[key], value)
         else:
             result[key] = copy.deepcopy(value)
     return result
@@ -71,9 +72,11 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
 
     profiles = config.get("model_profiles", {})
     if profile_name not in profiles:
-        print(
-            f"⚠️  Warning: model profile '{profile_name}' not found in config. "
-            "Using top-level settings."
+        warnings.warn(
+            f"Model profile '{profile_name}' not found in config. "
+            "Using top-level settings.",
+            UserWarning,
+            stacklevel=2,
         )
         return config
 
@@ -81,8 +84,8 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
 
     # Deep-merge profile's model: and training: into the top-level sections.
     if "model" in profile:
-        config["model"] = _deep_merge(config.get("model", {}), profile["model"])
+        config["model"] = deep_merge(config.get("model", {}), profile["model"])
     if "training" in profile:
-        config["training"] = _deep_merge(config.get("training", {}), profile["training"])
+        config["training"] = deep_merge(config.get("training", {}), profile["training"])
 
     return config
