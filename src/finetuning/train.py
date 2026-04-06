@@ -1,6 +1,7 @@
 """
 Fine-Tuning Script
-Trains Qwen3-14B on WhatsApp chat data using LoRA and 4-bit quantization.
+Trains a Unsloth-compatible model on WhatsApp chat data using LoRA and 4-bit quantization.
+Supports both Qwen3-14B (default) and Gemma 4 12B — set model.model_id in config.yaml.
 """
 import os
 import sys

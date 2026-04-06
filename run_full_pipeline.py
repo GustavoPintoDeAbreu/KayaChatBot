@@ -242,7 +242,9 @@ def main():
     print("  📄 data/synthetic_kaya.jsonl", flush=True)
     print("  📄 data/train_synthetic.jsonl", flush=True)
     print("  📄 data/val_synthetic.jsonl", flush=True)
-    print("  🤖 models/kaya_v2_synthetic/ (fine-tuned model)", flush=True)
+    model_id = config.get('model', {}).get('model_id', '')
+    output_dir = config.get('training', {}).get('output_dir', 'models/')
+    print(f"  🤖 {output_dir}/ (fine-tuned model — {model_id})", flush=True)
 
 
 if __name__ == "__main__":

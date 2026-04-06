@@ -1,18 +1,50 @@
-unsloth
-xformers
-trl
-peft
-accelerate
-bitsandbytes
-datasets
-pandas
-scipy
-sentencepiece
-protobuf
-tiktoken
-tqdm
-python-dotenv
-openai
-xai-sdk
-chromadb
-sentence-transformers
+# ============================================================
+# KayaChatBot Python Dependencies — version-pinned for
+# reproducible Docker builds and local development.
+#
+# Pinned against: torch==2.4.0, CUDA 12.4, unsloth==2026.4.2
+#
+# To upgrade: bump the version here AND in Dockerfile, then
+# rebuild the image with --no-cache to test compatibility.
+# ============================================================
+
+# --- Unsloth fine-tuning stack ---
+# 2026.4.2 adds Gemma 4 support; xformers pinned to torch 2.4.0
+unsloth==2026.4.2
+unsloth-zoo==2026.4.2
+xformers==0.0.27.post2
+
+# --- Transformers ecosystem ---
+# 4.51.x: native Qwen3 support; Unsloth handles Gemma 4 internally
+transformers==4.51.3
+trl==0.29.1
+peft==0.15.2
+accelerate==1.5.2
+bitsandbytes==0.45.5
+datasets==3.6.0
+
+# --- RAG / vector database ---
+chromadb==1.0.0
+sentence-transformers==3.4.1
+
+# --- Data science ---
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.14.1
+scikit-learn==1.6.1
+PyYAML==6.0.2
+
+# --- Tokenization ---
+sentencepiece==0.2.1
+protobuf==5.29.2
+tiktoken==0.9.0
+
+# --- LLM providers ---
+openai==1.109.1
+xai-sdk==1.1.0
+
+# --- Utilities ---
+tqdm==4.67.1
+python-dotenv==1.0.1
+colorama==0.4.6
+ipython==8.30.0

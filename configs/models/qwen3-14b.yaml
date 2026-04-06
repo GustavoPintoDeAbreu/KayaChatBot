@@ -1,0 +1,28 @@
+# ============================================================
+# Model preset: Qwen3-14B (default / lighter model)
+# ============================================================
+# Best for: RTX 3090 (24 GB VRAM) — uses ~9 GB at 4-bit.
+# Supports context lengths up to 128 K; we default to 4096
+# for training stability and to leave headroom for LoRA.
+# ============================================================
+
+model_id: "unsloth/Qwen3-14B-bnb-4bit"
+max_seq_length: 4096
+load_in_4bit: true
+
+# LoRA adapter settings
+lora_r: 32
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+
+# Output directory for this model's checkpoints
+training_output_dir: "./models/kaya_qwen3_14b"
+docker_output_dir: "/app/models/kaya_qwen3_14b"
