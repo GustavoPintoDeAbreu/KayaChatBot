@@ -5,7 +5,6 @@ Allows the user to chat with the fine-tuned Kaya model with RAG support.
 import os
 import sys
 import json
-import yaml
 import torch
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextStreamer
@@ -13,6 +12,8 @@ from peft import PeftModel
 
 # Add parent directory to path for imports (Docker compatibility)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from src.config_loader import load_config
 
 try:
     from src.chat.memory import SessionMemory
@@ -34,8 +35,7 @@ def main():
     local_config = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
     config_path = docker_config if os.path.exists(docker_config) else local_config
 
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
 
     model_dir = config['training']['output_dir']
     base_system_prompt = config['data']['system_prompt']
