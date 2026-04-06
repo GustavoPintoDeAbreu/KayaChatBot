@@ -46,8 +46,9 @@ RUN pip install --no-cache-dir \
 COPY requirements.txt ./
 
 # Install core ML dependencies (all versions pinned — see requirements.txt)
+# transformers 4.57.6: latest stable 4.x; required >= 4.56.2 by trl 0.29.1
 RUN pip install --no-cache-dir \
-    transformers==4.51.3 \
+    transformers==4.57.6 \
     trl==0.29.1 \
     peft==0.15.2 \
     accelerate==1.5.2 \

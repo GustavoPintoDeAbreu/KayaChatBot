@@ -16,7 +16,7 @@ xformers==0.0.27.post2
 
 # --- Transformers ecosystem ---
 # 4.51.x: native Qwen3 support; Unsloth handles Gemma 4 internally
-transformers==4.51.3
+transformers==4.57.6  # trl==0.29.1 requires >=4.56.2
 trl==0.29.1
 peft==0.15.2
 accelerate==1.5.2
