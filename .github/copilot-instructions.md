@@ -37,6 +37,8 @@ KayaChatBot is an AI assistant bot for a Portuguese friend group chat called **K
 
 ## Key File Locations
 - **Central config**: `config.yaml` (local), `config.docker.yaml` (Docker overrides)
+- **Config loader**: `src/config_loader.py` — `load_config(path, profile_override=None)` resolves the active model profile; all config consumers must use this
+- **Model profiles**: `configs/models/*.yaml` — per-model preset files; also declared in `config.yaml` under `model_profiles`
 - **RAG retriever**: `src/chat/retriever.py` — semantic search over ChromaDB
 - **Inference engine**: `src/chat/inference.py` — model loading and generation
 - **Chat loop**: `src/chat/chat.py` — interactive chat with always-on RAG
@@ -94,10 +96,31 @@ Human reviews and approves → merge → issue auto-closes
 
 **All agents**: When opening fix PRs, always include `Fixes #N` in the description, never self-merge, keep a clean commit history, and ensure tests pass before requesting review.
 
+## Hardware Constraints
+- **GPU**: NVIDIA RTX 3090 — 24 GB VRAM (self-hosted runner)
+- **System RAM**: 32 GB
+- **CUDA**: 12.4
+- **VRAM budget per model profile** (training, 4-bit + LoRA):
+  - `qwen3-14b`: ~15 GB (safe)
+  - `gemma4-e4b`: ~11 GB (comfortable headroom)
+- Always leave at least 2 GB VRAM headroom to avoid OOM during training.
+- If a training job OOMs: reduce `lora_r` to 8 and/or `max_seq_length` to 2048 as fallback.
+
+## Model Profiles
+- Model profiles live in `configs/models/*.yaml` and are also declared in `config.yaml` under `model_profiles`.
+- Switch the active model by changing `active_model_profile` in `config.yaml` (or passing `--profile <name>` on the CLI).
+- Config is resolved via `src/config_loader.py` — `load_config(path, profile_override=None)` deep-merges the active profile into `model:` and `training:` sections. All config consumers must use this loader.
+- **Available profiles**:
+  - `qwen3-14b` — `unsloth/Qwen3-14B-bnb-4bit`, seq 4096, lora_r 32, output `models/kaya_qwen3_14b`
+  - `gemma4-e4b` — `unsloth/gemma-4-E4B-it-unsloth-bnb-4bit` (8B), seq 4096, lora_r 16, output `models/kaya_gemma4_e4b`
+- **Gemma 4 notes**: uses `<|turn>` chat template tokens and supports `<|think|>` thinking mode. Thinking mode must be **disabled** for SFT (do not add `<|think|>` to the system prompt during training). Unsloth handles the chat template via `tokenizer.apply_chat_template()` automatically when using `FastLanguageModel`.
+- **Excluded**: Gemma 4 26B-A4B (MoE) — Unsloth explicitly warns against QLoRA for MoE models; bf16 LoRA would require ~28 GB VRAM, exceeding the RTX 3090 budget.
+
 ## GPU Constraints
 - The Copilot coding agent runs on GitHub-hosted runners — **no GPU available**.
 - For model-related tasks (fine-tuning, inference testing, evaluation), the agent modifies code/config **only**. It must never attempt to run training commands (`python src/finetuning/train.py`, `docker-compose up`, etc.).
-- GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (user's local GPU machine) when a PR touches training-related files.
+- GPU execution is handled automatically by `.github/workflows/gpu-pipeline.yml`, which runs on the **self-hosted runner** (RTX 3090, runner ID #2) when a PR touches training-related files.
+- **Copilot cloud mode**: VS Code cloud agents run on GitHub-hosted runners (no GPU), but they create PRs that automatically trigger `gpu-pipeline.yml` on the self-hosted RTX 3090 runner. This enables a fully autonomous issue→PR→train→benchmark loop without VS Code being open.
 - Training modes: `finetune` (default for PRs, 240 min timeout), `full-pipeline` (240 min), `evaluate` (10 min), `inference-test` (10 min), `benchmark` (60 min).
 - Training results (loss, duration, steps) are posted back to the PR as a comment by the workflow.
 - **PR trigger paths**: Any PR touching `src/**`, `Dockerfile`, `docker-compose.yml`, `requirements.txt`, `config.docker.yaml`, `data/*.jsonl`, `run_full_pipeline.py`, or `.github/scripts/**` automatically triggers the GPU Pipeline on the self-hosted runner.
