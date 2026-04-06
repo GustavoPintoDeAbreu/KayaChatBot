@@ -231,7 +231,7 @@ def main():
     # Training step
     # ------------------------------------------------------------------
     print("\n🚀 Starting model training...", flush=True)
-    train_extra_args = ["--profile", profile_arg] if profile_arg else []
+    train_extra_args = ["--profile", profile_arg] if profile_arg is not None else []
     if not run_script(
         BASE_DIR / "src/finetuning/train.py",
         f"Step {step_train}: Model Training",

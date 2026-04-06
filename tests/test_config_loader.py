@@ -16,7 +16,7 @@ import yaml
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config_loader import load_config, _deep_merge
+from src.config_loader import load_config, deep_merge
 
 
 # ---------------------------------------------------------------------------
@@ -27,13 +27,13 @@ class TestDeepMerge:
     def test_simple_override(self):
         base = {"a": 1, "b": 2}
         override = {"b": 99, "c": 3}
-        result = _deep_merge(base, override)
+        result = deep_merge(base, override)
         assert result == {"a": 1, "b": 99, "c": 3}
 
     def test_nested_merge(self):
         base = {"model": {"id": "base_model", "lora_r": 32, "extra": "keep"}}
         override = {"model": {"id": "new_model", "lora_r": 16}}
-        result = _deep_merge(base, override)
+        result = deep_merge(base, override)
         assert result["model"]["id"] == "new_model"
         assert result["model"]["lora_r"] == 16
         assert result["model"]["extra"] == "keep"  # unaffected key preserved
@@ -41,13 +41,13 @@ class TestDeepMerge:
     def test_no_mutation_of_base(self):
         base = {"a": {"x": 1}}
         override = {"a": {"x": 2}}
-        _deep_merge(base, override)
+        deep_merge(base, override)
         assert base["a"]["x"] == 1  # base must not be modified
 
     def test_list_replacement(self):
         base = {"modules": ["a", "b"]}
         override = {"modules": ["c", "d"]}
-        result = _deep_merge(base, override)
+        result = deep_merge(base, override)
         assert result["modules"] == ["c", "d"]
 
 
@@ -128,12 +128,10 @@ class TestLoadConfig:
         config = load_config(tmp_config, profile_override="")
         assert config["model"]["model_id"] == "base_model"
 
-    def test_unknown_profile_falls_back_gracefully(self, tmp_config, capsys):
-        config = load_config(tmp_config, profile_override="nonexistent")
+    def test_unknown_profile_falls_back_gracefully(self, tmp_config):
+        with pytest.warns(UserWarning, match="nonexistent"):
+            config = load_config(tmp_config, profile_override="nonexistent")
         assert config["model"]["model_id"] == "base_model"
-        captured = capsys.readouterr()
-        assert "Warning" in captured.out
-        assert "nonexistent" in captured.out
 
     def test_default_path_resolves_to_project_root(self):
         """load_config() with no arguments should resolve to the real config.yaml."""
