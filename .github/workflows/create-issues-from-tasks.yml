@@ -82,29 +82,29 @@ jobs:
               }
 
               try {
-                // Try creating with Copilot as assignee first
-                let issue;
+                // Create issue without assignee first
+                const issue = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: task.title,
+                  body: body,
+                  labels: labels
+                });
+                console.log(`Created issue #${issue.data.number}: ${task.title}`);
+
+                // Assign Copilot via the dedicated API endpoint (different from regular assignee)
+                // This triggers the Copilot coding agent to start working on the issue immediately.
                 try {
-                  issue = await github.rest.issues.create({
+                  await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
                     owner: context.repo.owner,
                     repo: context.repo.repo,
-                    title: task.title,
-                    body: body,
-                    labels: labels,
+                    issue_number: issue.data.number,
                     assignees: ['copilot']
                   });
-                } catch (assignErr) {
-                  // Copilot assignee may not be available — create without it
-                  console.log(`Note: Could not assign to copilot, creating issue without assignee.`);
-                  issue = await github.rest.issues.create({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    title: task.title,
-                    body: body,
-                    labels: labels
-                  });
+                  console.log(`Assigned Copilot to issue #${issue.data.number}`);
+                } catch (copilotErr) {
+                  console.log(`Note: Copilot assignment failed (${copilotErr.message}), issue created without agent assignment.`);
                 }
-                console.log(`Created issue #${issue.data.number}: ${task.title}`);
               } catch (err) {
                 console.error(`Failed to create issue "${task.title}": ${err.message}`);
               }
