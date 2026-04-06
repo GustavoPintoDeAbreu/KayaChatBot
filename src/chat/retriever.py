@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
-import yaml
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+from src.config_loader import load_config
+config = load_config(str(CONFIG_PATH))
 
 # RAG Configuration
 RAG_CONFIG = config['rag']

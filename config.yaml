@@ -262,3 +262,55 @@ benchmark:
     - 256
     - 384
     - 512
+
+# Active model profile — overrides model: and training: sections when set.
+# Set to null to use top-level values as-is (backward compatible).
+# Switch by changing this value or passing --profile <name> on the CLI.
+active_model_profile: "qwen3-14b"
+
+# Model profiles — each profile overrides specific model: and training: keys.
+# Deep-merged into the top-level sections by src/config_loader.py.
+model_profiles:
+  qwen3-14b:
+    model:
+      model_id: "unsloth/Qwen3-14B-bnb-4bit"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 32
+      lora_alpha: 32
+      lora_dropout: 0.05
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_qwen3_14b"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.0001
+
+  gemma4-e4b:
+    model:
+      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 16
+      lora_dropout: 0.0
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_e4b"
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 4
+      learning_rate: 0.00005
