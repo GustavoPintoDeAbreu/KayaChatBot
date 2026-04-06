@@ -1,6 +1,11 @@
 # Kaya ChatBot Fine-Tuning Configuration (Docker Version)
 # All paths use Linux conventions for Docker container
 
+# Active model profile — overrides model: and training: sections with profile preset.
+# Configures Gemma 4 E4B as the active model for GPU pipeline training.
+# Switch to qwen3-14b to use the Qwen3-14B baseline configuration.
+active_model_profile: gemma4-e4b
+
 # Test Mode Settings
 # Set enabled: true for quick testing with minimal data/epochs
 # Set enabled: false for full production runs
@@ -197,3 +202,43 @@ rag:
     file: "/app/data/group_knowledge.json"
     collection_name: "kaya_knowledge_base"
     top_k: 3
+
+# Benchmark Settings
+benchmark:
+  scenarios_per_config: 10
+  output_dir: "/app/reports/benchmarks/"
+  golden_tests_file: "/app/data/golden_test_conversations.json"
+  judge_provider: "xai"
+  identity_failure_threshold: 3.0
+  factual_failure_threshold: 3.0
+  dimensions:             # which dimensions to test (comment out to disable)
+    - knowledge_approaches
+    - languages
+    # - context_sizes
+    - models              # compare trained model checkpoints side by side
+    # - max_new_tokens
+
+  # Values for each dimension
+  knowledge_approaches:
+    - "both"
+    - "json_only"
+    - "chromadb_only"
+    - "none"
+  languages:
+    - "pt"
+    - "en"
+  context_sizes:
+    - max_seq_length: 2048
+      top_k: 3
+    - max_seq_length: 4096
+      top_k: 5
+    - max_seq_length: 8192
+      top_k: 10
+  models:
+    - "/app/models/kaya_qwen3_14b"
+    - "/app/models/kaya_gemma4_e4b"
+
+  max_new_tokens_values:
+    - 256
+    - 384
+    - 512

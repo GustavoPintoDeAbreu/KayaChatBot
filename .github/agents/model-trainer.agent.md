@@ -62,6 +62,27 @@ You can also ask for a specific mode in the PR description, e.g.: "Please trigge
 - The `Dockerfile` and `docker-compose.yml` are GPU-configured (NVIDIA runtime, CUDA 12.4). Only change them if adding new Python dependencies or system packages.
 - If a task requires GPU compute to validate (e.g., testing a new LoRA rank), note this clearly in the PR — the GPU pipeline will provide the validation.
 
+## VRAM Budget (RTX 3090 — 24 GB)
+
+| Profile       | Model                                      | VRAM (4-bit + LoRA) | Status             |
+|---------------|--------------------------------------------|---------------------|--------------------|
+| `qwen3-14b`   | `unsloth/Qwen3-14B-bnb-4bit`               | ~15 GB              | Safe               |
+| `gemma4-e4b`  | `unsloth/gemma-4-E4B-it-unsloth-bnb-4bit`  | ~11 GB              | Comfortable        |
+
+Both profiles are within the 24 GB budget with at least 2 GB headroom.
+
+**OOM Fallback** — If a training job hits an out-of-memory error, reduce in this order:
+1. Set `lora_r: 8` (and `lora_alpha: 8`) in the relevant profile YAML.
+2. Set `max_seq_length: 2048` in the profile YAML.
+3. Reduce `per_device_train_batch_size` to 1 and increase `gradient_accumulation_steps` to compensate.
+
+## Model Profiles
+
+Profile YAML files live in `configs/models/`. Switch the active model by changing `active_model_profile` in `config.yaml` (local) or `config.docker.yaml` (Docker/GPU pipeline).
+
+- **`qwen3-14b`**: `unsloth/Qwen3-14B-bnb-4bit`, seq=4096, lora_r=32, output `models/kaya_qwen3_14b`
+- **`gemma4-e4b`**: `unsloth/gemma-4-E4B-it-unsloth-bnb-4bit` (8B active params), seq=4096, lora_r=16, output `models/kaya_gemma4_e4b`. Uses `<|turn>` chat template; thinking mode must be **disabled** during SFT.
+
 ## A/B Dataset Comparison
 
 When asked to improve training data quality (e.g. reduce identity confusion, add more diverse scenarios), use the A/B comparison workflow:

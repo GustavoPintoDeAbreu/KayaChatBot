@@ -234,7 +234,7 @@ benchmark:
     - knowledge_approaches
     - languages
     # - context_sizes     # uncomment to also vary max_seq_length and top_k
-    # - models            # uncomment to also vary model IDs
+    - models              # compare trained model checkpoints side by side
     # - max_new_tokens    # uncomment to sweep generation length (latency vs quality)
 
   # Values for each dimension
@@ -253,7 +253,11 @@ benchmark:
       top_k: 5
     - max_seq_length: 8192
       top_k: 10
-  models: []   # populated at runtime with checkpoint paths
+  models:
+    # Both checkpoint directories must exist (i.e. training has completed) before running the benchmark.
+    # The benchmark skips gracefully if a path is missing.
+    - "./models/kaya_qwen3_14b"
+    - "./models/kaya_gemma4_e4b"
 
   # max_new_tokens sweep: test different generation lengths (quality vs latency).
   # The benchmark measures quality scores, tokens/sec, and VRAM for each value.
