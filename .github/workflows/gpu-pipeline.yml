@@ -22,6 +22,7 @@ on:
         type: choice
         options:
           - finetune
+          - finetune-compare
           - evaluate
           - inference-test
           - full-pipeline
@@ -29,6 +30,11 @@ on:
           - judge-eval
           - compare
           - generate-datasets
+      profile:
+        description: "Model profile to use (e.g. qwen3-14b, gemma4-e4b). Leave blank to use active_model_profile from config."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -51,8 +57,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=finetune" >> "$GITHUB_OUTPUT"
+            echo "profile=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Prepare environment
@@ -103,14 +111,34 @@ jobs:
         timeout-minutes: 240
         continue-on-error: true
         run: |
-          docker-compose run --rm kaya-chatbot python src/finetuning/train.py 2>&1 | tee pipeline_output.log
+          PROFILE_ARG=""
+          if [[ -n "${{ steps.mode.outputs.profile }}" ]]; then
+            PROFILE_ARG="--profile ${{ steps.mode.outputs.profile }}"
+          fi
+          docker-compose run --rm kaya-chatbot python src/finetuning/train.py $PROFILE_ARG 2>&1 | tee pipeline_output.log
+
+      - name: Run finetune-compare (train both profiles sequentially and benchmark)
+        if: steps.mode.outputs.mode == 'finetune-compare'
+        timeout-minutes: 240
+        continue-on-error: true
+        run: |
+          echo "=== FINETUNE COMPARE: Training Qwen3-14B ==="
+          docker-compose run --rm kaya-chatbot python src/finetuning/train.py --profile qwen3-14b 2>&1 | tee pipeline_output_qwen3.log
+          echo "=== FINETUNE COMPARE: Training Gemma 4 E4B ==="
+          docker-compose run --rm kaya-chatbot python src/finetuning/train.py --profile gemma4-e4b 2>&1 | tee pipeline_output_gemma4.log
+          cat pipeline_output_qwen3.log pipeline_output_gemma4.log > pipeline_output.log
+          echo "TRAINING COMPLETED: qwen3-14b and gemma4-e4b" >> pipeline_output.log
 
       - name: Run full pipeline
         if: steps.mode.outputs.mode == 'full-pipeline'
         timeout-minutes: 240
         continue-on-error: true
         run: |
-          docker-compose run --rm kaya-chatbot python run_full_pipeline.py 2>&1 | tee pipeline_output.log
+          PROFILE_ARG=""
+          if [[ -n "${{ steps.mode.outputs.profile }}" ]]; then
+            PROFILE_ARG="--profile ${{ steps.mode.outputs.profile }}"
+          fi
+          docker-compose run --rm kaya-chatbot python run_full_pipeline.py $PROFILE_ARG 2>&1 | tee pipeline_output.log
 
       - name: Run evaluate (test suite)
         if: steps.mode.outputs.mode == 'evaluate'
