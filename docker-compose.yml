@@ -1,11 +1,16 @@
 services:
-  kaya-chatbot:
+  # ──────────────────────────────────────────────────────────────
+  # Base service definition — shared by all profiles.
+  # Concrete services (train / infer / data) extend this via
+  # Docker Compose's 'extends' directive so all GPU/volume/env
+  # settings are inherited automatically.
+  # ──────────────────────────────────────────────────────────────
+  kaya-base:
     build:
       context: .
       dockerfile: Dockerfile
-    image: kaya-chatbot:latest
-    container_name: kaya-chatbot
-    
+    image: kaya-chatbot:2.0.0
+
     # Enable single GPU support
     deploy:
       resources:
@@ -14,34 +19,80 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    
-    # Mount volumes (Windows paths mapped to Linux paths)
+
+    # Volume mounts shared by all services
     volumes:
       - ./data:/app/data
       - ./models:/app/models
       - ./src:/app/src:ro
+      - ./configs:/app/configs:ro
       - ./config.docker.yaml:/app/config.yaml:ro
-      - ./.env:/app/.env:ro  # Mount .env file
-    
+      - ./.env:/app/.env:ro
+
     # Load environment variables from .env file
     env_file:
       - .env
-    
+
     # Environment variables for GPU and caching
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-    
-    # Keep container running for interactive use
+
     stdin_open: true
     tty: true
-    
     working_dir: /app
-    
-    # Run the full pipeline automatically on container start
-    command: python run_full_pipeline.py
-    
-    # Runtime configuration
     runtime: nvidia
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-chatbot  — default service (no profile required).
+  # Runs the full pipeline (data → training → vector DB).
+  # Usage: docker-compose up kaya-chatbot
+  #        docker-compose run --rm kaya-chatbot python <script>
+  # ──────────────────────────────────────────────────────────────
+  kaya-chatbot:
+    extends:
+      service: kaya-base
+    container_name: kaya-chatbot
+    command: python run_full_pipeline.py
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-train  [profile: train]
+  # Runs only the fine-tuning step against the pre-built dataset.
+  # Usage: docker-compose --profile train up kaya-train
+  #        docker-compose --profile train run --rm kaya-train
+  # ──────────────────────────────────────────────────────────────
+  kaya-train:
+    extends:
+      service: kaya-base
+    container_name: kaya-train
+    profiles: [train]
+    command: python src/finetuning/train.py
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-infer  [profile: infer]
+  # Launches the interactive chat interface with RAG enabled.
+  # Usage: docker-compose --profile infer run --rm kaya-infer
+  # ──────────────────────────────────────────────────────────────
+  kaya-infer:
+    extends:
+      service: kaya-base
+    container_name: kaya-infer
+    profiles: [infer]
+    command: python src/chat/chat.py
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-data  [profile: data]
+  # Rebuilds the ChromaDB vector database from existing knowledge
+  # files (data/group_knowledge.json + data/all_messages_cleaned.jsonl).
+  # No training performed — useful after adding new knowledge entries.
+  # Usage: docker-compose --profile data up kaya-data
+  # ──────────────────────────────────────────────────────────────
+  kaya-data:
+    extends:
+      service: kaya-base
+    container_name: kaya-data
+    profiles: [data]
+    command: python src/data/build_vector_db.py
+
