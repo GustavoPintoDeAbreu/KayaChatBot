@@ -36,10 +36,11 @@ RUN pip install --no-cache-dir \
     "ninja==1.11.1.1"
 
 # Install PyTorch with CUDA 12.4 support (pinned for reproducibility)
+# torch 2.6.0: required by xformers 0.0.29.post3 and torchao 0.17.0 (unsloth-zoo 2026.4.2 dep)
 RUN pip install --no-cache-dir \
-    torch==2.4.0 \
-    torchvision==0.19.0 \
-    torchaudio==2.4.0 \
+    torch==2.6.0 \
+    torchvision==0.21.0 \
+    torchaudio==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Copy requirements file with pinned versions
@@ -72,14 +73,14 @@ RUN pip install --no-cache-dir \
     "ipython==8.30.0"
 
 # Install unsloth, unsloth-zoo and xformers
-# unsloth 2026.4.2 adds Gemma 4 support; xformers pinned for torch 2.4.0
+# unsloth 2026.4.2 adds Gemma 4 support
+# xformers 0.0.29.post3 requires exactly torch==2.6.0
+# torchao>=0.13.0 is required by unsloth-zoo 2026.4.2 (do NOT uninstall)
 RUN pip install --no-cache-dir \
     unsloth==2026.4.2 \
     unsloth-zoo==2026.4.2 \
-    xformers==0.0.27.post2
-
-# FIX: Uninstall torchao to avoid torch.int1 incompatibility with torch 2.4.0
-RUN pip uninstall -y torchao 2>/dev/null || true
+    xformers==0.0.29.post3 \
+    torchao==0.17.0
 
 # Build and install flash-attention from source (takes ~5-10 minutes)
 # This ensures compatibility with the specific CUDA/PyTorch setup
