@@ -47,6 +47,7 @@ COPY requirements.txt ./
 
 # Install core ML dependencies (all versions pinned — see requirements.txt)
 # transformers 4.57.6: latest stable 4.x; required >= 4.56.2 by trl 0.29.1
+# Verified fix for issue #39: trl 0.29.1 incompatibility with transformers < 4.56.2
 RUN pip install --no-cache-dir \
     transformers==4.57.6 \
     trl==0.29.1 \
