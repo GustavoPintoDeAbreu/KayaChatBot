@@ -6,7 +6,6 @@ Creates chunks of conversation history and stores them with embeddings.
 import json
 import os
 import re
-import yaml
 from pathlib import Path
 from typing import List, Dict, Any
 from collections import defaultdict
@@ -16,8 +15,8 @@ import tiktoken
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+from src.config_loader import load_config
+config = load_config(str(CONFIG_PATH))
 
 # RAG Configuration
 RAG_CONFIG = config['rag']
