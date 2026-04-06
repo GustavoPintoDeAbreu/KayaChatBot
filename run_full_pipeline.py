@@ -16,7 +16,6 @@ import argparse
 import subprocess
 import sys
 import os
-import yaml
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -33,8 +32,12 @@ else:
 
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
+# Import config_loader (project root must be on path)
+sys.path.insert(0, str(BASE_DIR))
+from src.config_loader import load_config
 
-def run_script(script_path: Path, description: str) -> bool:
+
+def run_script(script_path: Path, description: str, extra_args: list = None) -> bool:
     """Run a Python script and return True on success."""
     print("\n" + "=" * 60, flush=True)
     print(f"🚀 {description}", flush=True)
@@ -42,7 +45,7 @@ def run_script(script_path: Path, description: str) -> bool:
 
     try:
         subprocess.run(
-            [PYTHON, str(script_path)],
+            [PYTHON, str(script_path)] + (extra_args or []),
             cwd=str(BASE_DIR),
             check=True,
             capture_output=False,
@@ -69,16 +72,22 @@ def main():
         choices=["a", "b"],
         help="A/B variant label for output dataset files (e.g. 'a' → train_synthetic_a.jsonl).",
     )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Model profile name (overrides active_model_profile in config.yaml).",
+    )
     args = parser.parse_args()
     dataset_variant = args.dataset_variant
+    profile_arg = args.profile
 
     print("=" * 60, flush=True)
     print("🎯 KAYA CHATBOT - FULL PIPELINE", flush=True)
     print("=" * 60, flush=True)
 
-    # Load config to decide pipeline mode
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    # Load config to decide pipeline mode (profile applied for model/training resolution)
+    config = load_config(str(CONFIG_PATH), profile_override=profile_arg)
 
     skip_synthetic: bool = config.get('pipeline', {}).get('skip_synthetic', False)
     generate_knowledge: bool = config.get('pipeline', {}).get('generate_knowledge', False)
@@ -222,9 +231,11 @@ def main():
     # Training step
     # ------------------------------------------------------------------
     print("\n🚀 Starting model training...", flush=True)
+    train_extra_args = ["--profile", profile_arg] if profile_arg else []
     if not run_script(
         BASE_DIR / "src/finetuning/train.py",
         f"Step {step_train}: Model Training",
+        extra_args=train_extra_args,
     ):
         print(f"\n❌ Pipeline failed at Step {step_train}", flush=True)
         return

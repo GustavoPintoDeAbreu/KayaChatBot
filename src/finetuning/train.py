@@ -2,10 +2,10 @@
 Fine-Tuning Script
 Trains Qwen3-14B on WhatsApp chat data using LoRA and 4-bit quantization.
 """
+import argparse
 import os
 import sys
 from pathlib import Path
-import yaml
 import torch
 import builtins
 import psutil
@@ -20,13 +20,23 @@ builtins.psutil = psutil
 from datasets import load_dataset
 
 from src.finetuning.trainer import KayaTrainer
+from src.config_loader import load_config
 
 
 def main():
     print("=" * 60)
     print("Fine-Tuning Pipeline")
     print("=" * 60)
-    
+
+    parser = argparse.ArgumentParser(description="KayaChatBot fine-tuning script.")
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Model profile name (overrides active_model_profile in config.yaml).",
+    )
+    args = parser.parse_args()
+
     # Check CUDA availability
     print(f"\n\U0001f50d GPU Check:")
     print(f"   CUDA available: {torch.cuda.is_available()}")
@@ -45,8 +55,7 @@ def main():
     # Load configuration
     config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
     print(f"\n1. Loading configuration from {config_path}")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path, profile_override=args.profile)
     
     # Check test mode
     test_mode = config['test_mode']['enabled']

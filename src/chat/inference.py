@@ -2,22 +2,32 @@
 Inference Script
 Tests the fine-tuned model with sample prompts.
 """
+import argparse
 import os
-import yaml
 import torch
 from unsloth import FastLanguageModel
+
+from src.config_loader import load_config
 
 
 def main():
     print("=" * 60)
     print("Inference Pipeline")
     print("=" * 60)
-    
+
+    parser = argparse.ArgumentParser(description="KayaChatBot inference script.")
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Model profile name (overrides active_model_profile in config.yaml).",
+    )
+    args = parser.parse_args()
+
     # Load configuration
     config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
     print(f"\n1. Loading configuration...")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path, profile_override=args.profile)
     
     model_dir = config['training']['output_dir']
     max_seq_length = config['model']['max_seq_length']
