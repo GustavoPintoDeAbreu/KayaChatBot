@@ -70,6 +70,11 @@ models/
 *.pt
 checkpoint-*/
 
+# Exception: model profile YAML files in configs/ are config, not model weights
+!configs/
+!configs/models/
+!configs/models/*.yaml
+
 # ===================================
 # Training Outputs
 # ===================================
