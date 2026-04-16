@@ -1,6 +1,6 @@
 # KayaChatBot
 
-An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using Qwen3-14B with LoRA.
+An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using LoRA fine-tuning. Supports multiple model profiles including Qwen3-14B and Gemma 4 E4B (8B).
 
 ## 🎯 Overview
 
@@ -400,6 +400,38 @@ With ~20K messages and 2000+ synthetic conversations:
 - Model learns facts, events, and relationships from shared conversation history
 - Responses feel grounded in real group memories
 - Communicates naturally in European Portuguese and English
+
+## ⚠️ Things to Be Aware Of
+
+### PEFT `float8_e8m0fnu` Patch
+Current PEFT (0.19.0) has a bug where it checks for `torch.float8_e8m0fnu` dtype which doesn't exist in PyTorch 2.6. Two files in the venv are manually patched with `hasattr` guards:
+- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/tuners_utils.py`
+- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/lora/layer.py`
+
+**If you reinstall or upgrade PEFT, these patches need to be reapplied.** The patch wraps `torch.float8_e8m0fnu` references in `hasattr(torch, "float8_e8m0fnu")` checks.
+
+### Training Memory (OOM)
+The training script (`src/finetuning/train.py`) uses a flat code path — it calls `SFTTrainer` directly without a wrapper class. This was done because a previous `KayaTrainer` wrapper caused unexplained memory spikes (1.4 GB → 20+ GB RSS) during `SFTTrainer.__init__`. Key settings that prevent OOM:
+- `skip_memory_metrics=True` — avoids the HF `TrainerMemoryTracker` busy-loop
+- `dataset_num_proc=1` — prevents fork-based memory duplication
+- `dataloader_pin_memory=False` and `dataloader_num_workers=0` — reduces memory overhead
+- Do **not** set `builtins.psutil` or run background memory monitor threads during training
+
+### Gemma 4 Specifics
+- Uses `FastModel` (not `FastLanguageModel`) with Unsloth ≥2026.4.5
+- Chat template: `get_chat_template(tokenizer, "gemma-4")` — produces `<|turn>user\n...<turn|>\n` format
+- Thinking mode (`<|think|>`) must be **disabled** during SFT training
+- `autocast_adapter_dtype=False` is required for PEFT compatibility
+- **Model class**: `Gemma4ForConditionalGeneration` — NOT registered with `AutoModelForCausalLM`. Inference code must use `Gemma4ForConditionalGeneration.from_pretrained()` or Unsloth's `FastModel` instead.
+- **Processor vs tokenizer**: Unsloth returns a `Gemma4Processor` (not a plain tokenizer). When tokenizing text, always pass `text=` as a keyword argument: `tokenizer(text=input_text, ...)`. Positional args are interpreted as `images` and will crash.
+
+### Training Checkpoints
+After training, only the best-eval-loss checkpoint is kept (e.g., `checkpoint-1200`). The final adapter is saved at the output directory root. If you need to roll back, load from the checkpoint subdirectory.
+
+### Package Version Pins
+- `trl<=0.24.0` — newer versions have breaking API changes with `SFTConfig`
+- `unsloth>=2026.4.5` — required for Gemma 4 support via `FastModel`
+- `transformers>=5.5.0` — needed for `Gemma4ForConditionalGeneration`
 
 ## 🤝 Contributing
 

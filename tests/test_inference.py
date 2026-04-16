@@ -14,27 +14,28 @@ from pathlib import Path
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Point HF to the model cache that was populated during Docker training
-ADAPTER_PATH = str(Path(__file__).parent.parent / "models" / "kaya_v2_synthetic")
-
-# Resolve base model from local snapshot cache (avoids permission issues with root-owned Docker volume)
-_cache_hub = Path(__file__).parent.parent / "models" / ".cache" / "hub"
-_model_cache = _cache_hub / "models--unsloth--qwen3-14b-bnb-4bit" / "snapshots"
-if _model_cache.exists():
-    BASE_MODEL = str(next(_model_cache.iterdir()))  # local path, no download needed
-else:
-    BASE_MODEL = "unsloth/qwen3-14b-bnb-4bit"
-MAX_NEW_TOKENS = 256
-
-# Load system prompt from config to stay in sync with production
+# Resolve model paths from config (supports any active profile)
+import json as _json
 import yaml as _yaml
+from src.config_loader import load_config as _load_config
+
+_cfg_path = Path(__file__).parent.parent / "config.yaml"
 try:
-    _cfg_path = Path(__file__).parent.parent / "config.yaml"
-    with open(_cfg_path, 'r', encoding='utf-8') as _f:
-        _cfg = _yaml.safe_load(_f)
+    _cfg = _load_config(str(_cfg_path))
+    ADAPTER_PATH = str(Path(__file__).parent.parent / _cfg['training']['output_dir'])
+    _adapter_config = Path(ADAPTER_PATH) / "adapter_config.json"
+    if _adapter_config.exists():
+        _acfg = _json.loads(_adapter_config.read_text(encoding='utf-8'))
+        BASE_MODEL = _acfg.get('base_model_name_or_path', _cfg['model']['model_id'])
+        _BASE_MODEL_CLASS = _acfg.get('auto_mapping', {}).get('base_model_class', '')
+    else:
+        BASE_MODEL = _cfg['model']['model_id']
+        _BASE_MODEL_CLASS = ''
     SYSTEM_PROMPT = _cfg['data']['system_prompt']
 except Exception:
-    # Fallback — mirrors config.yaml system_prompt exactly
+    ADAPTER_PATH = str(Path(__file__).parent.parent / "models" / "kaya_v2_synthetic")
+    BASE_MODEL = "unsloth/Qwen3-14B-bnb-4bit"
+    _BASE_MODEL_CLASS = ''
     SYSTEM_PROMPT = (
         "És o bot assistente do grupo de amigos 'Kaya'. "
         "Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. "
@@ -42,6 +43,7 @@ except Exception:
         "Nunca fales na primeira pessoa sobre experiências pessoais com membros do grupo. "
         "Refere-te sempre aos membros na terceira pessoa."
     )
+MAX_NEW_TOKENS = 256
 
 # A few representative test conversations
 TESTS = [
@@ -83,11 +85,21 @@ def load_model():
 
     print(f"Loading base model: {BASE_MODEL}")
     tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
-    base = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL,
-        device_map="auto",
-        dtype=torch.bfloat16,
-    )
+
+    # Gemma 4 uses Gemma4ForConditionalGeneration (not registered with AutoModelForCausalLM)
+    if 'Gemma4' in _BASE_MODEL_CLASS:
+        from transformers import Gemma4ForConditionalGeneration
+        base = Gemma4ForConditionalGeneration.from_pretrained(
+            BASE_MODEL,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
+        )
+    else:
+        base = AutoModelForCausalLM.from_pretrained(
+            BASE_MODEL,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
+        )
     print(f"Applying adapter: {ADAPTER_PATH}")
     model = PeftModel.from_pretrained(base, ADAPTER_PATH)
     model.eval()

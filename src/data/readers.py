@@ -1,3 +1,4 @@
+import unsloth  # noqa: F401 — must be imported before transformers for Unsloth optimizations
 import re
 import os
 import json
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from transformers import AutoTokenizer
 from datetime import datetime
 from pathlib import Path
+from unsloth.chat_templates import get_chat_template
 
 # Import the LLM cleaning
 try:
@@ -472,6 +474,8 @@ class SyntheticDatasetMerger:
         output_val: str = None,
         train_split: float = 0.9,
         kaya_ratio: float = 0.8,  # Target ratio of Kaya data (0.0-1.0)
+        model_id: str = None,
+        chat_template: str = "gemma-4",
     ):
         _data = Path(__file__).parent.parent.parent / "data"
         self.kaya_file = Path(kaya_file) if kaya_file else _data / "synthetic_kaya.jsonl"
@@ -480,14 +484,18 @@ class SyntheticDatasetMerger:
         self.output_val = Path(output_val) if output_val else _data / "val_synthetic.jsonl"
         self.train_split = train_split
         self.kaya_ratio = kaya_ratio
+        self.chat_template = chat_template
         self.tokenizer = None
 
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                "unsloth/Qwen3-14B-Instruct-bnb-4bit"
-            )
-        except:
-            print("Warning: Could not load tokenizer for chat template.")
+        if model_id:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                self.tokenizer = get_chat_template(tokenizer, chat_template)
+                print(f"✅ Loaded tokenizer for {model_id} with '{chat_template}' template")
+            except Exception as e:
+                print(f"Warning: Could not load tokenizer for {model_id}: {e}")
+        else:
+            print(f"Warning: No model_id provided. Using manual '{chat_template}' template fallback.")
 
     def load_conversations(self, file_path: Path) -> List[Dict]:
         """Load conversations from JSONL file."""
@@ -612,19 +620,28 @@ class SyntheticDatasetMerger:
                 print(f"⚠️  Error applying chat template: {e}")
                 return None
         else:
-            # Manual fallback: ChatML format (Qwen3 / most modern models)
-            formatted = "<|im_start|>"
+            # Manual fallback: Gemma 4 format (<|turn>role\ncontent<turn|>\n)
+            # System message is prepended to first user turn as per Gemma 4 template
+            formatted = ""
+            system_prefix = ""
 
-            for msg in messages:
+            for i, msg in enumerate(messages):
                 role = msg['role']
                 content = msg['content']
 
-                formatted += f"{role}\n{content}<|im_end|>\n<|im_start|>"
+                if role == 'system':
+                    system_prefix = content + '\n\n'
+                    continue
 
-            # Remove trailing incomplete <|im_start|>
-            formatted = formatted.rstrip("<|im_start|>").rstrip()
+                # Map assistant -> model (Gemma 4 uses 'model' role)
+                if role == 'assistant':
+                    role = 'model'
 
-            return formatted
+                prefix = system_prefix if i == 0 or (i == 1 and system_prefix) else ""
+                system_prefix = ""  # Only use once
+                formatted += f"<|turn>{role}\n{prefix}{content}<turn|>\n"
+
+            return formatted.strip() if formatted else None
 
     def merge_and_split(self) -> tuple[int, int]:
         """Merge datasets, apply formatting, shuffle, and split."""

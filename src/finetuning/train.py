@@ -1,32 +1,51 @@
 """
 Fine-Tuning Script
-Trains Qwen3-14B on WhatsApp chat data using LoRA and 4-bit quantization.
+Trains the active model profile on conversation data using LoRA and 4-bit quantization.
+
+Uses a flat code path (direct SFTTrainer usage) to avoid OOM issues that occurred
+with the KayaTrainer class wrapper during SFTTrainer initialization.
 """
 import argparse
+import gc
+import glob
 import os
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
-import torch
-import builtins
+
 import psutil
+import torch
 
-# Suppress HuggingFace cache deprecation warning
-os.environ['HF_HOME'] = os.environ.get('HF_HOME', '/tmp/huggingface')
+# Use persistent HF cache
+os.environ['HF_HOME'] = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
-# Add project root to Python path so 'src' package is importable
+# Reset OOM score (VS Code systemd cgroup sets oom_score_adj=100)
+try:
+    with open('/proc/self/oom_score_adj', 'w') as _f:
+        _f.write('0')
+except OSError:
+    pass
+
+# Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-builtins.psutil = psutil
-from datasets import load_dataset
 
-from src.finetuning.trainer import KayaTrainer
-from src.config_loader import load_config
+def rss_gb():
+    return psutil.Process().memory_info().rss / 1e9
+
+
+def sys_ram():
+    m = psutil.virtual_memory()
+    return f"used={m.used/1e9:.1f}GB free={m.available/1e9:.1f}GB"
 
 
 def main():
     print("=" * 60)
     print("Fine-Tuning Pipeline")
     print("=" * 60)
+    print(f"[BASELINE] RSS: {rss_gb():.2f} GB | System: {sys_ram()}", flush=True)
 
     parser = argparse.ArgumentParser(description="KayaChatBot fine-tuning script.")
     parser.add_argument(
@@ -37,157 +56,266 @@ def main():
     )
     args = parser.parse_args()
 
-    # Check CUDA availability
-    print(f"\n\U0001f50d GPU Check:")
+    # GPU check
+    print(f"\n🔍 GPU Check:")
     print(f"   CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"   CUDA version: {torch.version.cuda}")
-        print(f"   GPU count: {torch.cuda.device_count()}")
-        print(f"   GPU name: {torch.cuda.get_device_name(0)}")
+        print(f"   GPU: {torch.cuda.get_device_name(0)}")
         print(f"   GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
-        print("   \u26a0\ufe0f  WARNING: No CUDA GPU detected!")
-        response = input("   Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            print("   Exiting...")
+        print("   ⚠️  No CUDA GPU detected!")
+        if input("   Continue anyway? (y/n): ").lower() != 'y':
             return
-    
+
     # Load configuration
+    from src.config_loader import load_config
+
     config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yaml')
     print(f"\n1. Loading configuration from {config_path}")
     config = load_config(config_path, profile_override=args.profile)
-    
-    # Check test mode
-    test_mode = config['test_mode']['enabled']
-    if test_mode:
-        print("\n\u26a0\ufe0f  TEST MODE ENABLED - Using reduced parameters for quick validation")
-        print("   Set test_mode.enabled: false in config.yaml for full training\n")
-    
-    # Extract settings
+
     model_id = config['model']['model_id']
     max_seq_length = config['model']['max_seq_length']
-    
-    # Use test or production output directory
+    lora_r = config['model']['lora_r']
+    lora_alpha = config['model']['lora_alpha']
+    lora_dropout = config['model']['lora_dropout']
+    target_modules = config['model']['target_modules']
+    tc = config['training']
+
+    test_mode = config['test_mode']['enabled']
     if test_mode:
-        output_dir = config['training']['output_dir'] + "_test"
+        output_dir = tc['output_dir'] + "_test"
+        print("\n⚠️  TEST MODE ENABLED - Using reduced parameters for quick validation")
     else:
-        output_dir = config['training']['output_dir']
-    
-    # Dataset paths
+        output_dir = tc['output_dir']
+
+    print(f"   ✓ Model: {model_id}")
+    print(f"   ✓ Max sequence length: {max_seq_length}")
+    print(f"   ✓ Output directory: {output_dir}")
+    print(f"[AFTER CONFIG] RSS: {rss_gb():.2f} GB", flush=True)
+
+    # Check datasets
     data_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
     train_file = os.path.join(data_dir, "train_synthetic.jsonl")
     val_file = os.path.join(data_dir, "val_synthetic.jsonl")
-    
-    print(f"   \u2713 Model: {model_id}")
-    print(f"   \u2713 Max sequence length: {max_seq_length}")
-    print(f"   \u2713 Output directory: {output_dir}")
-    
-    # Check if datasets exist
+
     if not os.path.exists(train_file) or not os.path.exists(val_file):
-        print(f"\n\u274c Error: Dataset files not found!")
+        print(f"\n❌ Error: Dataset files not found!")
         print(f"   Expected: {train_file}")
         print(f"   Expected: {val_file}")
-        
-        # Check what files exist
-        existing_files = [f for f in os.listdir(data_dir) if f.endswith('.jsonl')]
-        if existing_files:
-            print(f"\n   Found in data/: {', '.join(existing_files)}")
-        
-        print(f"\n   Please run these steps first:")
+        print(f"\n   Run the data pipeline first:")
         print(f"   1. python src/data/extract_all_messages.py")
         print(f"   2. python src/data/generate_synthetic_data.py")
         print(f"   3. python src/data/prepare_portuguese_data.py")
-        print(f"   4. python src/data/merge_datasets.py  \u2190 Creates train_synthetic.jsonl and val_synthetic.jsonl")
-        print(f"\n   Or run: python validate_pipeline.py to check which steps are missing")
+        print(f"   4. python src/data/merge_datasets.py")
         return
-    
+
+    # Load model
+    from unsloth import FastModel
+    from unsloth.chat_templates import get_chat_template
+
+    print(f"\n2. Loading model: {model_id}...")
+    model, tokenizer = FastModel.from_pretrained(
+        model_name=model_id,
+        max_seq_length=max_seq_length,
+        dtype=None,
+        load_in_4bit=True,
+        low_cpu_mem_usage=True,
+    )
+    gc.collect()
+    print(f"   [MEM post-model] RSS={rss_gb():.2f}GB | VRAM={torch.cuda.memory_allocated()/1e9:.2f}GB", flush=True)
+
+    # Add LoRA adapters
+    print(f"\n3. Adding LoRA adapters (r={lora_r}, alpha={lora_alpha})...")
+    model = FastModel.get_peft_model(
+        model,
+        r=lora_r,
+        target_modules=target_modules,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        bias="none",
+        use_gradient_checkpointing="unsloth",
+        random_state=3407,
+        use_rslora=False,
+        loftq_config=None,
+        autocast_adapter_dtype=False,
+    )
+    tokenizer = get_chat_template(tokenizer, "gemma-4")
+    gc.collect()
+    print(f"   [MEM post-LoRA] RSS={rss_gb():.2f}GB | VRAM={torch.cuda.memory_allocated()/1e9:.2f}GB", flush=True)
+    model.print_trainable_parameters()
+
     # Load datasets
-    print(f"\n2. Loading datasets...")
+    from datasets import load_dataset
+
+    print(f"\n4. Loading datasets...")
     train_dataset = load_dataset("json", data_files=train_file, split="train")
     val_dataset = load_dataset("json", data_files=val_file, split="train")
-    print(f"   \u2713 Train samples: {len(train_dataset)}")
-    print(f"   \u2713 Validation samples: {len(val_dataset)}")
-    
-    # Initialize trainer with LoRA config
-    print(f"\n3. Initializing trainer with LoRA configuration...")
-    lora_config = {
-        "r": config['model']['lora_r'],
-        "alpha": config['model']['lora_alpha'],
-        "dropout": config['model']['lora_dropout'],
-        "target_modules": config['model']['target_modules']
-    }
+    print(f"   ✓ Train samples: {len(train_dataset)}")
+    print(f"   ✓ Validation samples: {len(val_dataset)}")
+    print(f"[AFTER DATASETS] RSS: {rss_gb():.2f} GB", flush=True)
 
-    # Read incremental retraining config
-    resume_from_checkpoint = config['training'].get('resume_from_checkpoint')
+    # Create SFTTrainer
+    from trl import SFTTrainer, SFTConfig
+    from transformers import TrainerCallback
 
-    trainer_wrapper = KayaTrainer(
-        model_id=model_id,
-        max_seq_length=max_seq_length,
-        lora_config=lora_config,
-        resume_from_checkpoint=resume_from_checkpoint,
-    )
-    
-    print(f"\n4. Loading model (this may take several minutes)...")
-    print(f"   Downloading/loading {model_id}...")
-    trainer_wrapper.load_model()
-    
-    # Prepare training config
-    training_config = {
-        "max_steps": config['training']['max_steps'],
-        "per_device_train_batch_size": config['training']['per_device_train_batch_size'],
-        "gradient_accumulation_steps": config['training']['gradient_accumulation_steps'],
-        "learning_rate": config['training']['learning_rate'],
-        "warmup_steps": config['training']['warmup_steps'],
-        "weight_decay": config['training']['weight_decay'],
-        "optim": config['training']['optim'],
-        "lr_scheduler_type": config['training']['lr_scheduler_type'],
-        "logging_steps": config['training']['logging_steps'],
-        "save_steps": config['training']['save_steps'],
-        "eval_steps": config['training']['eval_steps'],
-        "seed": config['training']['seed'],
-    }
+    print(f"\n5. Creating SFTTrainer...")
 
-    # Pass incremental params so the trainer can apply them when a checkpoint is loaded
-    if resume_from_checkpoint:
-        training_config["incremental_steps"] = config['training']['incremental_steps']
-        training_config["incremental_learning_rate"] = config['training']['incremental_learning_rate']
-        print(f"\n   \U0001f504 Incremental training enabled:")
-        print(f"   \u2713 Checkpoint: {resume_from_checkpoint}")
-        print(f"   \u2713 Steps: {config['training']['incremental_steps']} (vs full: {config['training']['max_steps']})")
-        print(f"   \u2713 Learning rate: {config['training']['incremental_learning_rate']} (vs full: {config['training']['learning_rate']})")
-    
-    # Auto-detect latest checkpoint to resume from, but only when
-    # resume_from_checkpoint is explicitly configured (non-null).
-    # When it is null the intent is "start fresh" -- we must NOT
-    # resume even if checkpoint-* directories happen to exist in the
-    # output dir (e.g. because the models/ volume is mounted from a
-    # previous local training run in the Docker pipeline).
-    import glob as _glob
+    bos = tokenizer.bos_token or ""
+
+    def formatting_func(examples):
+        if isinstance(examples["formatted_text"], list):
+            return [t.removeprefix(bos).strip() for t in examples["formatted_text"]]
+        else:
+            return [examples["formatted_text"].removeprefix(bos).strip()]
+
+    class MemoryMonitorCallback(TrainerCallback):
+        def __init__(self, log_every=10, rss_limit_gb=25.0):
+            self.log_every = log_every
+            self.rss_limit_gb = rss_limit_gb
+            self._proc = psutil.Process(os.getpid())
+
+        def _log(self, step):
+            rss = self._proc.memory_info().rss / 1e9
+            vram_a = torch.cuda.memory_allocated() / 1e9
+            vram_r = torch.cuda.memory_reserved() / 1e9
+            sf = psutil.virtual_memory().available / 1e9
+            print(
+                f"[MEM step={step}] RSS={rss:.2f}GB | VRAM alloc={vram_a:.2f}GB res={vram_r:.2f}GB | SysFree={sf:.1f}GB",
+                flush=True,
+            )
+            if rss > self.rss_limit_gb:
+                print(f"⚠️  RSS {rss:.1f}GB > limit — gc.collect()", flush=True)
+                gc.collect()
+                torch.cuda.empty_cache()
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            self._log(0)
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step % self.log_every == 0:
+                self._log(state.global_step)
+
+    class ProgressCallback(TrainerCallback):
+        def __init__(self):
+            self.start_time = None
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            self.start_time = time.time()
+            print(
+                f"\n{'='*60}\n🚀 Training Started - {datetime.now():%Y-%m-%d %H:%M:%S}\n{'='*60}",
+                flush=True,
+            )
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs:
+                step, total = state.global_step, state.max_steps
+                elapsed = time.time() - self.start_time
+                sps = step / elapsed if elapsed > 0 else 0
+                eta = (total - step) / sps / 60 if sps > 0 else 0
+                msg = f"\n[{datetime.now():%H:%M:%S}] 📊 Step {step}/{total} ({step/total*100:.1f}%)\n"
+                msg += f"   ⚡ {sps:.2f} steps/sec | ETA: {eta:.1f} min\n"
+                if "loss" in logs:
+                    msg += f"   📉 Loss: {logs['loss']:.4f}\n"
+                if "learning_rate" in logs:
+                    msg += f"   📚 LR: {logs['learning_rate']:.2e}\n"
+                if "eval_loss" in logs:
+                    msg += f"   ✅ Val Loss: {logs['eval_loss']:.4f}\n"
+                print(msg, end="", flush=True)
+
+        def on_train_end(self, args, state, control, **kwargs):
+            elapsed = time.time() - self.start_time
+            print(
+                f"\n{'='*60}\n✨ Training Completed - {datetime.now():%Y-%m-%d %H:%M:%S}"
+                f"\n   Duration: {elapsed/60:.2f} min\n{'='*60}",
+                flush=True,
+            )
+
+    # Incremental training: auto-detect checkpoint
+    resume_from_checkpoint = tc.get('resume_from_checkpoint')
     resume_checkpoint = None
-    if resume_from_checkpoint:
-        checkpoints = sorted(_glob.glob(os.path.join(output_dir, "checkpoint-*")), key=lambda p: int(p.split("-")[-1]))
-        resume_checkpoint = checkpoints[-1] if checkpoints else None
-        if resume_checkpoint:
-            print(f"\n   \u21a9\ufe0f  Resuming from checkpoint: {resume_checkpoint}")
-    else:
-        print(f"\n   \U0001f195 Starting fresh -- checkpoint auto-detection skipped (resume_from_checkpoint is null)")
+    max_steps = tc['max_steps']
+    learning_rate = tc['learning_rate']
 
-    print(f"\n5. Starting training...")
-    trainer, stats = trainer_wrapper.train(
+    if resume_from_checkpoint:
+        checkpoints = sorted(
+            glob.glob(os.path.join(output_dir, "checkpoint-*")),
+            key=lambda p: int(p.split("-")[-1]),
+        )
+        resume_checkpoint = checkpoints[-1] if checkpoints else None
+        max_steps = tc.get('incremental_steps', max_steps)
+        learning_rate = tc.get('incremental_learning_rate', learning_rate)
+        if resume_checkpoint:
+            print(f"   ↩️  Resuming from checkpoint: {resume_checkpoint}")
+        print(f"   🔄 Incremental: {max_steps} steps, LR={learning_rate}")
+    else:
+        print(f"   🆕 Starting fresh training")
+
+    trainer = SFTTrainer(
+        model=model,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        output_dir=output_dir,
-        training_config=training_config,
-        resume_from_checkpoint=resume_checkpoint,
+        formatting_func=formatting_func,
+        callbacks=[ProgressCallback(), MemoryMonitorCallback(log_every=10)],
+        args=SFTConfig(
+            dataset_text_field="formatted_text",
+            max_length=max_seq_length,
+            dataset_num_proc=tc.get("dataset_num_proc", 1),
+            packing=False,
+            dataloader_pin_memory=False,
+            dataloader_num_workers=0,
+            per_device_train_batch_size=tc['per_device_train_batch_size'],
+            per_device_eval_batch_size=tc.get('per_device_eval_batch_size', 1),
+            gradient_accumulation_steps=tc['gradient_accumulation_steps'],
+            warmup_steps=tc['warmup_steps'],
+            max_steps=max_steps,
+            learning_rate=learning_rate,
+            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=torch.cuda.is_bf16_supported(),
+            logging_steps=tc['logging_steps'],
+            optim=tc['optim'],
+            weight_decay=tc['weight_decay'],
+            lr_scheduler_type=tc['lr_scheduler_type'],
+            seed=tc['seed'],
+            output_dir=output_dir,
+            save_steps=tc.get('save_steps', 100),
+            eval_strategy="steps" if val_dataset else "no",
+            eval_steps=tc.get('eval_steps', 50) if val_dataset else None,
+            load_best_model_at_end=True if val_dataset else False,
+            metric_for_best_model="eval_loss" if val_dataset else None,
+            report_to="none",
+            skip_memory_metrics=True,
+        ),
     )
-    
-    # Save model
-    print(f"\n6. Saving fine-tuned model...")
-    trainer_wrapper.save_model(output_dir)
-    
+    gc.collect()
+    print(f"   [MEM post-SFTTrainer] RSS={rss_gb():.2f}GB | VRAM={torch.cuda.memory_allocated()/1e9:.2f}GB", flush=True)
+
+    # Mask everything but assistant responses
+    from unsloth.chat_templates import train_on_responses_only
+
+    trainer = train_on_responses_only(
+        trainer,
+        instruction_part="<|turn>user\n",
+        response_part="<|turn>model\n",
+        num_proc=1,
+    )
+    print(f"   [MEM post-response_masking] RSS={rss_gb():.2f}GB", flush=True)
+
+    # Train
+    print(f"\n6. Starting training ({max_steps} steps)...")
+    trainer_stats = trainer.train(resume_from_checkpoint=resume_checkpoint)
+
+    # Save
+    print(f"\n7. Saving fine-tuned model to {output_dir}...")
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
     print("\n" + "=" * 60)
-    print("\u2705 Fine-tuning complete!")
+    print(f"✅ Fine-tuning complete!")
     print(f"   Model saved to: {output_dir}")
+    print(f"   Final loss: {trainer_stats.training_loss:.4f}")
     print("=" * 60)
 
 
