@@ -394,12 +394,6 @@ def main() -> None:
         help="Path to golden_test_conversations.json (default: auto-detect from config). "
              "Requires --judge-provider.",
     )
-    parser.add_argument(
-        "--emit-tasks",
-        action="store_true",
-        help="Write failing golden tests as tasks to data/benchmark_tasks.json "
-             "(requires --golden-tests + --judge-provider).",
-    )
 
     args = parser.parse_args()
 
@@ -477,7 +471,6 @@ def main() -> None:
     # Golden test evaluation (optional — requires --judge-provider)
     # ------------------------------------------------------------------
     golden_failures = 0
-    pending_tasks = []
 
     if args.judge_provider:
         golden_tests_file = (
@@ -521,73 +514,11 @@ def main() -> None:
             )
             print(f"✅ Golden test report saved to {golden_out}")
 
-            # Build pending tasks for failures (for --emit-tasks)
-            if args.emit_tasks:
-                identity_fail_threshold = config.get("benchmark", {}).get(
-                    "identity_failure_threshold", 3.0
-                )
-                for r in golden_report.get("failures", []):
-                    category = r.get("category", "general")
-                    score_info = ""
-                    if r.get("scores"):
-                        s = r["scores"]
-                        score_info = (
-                            f" identity_adherence={s.get('identity_adherence', '?'):.1f}"
-                            f" factual_grounding={s.get('factual_grounding', '?'):.1f}"
-                        ) if isinstance(s.get("identity_adherence"), float) else ""
-
-                    leaked = r.get("identity_leak_patterns", [])
-                    is_identity = bool(leaked) or category == "identity"
-                    task = {
-                        "title": (
-                            f"[Golden] Identity leak in response to '{r['question'][:50]}'"
-                            if is_identity
-                            else f"[Golden] Low quality response to '{r['question'][:50]}'"
-                        ),
-                        "description": (
-                            f"Golden test {r['test_id']} ({category}) failed.\n\n"
-                            f"Question: {r['question']}\n\n"
-                            f"Failure reasons: {'; '.join(r.get('failure_reasons', []))}\n\n"
-                            f"Response excerpt: {r.get('response', '')[:300]}"
-                            + (f"\n\nLeaked patterns: {leaked}" if leaked else "")
-                            + score_info
-                        ),
-                        "type": "bug" if is_identity else "improvement",
-                        "priority": "high" if is_identity else "medium",
-                        "agent": "bug-fixer" if is_identity else "model-trainer",
-                        "files_hint": [
-                            "src/data/format_direct_training.py",
-                            "src/data/generate_synthetic_data.py",
-                            "config.yaml",
-                        ] if is_identity else [
-                            "src/data/generate_synthetic_data.py",
-                            "config.yaml",
-                        ],
-                    }
-                    pending_tasks.append(task)
-
         except Exception as exc:
             print(f"⚠️  Golden test runner failed: {exc}")
             import traceback; traceback.print_exc()
 
     print(f"BENCHMARK_FAILURES: {golden_failures}")
-
-    # Write pending_tasks to data/benchmark_tasks.json (for GPU pipeline to pick up)
-    if pending_tasks:
-        tasks_out = Path("data/benchmark_tasks.json")
-        existing = []
-        if tasks_out.exists():
-            try:
-                existing = json.loads(tasks_out.read_text(encoding="utf-8"))
-            except Exception:
-                existing = []
-        merged = existing + pending_tasks
-        tasks_out.write_text(
-            json.dumps(merged, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        print(f"📋 Wrote {len(pending_tasks)} pending task(s) to {tasks_out}")
-        print(f"BENCHMARK_TASKS_WRITTEN: {len(pending_tasks)}")
 
 
 if __name__ == "__main__":
