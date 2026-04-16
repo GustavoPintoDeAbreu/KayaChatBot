@@ -34,7 +34,6 @@ data/rag_db/
 # Exception: project config JSON files should be tracked
 !data/group_members.json
 !data/group_knowledge.json
-!tasks.json
 *.txt
 
 # ChromaDB files
@@ -47,7 +46,6 @@ chroma.sqlite3
 !.cursorrules
 !README.md
 !requirements.txt
-!requirements-copilot.txt
 
 # ===================================
 # Credentials & Secrets (CRITICAL)
@@ -139,11 +137,6 @@ tmp/
 # Unsloth Compiled Cache
 # ===================================
 unsloth_compiled_cache/
-
-# ===================================
-# GitHub Actions Self-Hosted Runner
-# ===================================
-actions-runner/
 
 # ===================================
 # Benchmark Reports (generated at runtime)
