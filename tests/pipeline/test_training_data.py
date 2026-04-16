@@ -181,7 +181,8 @@ class TestMergedTrainingData:
     def test_system_prompt_present_in_train(self, train_records):
         """Every record in the merged train set must have a system prompt.
 
-        Merged data may use 'formatted_text' (ChatML string with <|im_start|>system)
+        Merged data may use 'formatted_text' (ChatML string with <|im_start|>system,
+        or Gemma 4 format with system embedded in first <|turn>user\\n block)
         or 'conversations' (list of role dicts). We check both.
         """
         missing = []
@@ -189,10 +190,14 @@ class TestMergedTrainingData:
             # Check conversations array first
             turns = rec.get("conversations", [])
             has_system = any(t.get("role") == "system" for t in turns)
-            # Check formatted_text (ChatML format)
+            # Check formatted_text (ChatML format or Gemma 4 format)
             if not has_system:
                 ft = rec.get("formatted_text", "")
+                # ChatML format: explicit <|im_start|>system tag
                 has_system = "<|im_start|>system" in ft
+                # Gemma 4 format: system prompt embedded in first <|turn>user\n block
+                if not has_system:
+                    has_system = "<|turn>user\n" in ft and "You are" in ft
             # Check original.conversations as fallback
             if not has_system:
                 orig_turns = rec.get("original", {}).get("conversations", [])
