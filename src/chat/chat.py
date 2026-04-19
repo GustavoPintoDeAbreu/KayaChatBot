@@ -46,6 +46,14 @@ def main():
 
     # Build system prompt — optionally inject group member profiles (JSON approach)
     system_prompt = base_system_prompt
+
+    # Prepend uncensored preamble when uncensored_mode is enabled (runtime only, not training)
+    chat_cfg = config.get('chat', {})
+    if chat_cfg.get('uncensored_mode', False):
+        uncensored_preamble = chat_cfg.get('uncensored_system_prompt', '')
+        if uncensored_preamble:
+            system_prompt = uncensored_preamble + "\n\n" + system_prompt
+
     members_file = config.get('data', {}).get('group_members_file')
     if members_file:
         # Support both absolute paths and relative paths
