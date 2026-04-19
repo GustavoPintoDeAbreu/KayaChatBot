@@ -80,6 +80,14 @@ def main():
     
     # Test prompts — formatted as chat messages for apply_chat_template
     system_prompt = config.get('data', {}).get('system_prompt', '')
+
+    # Prepend uncensored preamble when uncensored_mode is enabled (runtime only, not training)
+    chat_cfg = config.get('chat', {})
+    if chat_cfg.get('uncensored_mode', False):
+        uncensored_preamble = chat_cfg.get('uncensored_system_prompt', '')
+        if uncensored_preamble:
+            system_prompt = uncensored_preamble + "\n\n" + system_prompt
+
     test_messages = [
         [
             {"role": "user", "content": "Gil João: O que acham desta música?\nPeter: "},
