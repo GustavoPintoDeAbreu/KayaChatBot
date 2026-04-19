@@ -46,6 +46,14 @@ def main():
 
     # Build system prompt — optionally inject group member profiles (JSON approach)
     system_prompt = base_system_prompt
+
+    # Prepend uncensored preamble when uncensored_mode is enabled (runtime only, not training)
+    chat_cfg = config.get('chat', {})
+    if chat_cfg.get('uncensored_mode', False):
+        uncensored_preamble = chat_cfg.get('uncensored_system_prompt', '')
+        if uncensored_preamble:
+            system_prompt = uncensored_preamble + "\n\n" + system_prompt
+
     members_file = config.get('data', {}).get('group_members_file')
     if members_file:
         # Support both absolute paths and relative paths
@@ -80,6 +88,7 @@ def main():
         return
     adapter_cfg = json.loads(adapter_config_path.read_text(encoding='utf-8'))
     base_model_name = adapter_cfg.get('base_model_name_or_path', 'unsloth/Qwen3-14B-bnb-4bit')
+    base_model_class = adapter_cfg.get('auto_mapping', {}).get('base_model_class', '')
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -88,12 +97,23 @@ def main():
         bnb_4bit_quant_type="nf4",
     )
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        quantization_config=bnb_config,
-        device_map="cuda",
-        trust_remote_code=True,
-    )
+
+    # Gemma 4 uses Gemma4ForConditionalGeneration (not registered with AutoModelForCausalLM)
+    if 'Gemma4' in base_model_class:
+        from transformers import Gemma4ForConditionalGeneration
+        base_model = Gemma4ForConditionalGeneration.from_pretrained(
+            base_model_name,
+            quantization_config=bnb_config,
+            device_map="cuda",
+            trust_remote_code=True,
+        )
+    else:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            quantization_config=bnb_config,
+            device_map="cuda",
+            trust_remote_code=True,
+        )
     model = PeftModel.from_pretrained(base_model, model_dir)
     model.eval()
     print(f"✓ Model loaded!")
@@ -204,7 +224,7 @@ def main():
                 add_generation_prompt=True
             )
 
-            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+            inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
 
             # Generate response
             # We stop at newline to get just one message
@@ -216,10 +236,13 @@ def main():
             inf_config = config.get('inference', {})
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=inf_config.get('max_new_tokens', 256),
-                temperature=inf_config.get('temperature', 0.7),
+                max_new_tokens=inf_config.get('max_new_tokens', 512),
+                temperature=inf_config.get('temperature', 1.0),
                 do_sample=True,
-                top_p=inf_config.get('top_p', 0.9),
+                top_p=inf_config.get('top_p', 0.95),
+                top_k=inf_config.get('top_k', 64),
+                repetition_penalty=inf_config.get('repetition_penalty', 1.0),
+                use_cache=True,
                 streamer=streamer
             )
 

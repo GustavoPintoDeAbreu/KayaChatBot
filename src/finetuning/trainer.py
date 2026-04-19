@@ -1,11 +1,50 @@
+import gc
+import os
 import torch
-from unsloth import FastLanguageModel
-from trl import SFTTrainer
-from transformers import TrainingArguments, TrainerCallback
+from unsloth import FastModel
+from unsloth.chat_templates import get_chat_template, train_on_responses_only
+from trl import SFTTrainer, SFTConfig
+from transformers import TrainerCallback
 from datasets import Dataset
 from typing import Optional
 import time
 from datetime import datetime
+import psutil
+
+
+class MemoryMonitorCallback(TrainerCallback):
+    """Monitors CPU RSS and GPU VRAM every N steps. Aborts if RSS exceeds limit."""
+
+    def __init__(self, log_every: int = 10, rss_limit_gb: float = 25.0):
+        self.log_every = log_every
+        self.rss_limit_gb = rss_limit_gb
+        self._proc = psutil.Process(os.getpid())
+
+    def _log_memory(self, step: int):
+        rss_gb = self._proc.memory_info().rss / 1e9
+        vram_alloc = torch.cuda.memory_allocated() / 1e9
+        vram_reserved = torch.cuda.memory_reserved() / 1e9
+        sys_free = psutil.virtual_memory().available / 1e9
+        print(
+            f"[MEM step={step}] RSS={rss_gb:.2f}GB | VRAM alloc={vram_alloc:.2f}GB res={vram_reserved:.2f}GB | SysFree={sys_free:.1f}GB",
+            flush=True,
+        )
+        if rss_gb > self.rss_limit_gb:
+            print(
+                f"⚠️  RSS {rss_gb:.1f}GB exceeds limit {self.rss_limit_gb}GB — running gc.collect()",
+                flush=True,
+            )
+            gc.collect()
+            torch.cuda.empty_cache()
+            rss_gb = self._proc.memory_info().rss / 1e9
+            print(f"   After GC: RSS={rss_gb:.2f}GB", flush=True)
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._log_memory(0)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.log_every == 0:
+            self._log_memory(state.global_step)
 
 
 class ProgressCallback(TrainerCallback):
@@ -85,24 +124,32 @@ class KayaTrainer:
                 f"Loading existing LoRA checkpoint for incremental training: {self.resume_from_checkpoint}",
                 flush=True,
             )
-            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+            self.model, self.tokenizer = FastModel.from_pretrained(
                 model_name=self.resume_from_checkpoint,
                 max_seq_length=self.max_seq_length,
                 dtype=None,  # Auto detection
                 load_in_4bit=True,
+                low_cpu_mem_usage=True,  # Load tensor-by-tensor to GPU; prevents ~28 GB CPU RAM spike
             )
+            gc.collect()
+            torch.cuda.empty_cache()
             print(
                 f"✓ Loaded LoRA checkpoint from {self.resume_from_checkpoint}",
                 flush=True,
             )
         else:
             print(f"Loading model: {self.model_id}", flush=True)
-            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+            _rss = lambda: psutil.Process(os.getpid()).memory_info().rss / 1e9
+            print(f"   [MEM pre-from_pretrained] RSS={_rss():.2f}GB", flush=True)
+            self.model, self.tokenizer = FastModel.from_pretrained(
                 model_name=self.model_id,
                 max_seq_length=self.max_seq_length,
                 dtype=None,  # Auto detection
                 load_in_4bit=True,
+                low_cpu_mem_usage=True,  # Load tensor-by-tensor to GPU; prevents ~28 GB CPU RAM spike
             )
+
+            print(f"   [MEM post-from_pretrained] RSS={_rss():.2f}GB", flush=True)
 
             # Add LoRA adapters
             lora_r = self.lora_config.get("r", 16)
@@ -121,7 +168,7 @@ class KayaTrainer:
                 ],
             )
 
-            self.model = FastLanguageModel.get_peft_model(
+            self.model = FastModel.get_peft_model(
                 self.model,
                 r=lora_r,
                 target_modules=target_modules,
@@ -132,9 +179,18 @@ class KayaTrainer:
                 random_state=3407,
                 use_rslora=False,
                 loftq_config=None,
+                autocast_adapter_dtype=False,
             )
 
+            print(f"   [MEM post-LoRA] RSS={_rss():.2f}GB", flush=True)
+
+            # Free any temporary CPU allocations from model loading immediately
+            gc.collect()
+            torch.cuda.empty_cache()
             print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})", flush=True)
+
+        # Apply Gemma 4 chat template to tokenizer
+        self.tokenizer = get_chat_template(self.tokenizer, "gemma-4")
 
         print(f"✓ Trainable parameters: {self.model.print_trainable_parameters()}", flush=True)
 
@@ -172,7 +228,7 @@ class KayaTrainer:
             "save_steps": 100,
             "eval_steps": 50,
             "seed": 3407,
-            "dataset_num_proc": 2,
+            "dataset_num_proc": 1,
         }
 
         # Override with user config
@@ -208,29 +264,35 @@ class KayaTrainer:
             print(f"   • Validation samples: {len(eval_dataset)}", flush=True)
         print(flush=True)
 
+        _rss = lambda: psutil.Process(os.getpid()).memory_info().rss / 1e9
+        print(f"   [MEM pre-SFTTrainer] RSS={_rss():.2f}GB", flush=True)
+
         # Formatting function to extract pre-formatted text from dataset
         def formatting_func(examples):
-            """Extract the formatted_text field from batched examples."""
+            """Extract the formatted_text field from batched examples, stripping BOS if present."""
+            bos = self.tokenizer.bos_token or ""
             # Handle both single example and batched examples
             if isinstance(examples["formatted_text"], list):
-                return examples["formatted_text"]
+                return [t.removeprefix(bos).strip() for t in examples["formatted_text"]]
             else:
-                return [examples["formatted_text"]]
+                return [examples["formatted_text"].removeprefix(bos).strip()]
 
         trainer = SFTTrainer(
             model=self.model,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             formatting_func=formatting_func,
-            dataset_text_field="formatted_text",
-            max_seq_length=self.max_seq_length,
-            dataset_num_proc=config.get("dataset_num_proc", 2),
-            packing=False,
-            callbacks=[ProgressCallback()],
-            args=TrainingArguments(
+            callbacks=[ProgressCallback(), MemoryMonitorCallback(log_every=10)],
+            args=SFTConfig(
+                dataset_text_field="formatted_text",
+                max_length=self.max_seq_length,
+                dataset_num_proc=config.get("dataset_num_proc", 1),
+                packing=False,
+                dataloader_pin_memory=False,  # Avoid page-locked RAM allocation (~1-2 GB savings)
+                dataloader_num_workers=0,  # Prevent forking data loader workers (COW + 107GB vaddr = OOM)
                 per_device_train_batch_size=config["per_device_train_batch_size"],
-                per_device_eval_batch_size=config.get("per_device_eval_batch_size", 2),
+                per_device_eval_batch_size=config.get("per_device_eval_batch_size", 1),
                 gradient_accumulation_steps=config["gradient_accumulation_steps"],
                 warmup_steps=config["warmup_steps"],
                 max_steps=config["max_steps"],
@@ -251,6 +313,20 @@ class KayaTrainer:
                 report_to="none",  # Disable wandb/tensorboard by default
             ),
         )
+
+        print(f"   [MEM post-SFTTrainer] RSS={_rss():.2f}GB", flush=True)
+
+        # Mask everything but assistant responses — only compute loss on model turns
+        # Use num_proc=1 to avoid forking 16+ COW child processes that trigger the
+        # OOM killer on the parent's ~107 GB virtual address space.
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<|turn>user\n",
+            response_part="<|turn>model\n",
+            num_proc=1,
+        )
+
+        print(f"   [MEM post-train_on_responses_only] RSS={_rss():.2f}GB", flush=True)
 
         trainer_stats = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         return trainer, trainer_stats

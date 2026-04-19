@@ -15,6 +15,7 @@ from pathlib import Path
 # Add project root to Python path for src imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.data.readers import SyntheticDatasetMerger
+from src.config_loader import load_config
 
 
 def main():
@@ -45,6 +46,12 @@ def main():
     if args.variant:
         print(f"📦 Building dataset variant '{args.variant}': {output_train}")
 
+    # Load config to get active model's id and chat template
+    config_path = Path(__file__).parent.parent.parent / "config.yaml"
+    config = load_config(str(config_path))
+    model_id = config.get("model", {}).get("model_id", None)
+    print(f"🤖 Using model_id for tokenizer: {model_id}")
+
     # Only use RAG-aware Kaya data (no general Portuguese alpaca data)
     # The model should learn from RAG examples only
     merger = SyntheticDatasetMerger(
@@ -53,7 +60,9 @@ def main():
         output_train=output_train,
         output_val=output_val,
         train_split=0.9,
-        kaya_ratio=1.0  # 100% RAG-aware Kaya Q&A data
+        kaya_ratio=1.0,  # 100% RAG-aware Kaya Q&A data
+        model_id=model_id,
+        chat_template="gemma-4",
     )
     
     train_count, val_count = merger.merge_and_split()

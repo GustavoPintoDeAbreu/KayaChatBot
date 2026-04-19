@@ -3,11 +3,36 @@ Inference Script
 Tests the fine-tuned model with sample prompts.
 """
 import argparse
+import json
 import os
 import torch
-from unsloth import FastLanguageModel
+from pathlib import Path
 
 from src.config_loader import load_config
+
+
+def _load_model_unsloth(model_dir, max_seq_length, model_id):
+    """Load model via Unsloth FastModel (Gemma 4) or FastLanguageModel (others)."""
+    is_gemma4 = "gemma-4" in model_id.lower() or "gemma4" in model_id.lower()
+    if is_gemma4:
+        from unsloth import FastModel
+        model, tokenizer = FastModel.from_pretrained(
+            model_name=model_dir,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        FastModel.for_inference(model)
+    else:
+        from unsloth import FastLanguageModel
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_dir,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        FastLanguageModel.for_inference(model)
+    return model, tokenizer
 
 
 def main():
@@ -40,42 +65,69 @@ def main():
     
     print(f"   ✓ Model directory: {model_dir}")
     
+    # Detect base model from adapter config
+    adapter_config_path = Path(model_dir) / "adapter_config.json"
+    if adapter_config_path.exists():
+        adapter_cfg = json.loads(adapter_config_path.read_text(encoding='utf-8'))
+        base_model_id = adapter_cfg.get('base_model_name_or_path', config['model']['model_id'])
+    else:
+        base_model_id = config['model']['model_id']
+    
     # Load model
-    print(f"\n2. Loading fine-tuned model...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_dir,
-        max_seq_length=max_seq_length,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    FastLanguageModel.for_inference(model)
+    print(f"\n2. Loading fine-tuned model ({base_model_id})...")
+    model, tokenizer = _load_model_unsloth(model_dir, max_seq_length, base_model_id)
     print(f"   ✓ Model loaded")
     
-    # Test prompts
-    test_prompts = [
-        "Gil João: O que acham desta música?\nPeter:",
-        "What did Gil João say about music?\nKaya:",
-        "Tell me about the group chat history.\nKaya:",
+    # Test prompts — formatted as chat messages for apply_chat_template
+    system_prompt = config.get('data', {}).get('system_prompt', '')
+
+    # Prepend uncensored preamble when uncensored_mode is enabled (runtime only, not training)
+    chat_cfg = config.get('chat', {})
+    if chat_cfg.get('uncensored_mode', False):
+        uncensored_preamble = chat_cfg.get('uncensored_system_prompt', '')
+        if uncensored_preamble:
+            system_prompt = uncensored_preamble + "\n\n" + system_prompt
+
+    test_messages = [
+        [
+            {"role": "user", "content": "Gil João: O que acham desta música?\nPeter: "},
+        ],
+        [
+            {"role": "user", "content": "What did Gil João say about music?"},
+        ],
+        [
+            {"role": "user", "content": "Tell me about the group chat history."},
+        ],
     ]
+    if system_prompt:
+        for msgs in test_messages:
+            msgs.insert(0, {"role": "system", "content": system_prompt})
     
     print(f"\n3. Running inference tests...")
     print("=" * 60)
     
-    for i, prompt in enumerate(test_prompts, 1):
+    for i, messages in enumerate(test_messages, 1):
+        user_content = messages[-1]["content"]
         print(f"\n--- Test {i} ---")
-        print(f"Prompt: {prompt}")
+        print(f"Prompt: {user_content}")
         print(f"\nResponse:")
         
-        inputs = tokenizer([prompt], return_tensors="pt").to("cuda" if torch.cuda.is_available() else "cpu")
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = tokenizer(text=input_text, return_tensors="pt").to("cuda" if torch.cuda.is_available() else "cpu")
         outputs = model.generate(
             **inputs,
-            max_new_tokens=128,
-            temperature=0.7,
-            top_p=0.9,
-            repetition_penalty=1.1,
+            max_new_tokens=256,
+            temperature=1.0,
+            top_p=0.95,
+            top_k=64,
+            repetition_penalty=1.0,
             use_cache=True
         )
-        response = tokenizer.batch_decode(outputs)[0]
+        # Decode only the new tokens (skip the input)
+        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        response = tokenizer.decode(new_tokens, skip_special_tokens=True)
         print(response)
         print("-" * 60)
     
