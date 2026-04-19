@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Load configuration
-CONFIG_PATH = Path("/app/config.yaml")
+CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent.parent.parent / "config.yaml")))
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
