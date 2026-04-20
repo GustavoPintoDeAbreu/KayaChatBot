@@ -17,7 +17,7 @@ model:
     - "down_proj"
 
 training:
-  output_dir: "./models/kaya_qwen3_14b"
+  output_dir: "./models/kaya_v2_synthetic"
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   learning_rate: 0.0001
