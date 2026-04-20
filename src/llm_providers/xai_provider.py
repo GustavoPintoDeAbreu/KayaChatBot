@@ -1,5 +1,23 @@
 """
 xAI (Grok) provider implementation.
+
+Self-Censorship Investigation Notes
+-------------------------------------
+The xAI GetCompletionsRequest proto has no safety filter field. Grok is
+designed to be less restricted than most models by default and has no
+API-level safety toggle. Available proto fields (for reference):
+    messages, model, user, n, max_tokens, seed, stop, temperature, top_p,
+    logprobs, top_logprobs, tools, tool_choice, response_format,
+    frequency_penalty, presence_penalty, reasoning_effort,
+    search_parameters, parallel_tool_calls, previous_response_id,
+    store_messages, use_encrypted_content, max_turns, include, agent_count.
+
+  - ``use_encrypted_content`` is for private/encrypted data routing, not
+    content policy.
+  - To minimize self-censoring: prepend the uncensored system prompt preamble
+    from config.yaml (chat.uncensored_system_prompt). The generate_text()
+    and generate_conversations() methods accept a system_prompt kwarg or can
+    have the preamble injected into the caller's system message.
 """
 
 import json

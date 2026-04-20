@@ -23,7 +23,19 @@ from src.data.generation_utils import load_config, get_base_dir, get_output_path
 
 
 def get_generation_prompt(finetune_chunk_text: str, num_conversations: int) -> str:
-    """Create prompt for Azure OpenAI to generate RAG-aware conversations from finetune chunk."""
+    """Create prompt for Azure OpenAI to generate RAG-aware conversations from finetune chunk.
+
+    Self-censorship note: Cloud LLMs (Azure, Grok) may refuse to generate
+    content about real individuals even in a chat-history extraction context.
+    This prompt is framed as factual RAG-format extraction to minimize refusals.
+    If a cloud LLM still self-censors edgy group content:
+      - Azure: relax content filters at the Azure Portal resource level
+        (no SDK toggle exists; safety_identifier is audit-only).
+      - xAI/Grok: less restricted by default; prepend config.yaml's
+        chat.uncensored_system_prompt as the system message for generation.
+      - Local models (Gemma4, Qwen3): fully offline, uncensored preamble
+        already injected at runtime via inference.py.
+    """
     
     prompt = f"""Based on the following WhatsApp conversation history, generate {num_conversations} diverse multi-turn conversations in European Portuguese where someone asks Kaya questions.
 

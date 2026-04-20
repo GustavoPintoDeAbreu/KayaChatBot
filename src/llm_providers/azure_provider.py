@@ -6,6 +6,20 @@ Azure Cognitive Services endpoints (cognitiveservices.azure.com).
 Pass ``config_key='azure_gpt53'`` to use the GPT-5.3-chat deployment.
 GPT-5.x models use the Azure Responses API (``client.responses.create``);
 set ``use_responses_api: true`` in the config section to enable this.
+
+Self-Censorship Investigation Notes
+-------------------------------------
+Azure OpenAI has NO SDK-level parameter to disable content filtering.
+
+  - ``safety_identifier`` in chat.completions.create() is an audit/attribution
+    tag only — it does NOT relax content filters.
+  - Content filters are managed at the Azure resource level:
+    Azure Portal → Azure OpenAI resource → Content Filters → Edit deployment.
+    Set each category (Violence, Sexual, Hate, Self-harm) to the desired
+    severity threshold or create a custom blocklist.
+  - For synthetic bio/extraction tasks, framing prompts as factual extraction
+    ("extract facts from chat logs") rather than generating opinions
+    substantially reduces self-refusals without requiring filter changes.
 """
 
 import json
