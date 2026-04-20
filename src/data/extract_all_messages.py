@@ -5,10 +5,11 @@ Creates unified cleaned message dataset and chunks for synthetic generation.
 
 import json
 import re
+import sys
 import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 import tiktoken
 
@@ -17,12 +18,19 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
+# Make src/ importable when run from any CWD
+import os
+_REPO_ROOT = Path(__file__).parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.data.identity_resolver import SenderResolver
+
 # Configuration
 TEST_MODE = config['test_mode']['enabled']
 MAX_TOKENS_PER_CHUNK = 50000  # 50K tokens per chunk for Azure GPT-4.1-mini
 
 # Detect if running in Docker
-import os
 if os.path.exists('/app'):
     DATA_DIR = Path("/app/data")
 else:
@@ -35,11 +43,24 @@ OUTPUT_FINETUNE_CHUNKS = DATA_DIR / "finetune_chunks.jsonl"
 tokenizer = tiktoken.encoding_for_model("gpt-4")
 
 
+def _build_resolver() -> SenderResolver:
+    """Build a SenderResolver from config and group_members.json."""
+    members_file = DATA_DIR / "group_members.json"
+    sender_aliases = config.get("data", {}).get("sender_aliases", {}) or {}
+    return SenderResolver(members_file, sender_aliases)
+
+
 class MessageExtractor:
     """Extract and clean messages from multiple sources."""
-    
+
     def __init__(self):
         self.messages = []
+        self._resolver: Optional[SenderResolver] = None
+        # Lazily initialised so that unit tests that mock DATA_DIR can work
+        try:
+            self._resolver = _build_resolver()
+        except Exception:
+            pass  # resolver unavailable (e.g. missing members file in tests)
         
     def clean_text(self, text: str) -> str:
         """Clean message text by removing noise."""
@@ -108,9 +129,15 @@ class MessageExtractor:
                 return
             if not self.is_valid_message(cleaned_text):
                 return
+            resolved_sender = current_sender
+            if self._resolver is not None:
+                resolved = self._resolver.resolve(current_sender)
+                if resolved is None:
+                    return  # anonymous sender — drop
+                resolved_sender = resolved
             messages.append({
                 'timestamp': current_date,
-                'sender': current_sender,
+                'sender': resolved_sender,
                 'text': cleaned_text,
                 'source': 'whatsapp',
             })
@@ -164,66 +191,111 @@ class MessageExtractor:
     def decode_instagram_text(self, text: str) -> str:
         """Decode Instagram's double-encoded UTF-8."""
         try:
-            # Instagram uses latin1 encoding that needs to be decoded to UTF-8
             return text.encode('latin1').decode('utf-8')
-        except:
+        except Exception:
             return text
-    
+
+    # Instagram system-message skip patterns (content-level)
+    _INSTAGRAM_SKIP_PATTERNS = [
+        'sent an attachment',
+        'liked a message',
+        'loved a message',
+        'reacted',
+        'unsent a message',
+        'started a call',
+        'missed a call',
+        'shared a post',
+        'shared a story',
+        'set the nickname',
+        'named the group',
+        'created the group',
+        'changed the group',
+    ]
+
+    def _is_instagram_system_message(self, text: str) -> bool:
+        """Return True if *text* looks like an Instagram system notification."""
+        text_lower = text.lower()
+        return any(pattern in text_lower for pattern in self._INSTAGRAM_SKIP_PATTERNS)
+
+    def _is_pure_emoji_or_empty(self, text: str) -> bool:
+        """Return True if *text* contains no alphabetic characters."""
+        return not any(c.isalpha() for c in text)
+
     def extract_instagram(self, file_path: Path) -> List[Dict]:
-        """Extract messages from Instagram JSON export."""
+        """Extract messages from Instagram JSON export.
+
+        Filters applied:
+        - Messages with ``share.link`` (reel / post shares) are dropped.
+        - System notifications (likes, reactions, attachment labels) are dropped.
+        - Messages containing only emoji / punctuation are dropped.
+        - Sender names are normalised via the SenderResolver; anonymous
+          senders ("Instagram user") are dropped entirely.
+        """
         print(f"\n💬 Processing Instagram: {file_path.name}")
         messages = []
-        
+
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             # Instagram format: {'participants': [...], 'messages': [...]}
             instagram_messages = data.get('messages', [])
-            
+
             for msg in instagram_messages:
-                # Skip if no content
+                # Skip if no text content
                 if 'content' not in msg:
                     continue
-                
-                text = msg['content']
-                
-                # Decode Instagram's encoding
-                text = self.decode_instagram_text(text)
-                
-                # Skip attachment notifications and reactions
-                if any(skip in text.lower() for skip in [
-                    'sent an attachment', 'liked a message', 'loved a message',
-                    'reacted', 'unsent a message', 'started a call',
-                    'missed a call', 'shared a post', 'shared a story'
-                ]):
+
+                # Skip reel / post shares — the message object carries a
+                # share dict with a 'link' field pointing to instagram.com
+                if msg.get('share', {}).get('link'):
                     continue
-                
+
+                text = msg['content']
+
+                # Decode Instagram's double-encoded UTF-8
+                text = self.decode_instagram_text(text)
+
+                # Skip system notifications and reactions
+                if self._is_instagram_system_message(text):
+                    continue
+
+                # Skip messages that are purely emoji / punctuation (no letters)
+                if self._is_pure_emoji_or_empty(text):
+                    continue
+
                 # Clean text
                 cleaned_text = self.clean_text(text)
-                
+
                 if not self.is_valid_message(cleaned_text):
                     continue
-                
-                # Get sender name
-                sender = msg.get('sender_name', 'Unknown')
-                sender = self.decode_instagram_text(sender)
-                
-                # Get timestamp (milliseconds to datetime)
+
+                # Resolve sender to canonical group member name
+                raw_sender = msg.get('sender_name', 'Unknown')
+                if self._resolver is not None:
+                    resolved = self._resolver.resolve(raw_sender)
+                    if resolved is None:
+                        # Anonymous sender — drop the message
+                        continue
+                    sender = resolved
+                else:
+                    sender = self.decode_instagram_text(raw_sender).strip()
+
+                # Get timestamp (milliseconds → datetime)
                 timestamp_ms = msg.get('timestamp_ms', 0)
                 timestamp = datetime.fromtimestamp(timestamp_ms / 1000)
-                
+
                 messages.append({
                     'timestamp': timestamp.isoformat(),
-                    'sender': sender.strip(),
+                    'sender': sender,
                     'text': cleaned_text,
-                    'source': 'instagram'
+                    'source': 'instagram',
                 })
-        
+
         except Exception as e:
             print(f"❌ Error processing Instagram file: {e}")
             return []
-        
+
         print(f"✅ Extracted {len(messages)} Instagram messages")
         return messages
     
