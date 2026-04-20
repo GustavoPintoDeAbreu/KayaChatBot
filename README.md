@@ -13,8 +13,50 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
 - **Automated knowledge generation**: Uses Azure GPT-4.1-mini to extract biographical facts from chat history
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
-- Fine-tunes Qwen3-14B using LoRA (Low-Rank Adaptation) with 4-bit quantization
-- Efficient training on consumer GPUs (requires ~16GB VRAM)
+- Fine-tunes Qwen3-14B and Gemma 4 E4B using LoRA (Low-Rank Adaptation) with 4-bit quantization
+- **Unrestricted mode**: Uncensored system prompt preamble injected at runtime — dark humour, roasts, banter, and profanity all enabled; no guardrails for this private group
+- Offline biography comparison tool generates member profiles with 5 model backends
+- Efficient training on a single consumer GPU (RTX 3090 24 GB)
+
+## 🧠 Model History & VRAM
+
+The project started with Qwen3-14B and later moved to Gemma 4 E4B as the primary model.
+
+### Trained Models
+
+| Profile | Base Model | LoRA Rank/Alpha | VRAM Training | VRAM Inference (4-bit) | Output Dir |
+|---|---|---|---|---|---|
+| `qwen3-14b` | Qwen3-14B (14B params) | r=32, α=32 | ~15 GB | ~10–12 GB | `models/kaya_v2_synthetic/` |
+| `gemma4-e4b` | Gemma 4 E4B (~8B active) | r=16, α=16 | ~11 GB alloc / ~12.6 GB reserved | ~8–9 GB | `models/kaya_gemma4_e4b/` |
+
+All numbers on NVIDIA RTX 3090 24 GB, CUDA 12.4. Always leave ≥2 GB VRAM headroom.
+
+**Training speed (Gemma 4 E4B):** ~2.5 s/step, 1200+ steps to convergence.
+
+### Restriction Level Benchmarks
+
+Both models were evaluated for how well they preserve group banter and edgy content versus self-censoring:
+
+| Capability | Gemma 4 E4B (finetuned) | Qwen3-14B (finetuned) | Grok (cloud) | Azure GPT-4.1-mini (cloud) |
+|---|---|---|---|---|
+| Roasts & banter | ✅ Full commitment | ✅ Strong | ✅ Good | ⚠ May soften |
+| Dark humour | ✅ Yes | ✅ Yes | ✅ Yes | ⚠ Occasional refusal |
+| Profanity / slang | ✅ Natural | ✅ Natural | ✅ Yes | ⚠ Sometimes hedges |
+| Third-person factual recall | ✅ | ✅ | ✅ | ✅ |
+| Portuguese banter style | ✅ (finetuned on real data) | ✅ (finetuned on real data) | Decent | Generic |
+
+Cloud LLM self-censorship: Azure content filters are managed at the Azure Portal resource level (no API toggle). Grok is less restricted by design. Local finetuned models bypass all filters entirely.
+
+Use the bio generator (`src/data/generate_bios_offline.py`) to run your own comparison — see [Model Comparison Tool](#-model-comparison-tool) below.
+
+### Switch Model Profile
+
+```yaml
+# config.yaml
+active_model_profile: gemma4-e4b   # or: qwen3-14b
+```
+
+Or pass `--profile gemma4-e4b` / `--profile qwen3-14b` on any CLI command.
 
 ## 🤖 RAG & Knowledge System
 
@@ -47,16 +89,35 @@ rag:
 - Semantic search across conversation chunks
 - Real-time retrieval stats during chat
 
-### Example Usage
-```
-User: What do you know about Peter?
-📚 Retrieved 3 conversation chunks + 1 knowledge fact
-Kaya Bot: Peter is a member of the Kaya group. He enjoys music and...
+### Example Interaction
 
-User: olá pessoal
-📚 Retrieved 3 conversation chunks
-Kaya Bot: oi! tudo bem? 😊
 ```
+User: quem é o peter?
+📚 Retrieved 4 conversation chunks + 2 knowledge facts (0.31s)
+
+Kaya Bot: O Peter é um dos membros mais activos do grupo — está sempre a organizar jantares,
+póqueres, e eventos. Pelas conversas, vive em Paço de Arcos, tem um cão chamado Kaya, e
+trabalhava na DAZN como editor. É conhecido pelo bom humor, pela paixão pelo futebol
+(frustrações com o Benfica incluídas) e por sempre ter um sítio para receber o grupo.
+
+---
+User: and what about gil?
+📚 Retrieved 5 conversation chunks + 1 knowledge fact (0.28s)
+
+Kaya Bot: Gil is the group's resident audio nerd — constantly talking about 8D audio, Dolby
+Atmos, and music technology. He has a daughter and a dog called Cuca, often brings his
+partner Luana to group events, and was planning to do a plumbing course starting September
+2026. He plays padel, enjoys techno music, and recovered from a broken nose after a football
+match. Sharp sense of humour; never misses a poker night.
+
+---
+User: oi!
+📚 Retrieved 3 conversation chunks (0.19s)
+
+Kaya Bot: oi! tudo bem contigo? 😄
+```
+
+> Responses always reference retrieved context — the bot never fabricates group history.
 
 ## 📁 Project Structure
 
@@ -104,7 +165,7 @@ KayaChatBot/
 ### Prerequisites
 
 - Python 3.10+
-- CUDA-capable GPU with 16GB+ VRAM (for training; less for inference)
+- CUDA-capable GPU: ≥16 GB VRAM for Qwen3-14B, ≥12 GB for Gemma 4 E4B (RTX 3090 24 GB recommended)
 - Azure OpenAI API access (for knowledge generation and optional synthetic generation)
 - xAI API access (for synthetic data generation with Grok models)
 
@@ -235,11 +296,39 @@ The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
 **Output:** `data/train_synthetic.jsonl`, `data/val_synthetic.jsonl`
 
 ### 5. **Fine-Tuning** (`train.py`)
-- Loads Qwen3-14B with 4-bit quantization (unsloth)
-- LoRA adapters: rank=32, alpha=32
-- 1500 steps with linear learning rate schedule
+Model-specific settings are in `configs/models/*.yaml`; select a profile in `config.yaml`.
 
-**Output:** `models/kaya_v2_synthetic/`
+| Profile | Loader | LoRA | Steps | Output |
+|---|---|---|---|---|
+| `qwen3-14b` | `FastLanguageModel` | r=32, α=32 | ~1500 | `models/kaya_v2_synthetic/` |
+| `gemma4-e4b` | `FastModel` | r=16, α=16 | ~1200 | `models/kaya_gemma4_e4b/` |
+
+**Output:** adapter files under the configured `output_dir`.
+
+## 🔬 Model Comparison Tool
+
+Generate biographical profiles for every group member using all available model backends, then compare them side-by-side:
+
+```bash
+# All 5 backends (requires API keys for cloud models)
+kaya_chatbot_env/bin/python src/data/generate_bios_offline.py \
+    --models gemma4,qwen3,grok,azure,azure_gpt53
+
+# Local models only (fully offline)
+kaya_chatbot_env/bin/python src/data/generate_bios_offline.py --models gemma4,qwen3
+
+# Rebuild comparison report from existing JSONs (no generation)
+kaya_chatbot_env/bin/python src/data/generate_bios_offline.py --compare-only
+
+# Disable uncensored preamble (investigate self-censorship baseline)
+kaya_chatbot_env/bin/python src/data/generate_bios_offline.py --models grok --no-uncensored
+```
+
+Outputs:
+- `reports/bios/bios_{model}.json` — per-member structured profiles for each backend
+- `reports/bios/bio_comparison.md` — side-by-side markdown comparison (age, occupation, interests, narrative bio)
+
+This is useful for benchmarking **information extraction quality** and **restriction level** across finetuned vs. cloud models. Cloud self-censorship notes: Azure content filters are controlled at the Azure Portal resource level (no API toggle); Grok is less restricted by design.
 
 ## ⚙️ Configuration
 
