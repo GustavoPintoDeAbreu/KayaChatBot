@@ -418,9 +418,12 @@ def build_local_rag_factory(
                 if aliases:
                     line += f" (também conhecido como: {', '.join(aliases)})"
                 notes = m.get("notes", "")
-                if notes:
+                key_facts = m.get("key_facts", [])
+                if key_facts:
+                    line += f" — {'. '.join(key_facts)}."
+                elif notes:
                     sentences = [s.strip() for s in notes.split(".") if s.strip()]
-                    line += f" — {'. '.join(sentences[:2])}."
+                    line += f" — {'. '.join(sentences[:3])}."
                 member_lines.append(line)
 
     inf_config = config.get("inference", {})
