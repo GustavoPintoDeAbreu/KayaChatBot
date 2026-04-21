@@ -727,13 +727,15 @@ class GoldenTestRunner:
     def __init__(
         self,
         provider,
-        local_model,
-        config: Dict[str, Any],
+        local_model=None,
+        config: Dict[str, Any] = None,
         golden_tests_file: Optional[str] = None,
+        response_fn=None,
     ):
         self.provider = provider
         self.local_model = local_model
-        self.config = config
+        self._response_fn = response_fn
+        self.config = config or {}
 
         if golden_tests_file is None:
             golden_tests_file = str(
@@ -752,8 +754,10 @@ class GoldenTestRunner:
 
     def _get_model_response(self, question: str) -> str:
         """Get response from local model (or mock)."""
-        if self.local_model.available:
-            return self.local_model.respond(question)
+        if self._response_fn is not None:
+            return self._response_fn(question)
+        if self.local_model is not None and self.local_model.available:
+            return self.local_model.generate(question)
         # Mock response for when no GPU model is loaded
         return f"[MOCK] Response to: {question}"
 
@@ -794,9 +798,10 @@ class GoldenTestRunner:
                 {"role": "system", "content": SCORING_SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ]
-            raw = self.provider.generate(messages)
+            raw = self.provider.chat_completion(messages)
             scores = parse_scores(raw)
         except Exception as exc:
+            print(f"    ⚠️  Judge call failed: {type(exc).__name__}: {exc}")
             # If judge call fails, mark all dimensions as 0
             scores = ScoreBreakdown(
                 factual_accuracy=0.0,

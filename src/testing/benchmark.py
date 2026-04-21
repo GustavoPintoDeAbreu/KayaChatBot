@@ -328,15 +328,174 @@ class BenchmarkRunner:
 
 
 # ---------------------------------------------------------------------------
+# RAG-aware response factory
+# ---------------------------------------------------------------------------
+
+def build_local_rag_factory(
+    config: dict,
+) -> Optional[Callable[[BenchmarkConfig], Callable[[str], str]]]:
+    """Return a factory that creates RAG-aware response functions backed by the local model.
+
+    The model and retriever are loaded once and shared across all configs.
+    Each :class:`BenchmarkConfig` gets its own ``response_fn`` that applies the
+    appropriate ``knowledge_approach`` and ``top_k`` to the retriever before
+    building the prompt.
+
+    Returns *None* when the model directory does not exist (triggers noop fallback).
+    """
+    import json as _json
+    import torch
+
+    from pathlib import Path as _Path
+
+    model_dir = config.get("training", {}).get("output_dir", "")
+    if not model_dir or not _Path(model_dir).exists():
+        print(f"⚠️  Model not found at '{model_dir}'; falling back to noop responses.")
+        return None
+
+    try:
+        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from peft import PeftModel  # type: ignore[import]
+    except ImportError as exc:
+        print(f"⚠️  Cannot import transformers/peft: {exc}; falling back to noop.")
+        return None
+
+    # -----------------------------------------------------------------
+    # Load model + tokenizer once
+    # -----------------------------------------------------------------
+    adapter_cfg_path = _Path(model_dir) / "adapter_config.json"
+    if not adapter_cfg_path.exists():
+        print(f"⚠️  adapter_config.json not found in {model_dir}; falling back to noop.")
+        return None
+
+    adapter_cfg = _json.loads(adapter_cfg_path.read_text(encoding="utf-8"))
+    base_model_name = adapter_cfg.get("base_model_name_or_path", "")
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+    )
+    print(f"📦 Loading base model '{base_model_name}' for benchmark …")
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        quantization_config=bnb_config,
+        device_map="cuda",
+        trust_remote_code=True,
+    )
+    model = PeftModel.from_pretrained(base_model, model_dir)
+    model.eval()
+    print("✅ Benchmark model loaded")
+
+    # -----------------------------------------------------------------
+    # Build retriever (shared, knowledge_approach varies per response_fn)
+    # -----------------------------------------------------------------
+    retriever = None
+    try:
+        from src.chat.retriever import get_retriever as _get_retriever
+        retriever = _get_retriever(config)
+        print("✅ Benchmark retriever loaded")
+    except Exception as exc:
+        print(f"⚠️  Retriever unavailable ({exc}); running without RAG context.")
+
+    # -----------------------------------------------------------------
+    # Pre-build member-profile lines for JSON injection
+    # -----------------------------------------------------------------
+    base_system_prompt = config.get("data", {}).get("system_prompt", "")
+    members_file = config.get("data", {}).get("group_members_file", "")
+    member_lines: List[str] = []
+    if members_file:
+        mf = _Path(members_file)
+        if not mf.is_absolute():
+            mf = _Path("config.yaml").resolve().parent / members_file
+        if mf.exists():
+            members_data = _json.loads(mf.read_text(encoding="utf-8"))
+            for m in members_data.get("members", []):
+                line: str = m["name"]
+                aliases = [a for a in m.get("aliases", []) if a.lower() != m["name"].lower()]
+                if aliases:
+                    line += f" (também conhecido como: {', '.join(aliases)})"
+                notes = m.get("notes", "")
+                key_facts = m.get("key_facts", [])
+                if key_facts:
+                    line += f" — {'. '.join(key_facts)}."
+                elif notes:
+                    sentences = [s.strip() for s in notes.split(".") if s.strip()]
+                    line += f" — {'. '.join(sentences[:3])}."
+                member_lines.append(line)
+
+    inf_config = config.get("inference", {})
+
+    def factory(cfg: BenchmarkConfig) -> Callable[[str], str]:
+        """Create a response function for the given BenchmarkConfig."""
+        knowledge_approach = cfg.knowledge_approach
+        top_k = cfg.top_k
+
+        system_prompt = base_system_prompt
+        if member_lines and knowledge_approach in ("both", "json_only"):
+            system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
+
+        def response_fn(question: str) -> str:
+            context = ""
+            if retriever and knowledge_approach != "none":
+                try:
+                    # Override top_k on retriever for this config
+                    orig_top_k = config.get("rag", {}).get("top_k", 5)
+                    config.setdefault("rag", {})["top_k"] = top_k
+                    context = retriever.retrieve_all(question, knowledge_approach=knowledge_approach)
+                    config["rag"]["top_k"] = orig_top_k  # restore
+                except Exception:
+                    context = ""
+
+            message_parts = []
+            if context:
+                message_parts.append(context)
+            message_parts.append(question)
+            user_message = "\n\n".join(message_parts)
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=cfg.max_new_tokens,
+                    temperature=inf_config.get("temperature", 0.7),
+                    top_p=inf_config.get("top_p", 0.9),
+                    repetition_penalty=inf_config.get("repetition_penalty", 1.1),
+                    do_sample=True,
+                    use_cache=True,
+                )
+            full = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+            # Strip the input portion
+            prompt_text = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
+            if prompt_text and full.startswith(prompt_text):
+                return full[len(prompt_text):].strip()
+            return full.strip()
+
+        return response_fn
+
+    return factory
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
-def _load_config(path: str) -> dict:
-    """Load a YAML config file and return as dict."""
-    import yaml  # local import — only needed for CLI
-
-    with open(path, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
+def _load_config(path: str, profile: Optional[str] = None) -> dict:
+    """Load config.yaml, applying the given model profile override if provided."""
+    from src.config_loader import load_config as _lc
+    return _lc(path, profile_override=profile)
 
 
 def main() -> None:
@@ -394,11 +553,25 @@ def main() -> None:
         help="Path to golden_test_conversations.json (default: auto-detect from config). "
              "Requires --judge-provider.",
     )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Model profile to use (e.g. 'gemma4-e4b', 'qwen3-14b'). "
+             "Overrides active_model_profile in config.yaml.",
+    )
+    parser.add_argument(
+        "--model-dir",
+        type=str,
+        default=None,
+        help="Override the model directory (training.output_dir). Useful for benchmarking "
+             "a specific checkpoint without editing config.yaml.",
+    )
 
     args = parser.parse_args()
 
-    # Load config
-    config = _load_config(args.config)
+    # Load config (with optional profile merge)
+    config = _load_config(args.config, profile=args.profile)
 
     # Apply CLI overrides
     config.setdefault("benchmark", {})
@@ -414,8 +587,15 @@ def main() -> None:
     if args.scenarios is not None:
         config["benchmark"]["scenarios_per_config"] = args.scenarios
 
+    # Apply model dir override
+    if args.model_dir is not None:
+        config.setdefault("training", {})["output_dir"] = args.model_dir
+
     # Build runner — dry-run uses no factory (falls back to _noop_response_fn)
-    factory = None  # extend later to build real model response functions
+    if args.dry_run:
+        factory = None
+    else:
+        factory = build_local_rag_factory(config)
     runner = BenchmarkRunner(config, response_fn_factory=factory)
 
     print("📊 Building benchmark matrix …")
@@ -483,12 +663,25 @@ def main() -> None:
         print(f"\n🎯 Running golden tests with judge '{args.judge_provider}' …")
         try:
             judge_provider = load_provider(args.judge_provider, config)
-            local_model = LocalModel(config)
+            # Reuse the already-loaded benchmark model via factory to avoid double GPU load
+            golden_response_fn = None
+            if factory is not None:
+                max_seq = config.get("model", {}).get("max_seq_length", 2048)
+                model_id = config.get("training", {}).get("output_dir", "")
+                golden_cfg = BenchmarkConfig(
+                    knowledge_approach="json_only",
+                    language="pt",
+                    max_seq_length=max_seq,
+                    top_k=5,
+                    model_id=model_id,
+                    max_new_tokens=256,
+                )
+                golden_response_fn = factory(golden_cfg)
             golden_runner = GoldenTestRunner(
                 provider=judge_provider,
-                local_model=local_model,
                 config=config,
                 golden_tests_file=golden_tests_file,
+                response_fn=golden_response_fn,
             )
             golden_report = golden_runner.run(verbose=True)
             golden_failures = golden_report["golden_tests_failed"]
