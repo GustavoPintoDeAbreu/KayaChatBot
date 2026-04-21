@@ -132,6 +132,7 @@ class KayaTrainer:
                 random_state=3407,
                 use_rslora=False,
                 loftq_config=None,
+                autocast_adapter_dtype=False,
             )
 
             print(f"✓ Model loaded with LoRA (r={lora_r}, alpha={lora_alpha})", flush=True)
@@ -225,7 +226,7 @@ class KayaTrainer:
             formatting_func=formatting_func,
             dataset_text_field="formatted_text",
             max_seq_length=self.max_seq_length,
-            dataset_num_proc=config.get("dataset_num_proc", 2),
+            dataset_num_proc=config.get("dataset_num_proc", 1),
             packing=False,
             callbacks=[ProgressCallback()],
             args=TrainingArguments(
@@ -243,6 +244,9 @@ class KayaTrainer:
                 lr_scheduler_type=config["lr_scheduler_type"],
                 seed=config["seed"],
                 output_dir=output_dir,
+                skip_memory_metrics=True,
+                dataloader_pin_memory=False,
+                dataloader_num_workers=0,
                 save_steps=config.get("save_steps", 100),
                 eval_strategy="steps" if eval_dataset else "no",
                 eval_steps=config.get("eval_steps", 50) if eval_dataset else None,

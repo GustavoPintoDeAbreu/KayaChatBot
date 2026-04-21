@@ -35,6 +35,12 @@ def main():
         default=None,
         help="Model profile name (overrides active_model_profile in config.yaml).",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Override output directory for saving the fine-tuned model.",
+    )
     args = parser.parse_args()
 
     # Check CUDA availability
@@ -72,6 +78,10 @@ def main():
         output_dir = config['training']['output_dir'] + "_test"
     else:
         output_dir = config['training']['output_dir']
+
+    # CLI override takes highest priority
+    if args.output_dir:
+        output_dir = args.output_dir
     
     # Dataset paths
     data_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
