@@ -4,9 +4,9 @@
 #       for SFT (do NOT add <|think|> to the system prompt during training).
 model:
   model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-  max_seq_length: 4096
+  max_seq_length: 2048
   load_in_4bit: true
-  lora_r: 16
+  lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.0
   target_modules:

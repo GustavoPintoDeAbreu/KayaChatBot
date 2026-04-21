@@ -1,15 +1,19 @@
 """
-Incremental pipeline for processing new WhatsApp chat exports.
+Incremental pipeline for processing new WhatsApp and Instagram chat exports.
 
 Only processes messages newer than the latest timestamp already in the dataset,
 and deduplicates by SHA-256 hash of (timestamp + sender + text) to guard
 against exact duplicates at the boundary.
 
 CLI usage:
-    # Single file
+    # Single WhatsApp file
     python src/data/incremental_update.py --input data/wpp/new_export.txt
 
-    # Whole directory — every *.txt file is processed
+    # Single Instagram file
+    python src/data/incremental_update.py --input data/insta/message_1.json
+
+    # Whole WhatsApp directory — every *.txt file is processed; also picks up
+    # message_*.json files from a sibling 'insta/' directory automatically.
     python src/data/incremental_update.py --input data/wpp/
 
     # Skip vector-DB rebuild (e.g. when called from run_full_pipeline.py)
@@ -133,21 +137,25 @@ def process_new_file(
     last_timestamp: Optional[str],
 ) -> List[Dict]:
     """
-    Parse *input_path* (WhatsApp TXT) and return only genuinely new messages.
+    Parse *input_path* (WhatsApp ``.txt`` or Instagram ``.json``) and return
+    only genuinely new messages.
+
+    The file type is determined by the file extension:
+    - ``.txt``  → WhatsApp export (``MessageExtractor.extract_whatsapp``)
+    - ``.json`` → Instagram export (``MessageExtractor.extract_instagram``)
 
     A message is accepted when:
-    - Its timestamp is >= *last_timestamp* (messages at the exact boundary are
-      kept here and let through to the hash-dedup step so that new messages
-      sent at the same minute as the last processed message are not silently
-      dropped).
-    - Its SHA-256 hash is NOT already in *existing_hashes* (handles exact
-      duplicates at the boundary and cross-file duplicates within a single
-      run).
+    - Its timestamp is >= *last_timestamp*.
+    - Its SHA-256 hash is NOT already in *existing_hashes*.
 
     Side-effect: accepted hashes are added to *existing_hashes* in place.
     """
     extractor = MessageExtractor()
-    raw_messages = extractor.extract_whatsapp(input_path)
+    suffix = input_path.suffix.lower()
+    if suffix == ".json":
+        raw_messages = extractor.extract_instagram(input_path)
+    else:
+        raw_messages = extractor.extract_whatsapp(input_path)
 
     new_messages: List[Dict] = []
     duplicates_skipped = 0
@@ -216,7 +224,7 @@ def run_incremental_update(
     Parameters
     ----------
     input_paths:
-        One or more WhatsApp ``.txt`` export files to process.
+        One or more WhatsApp ``.txt`` or Instagram ``.json`` export files.
     rebuild_db:
         When *True* (default) the ChromaDB vector database is rebuilt after
         the dataset is updated.  Pass *False* when called from
@@ -326,7 +334,7 @@ def run_incremental_update(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Incrementally process new WhatsApp chat exports, "
+            "Incrementally process new WhatsApp / Instagram chat exports, "
             "appending only previously-unseen messages to the cleaned dataset."
         )
     )
@@ -334,8 +342,11 @@ def main() -> None:
         "--input",
         required=True,
         help=(
-            "Path to a WhatsApp .txt export file, "
-            "or a directory containing .txt files."
+            "Path to a WhatsApp .txt or Instagram .json export file, "
+            "or a directory.  When a directory is provided, all *.txt files "
+            "in it are processed as WhatsApp exports and all message_*.json "
+            "files in a sibling 'insta/' directory are processed as Instagram "
+            "exports."
         ),
     )
     parser.add_argument(
@@ -352,11 +363,22 @@ def main() -> None:
     input_path = Path(args.input)
 
     if input_path.is_dir():
+        # Collect WhatsApp TXT files from the given directory
         input_files = sorted(input_path.glob("*.txt"))
+        # Also collect Instagram JSON files from a sibling 'insta/' directory
+        insta_dir = input_path.parent / "insta"
+        if not insta_dir.exists():
+            # Try treating the directory itself as insta if no sibling found
+            insta_dir = input_path / "insta"
+        if insta_dir.exists():
+            insta_files = sorted(insta_dir.glob("message_*.json"))
+            input_files = list(input_files) + insta_files
+            if insta_files:
+                print(f"📁 Also found {len(insta_files)} Instagram file(s) in {insta_dir}")
         if not input_files:
-            print(f"❌ No .txt files found in directory: {input_path}")
+            print(f"❌ No .txt or message_*.json files found under: {input_path}")
             sys.exit(1)
-        print(f"📁 Directory mode: found {len(input_files)} .txt file(s)")
+        print(f"📁 Directory mode: found {len(input_files)} file(s)")
     elif input_path.is_file():
         input_files = [input_path]
     else:
