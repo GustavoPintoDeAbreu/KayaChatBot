@@ -54,6 +54,12 @@ def main():
         default=None,
         help="Model profile name (overrides active_model_profile in config.yaml).",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Override output directory for saving the fine-tuned model.",
+    )
     args = parser.parse_args()
 
     # GPU check
@@ -89,6 +95,10 @@ def main():
         print("\n⚠️  TEST MODE ENABLED - Using reduced parameters for quick validation")
     else:
         output_dir = tc['output_dir']
+
+    # CLI override takes highest priority
+    if args.output_dir:
+        output_dir = args.output_dir
 
     print(f"   ✓ Model: {model_id}")
     print(f"   ✓ Max sequence length: {max_seq_length}")
