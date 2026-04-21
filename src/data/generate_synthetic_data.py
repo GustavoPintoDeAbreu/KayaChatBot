@@ -200,7 +200,12 @@ def main():
                        help='Generation mode: batch (default), single conversation, or count N conversations')
     parser.add_argument('--count', type=int, help='Number of conversations to generate (for count mode)')
     parser.add_argument('--depth', type=int, default=3, help='Conversation depth for single mode (default: 3)')
-    
+    parser.add_argument('--provider', type=str, default=None,
+                       help='Override generation provider (e.g. "xai", "azure", "azure_gpt53"). '
+                            'Defaults to config.yaml generation.provider.')
+    parser.add_argument('--output', type=str, default=None,
+                       help='Override output file path. Defaults to data/synthetic_kaya.jsonl.')
+
     args = parser.parse_args()
     
     print("=" * 60)
@@ -210,6 +215,13 @@ def main():
     # Load config
     config = load_config()
     paths = get_output_paths()
+
+    # Apply CLI overrides
+    if args.provider:
+        config['generation']['provider'] = args.provider
+    if args.output:
+        from pathlib import Path as _Path
+        paths['output'] = _Path(args.output)
     
     # Configuration
     TEST_MODE = config['test_mode']['enabled']
