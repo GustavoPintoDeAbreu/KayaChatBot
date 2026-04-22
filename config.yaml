@@ -222,11 +222,11 @@ rag:
 
   # Knowledge approach for benchmarking
   # Options:
-  #   "both"         — JSON members in system prompt AND ChromaDB KB retrieval (default, best coverage)
-  #   "json_only"    — JSON members injected into system prompt only, no KB retrieval
+  #   "both"         — JSON members in system prompt AND ChromaDB KB retrieval (overflows 2048-token budget → 0% score)
+  #   "json_only"    — JSON members injected into system prompt only, no KB retrieval (best: 30% benchmark score)
   #   "chromadb_only"— ChromaDB KB retrieval only, no JSON injection into system prompt
   #   "none"         — Neither (baseline: only conversation RAG + finetune)
-  knowledge_approach: "both"
+  knowledge_approach: "json_only"
 
   # Token budget for total injected context (whitespace-based approximation: words / 0.75)
   max_context_tokens: 3000
