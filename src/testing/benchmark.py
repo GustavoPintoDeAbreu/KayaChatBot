@@ -60,6 +60,9 @@ class BenchmarkResult:
     duration_seconds: float
     timestamp: str  # ISO-8601
     tokens_per_second: Optional[float] = None  # throughput (None if not measured)
+    scoring_mode: str = "keyword"  # "keyword" or "llm_judge"
+    golden_passed: Optional[int] = None   # set in llm_judge mode
+    golden_total: Optional[int] = None    # set in llm_judge mode
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,8 @@ class BenchmarkRunner:
         self,
         config: dict,
         response_fn_factory: Optional[Callable[[BenchmarkConfig], Callable[[str], str]]] = None,
+        llm_bench_provider=None,
+        golden_tests_file: Optional[str] = None,
     ):
         """Initialise the benchmark runner.
 
@@ -87,9 +92,16 @@ class BenchmarkRunner:
                 :class:`BenchmarkConfig`, returns a ``Callable[[str], str]``
                 used to generate responses.  When *None* a no-op placeholder
                 is used (returns empty string — useful for dry-runs).
+            llm_bench_provider: When set, use LLM judge (GoldenTestRunner) for
+                per-config scoring instead of keyword matching.  Pass an
+                already-loaded provider object.
+            golden_tests_file: Override path to golden_test_conversations.json.
+                Relevant when ``llm_bench_provider`` is set.
         """
         self.config = config
         self.response_fn_factory = response_fn_factory
+        self.llm_bench_provider = llm_bench_provider
+        self.golden_tests_file = golden_tests_file
         self.tester = ConversationTester()
 
     # ------------------------------------------------------------------
@@ -179,6 +191,20 @@ class BenchmarkRunner:
         limit = bench.get("scenarios_per_config", None)
         results: List[BenchmarkResult] = []
 
+        # When llm_bench_provider is set, load a single GoldenTestRunner shared
+        # across all configs (model stays in VRAM; provider is reused per call).
+        golden_runner = None
+        if self.llm_bench_provider is not None:
+            gt_file = self.golden_tests_file or str(
+                Path(__file__).resolve().parent.parent.parent
+                / "data" / "golden_test_conversations.json"
+            )
+            golden_runner = GoldenTestRunner(
+                provider=self.llm_bench_provider,
+                config=self.config,
+                golden_tests_file=gt_file,
+            )
+
         for i, cfg in enumerate(matrix, 1):
             print(f"📊 Running config {i}/{len(matrix)}: "
                   f"{cfg.knowledge_approach} / {cfg.language} / "
@@ -191,26 +217,47 @@ class BenchmarkRunner:
                 response_fn = _noop_response_fn
 
             start = time.time()
-            scenario_results = self.tester.run_all(
-                response_fn, language=cfg.language, limit=limit
-            )
-            elapsed = round(time.time() - start, 3)
 
-            summary = self.tester.summarize(scenario_results)
-
-            results.append(
-                BenchmarkResult(
-                    config=cfg,
-                    scenario_results=scenario_results,
-                    avg_score=summary["avg_score"],
-                    duration_seconds=elapsed,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+            if golden_runner is not None:
+                # LLM judge mode: score via GoldenTestRunner per config
+                report = golden_runner.run(response_fn=response_fn, verbose=False)
+                elapsed = round(time.time() - start, 3)
+                passed = report["golden_tests_passed"]
+                total = report["golden_tests_run"]
+                avg_score = round(passed / total, 4) if total > 0 else 0.0
+                results.append(
+                    BenchmarkResult(
+                        config=cfg,
+                        scenario_results=[],
+                        avg_score=avg_score,
+                        duration_seconds=elapsed,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        scoring_mode="llm_judge",
+                        golden_passed=passed,
+                        golden_total=total,
+                    )
                 )
-            )
-
-            print(f"  ✅ avg_score={summary['avg_score']:.2%}  "
-                  f"scenarios={summary['total_scenarios']}  "
-                  f"time={elapsed:.1f}s")
+                print(f"  ✅ avg_score={avg_score:.2%}  "
+                      f"golden={passed}/{total}  time={elapsed:.1f}s")
+            else:
+                # Keyword mode (default)
+                scenario_results = self.tester.run_all(
+                    response_fn, language=cfg.language, limit=limit
+                )
+                elapsed = round(time.time() - start, 3)
+                summary = self.tester.summarize(scenario_results)
+                results.append(
+                    BenchmarkResult(
+                        config=cfg,
+                        scenario_results=scenario_results,
+                        avg_score=summary["avg_score"],
+                        duration_seconds=elapsed,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+                )
+                print(f"  ✅ avg_score={summary['avg_score']:.2%}  "
+                      f"scenarios={summary['total_scenarios']}  "
+                      f"time={elapsed:.1f}s")
 
         return results
 
@@ -233,7 +280,8 @@ class BenchmarkRunner:
 
         if results:
             avg_all = sum(r.avg_score for r in results) / len(results)
-            lines.append(f"**Overall average score:** {avg_all:.2%}\n")
+            scoring_note = "llm_judge" if any(r.scoring_mode == "llm_judge" for r in results) else "keyword"
+            lines.append(f"**Overall average score:** {avg_all:.2%}  (**scoring: {scoring_note}**)\n")
         lines.append("")
 
         # Table header
@@ -246,6 +294,10 @@ class BenchmarkRunner:
             # Truncate long model paths for readability
             if len(model) > 40:
                 model = f"…{model[-37:]}"
+            if r.scoring_mode == "llm_judge":
+                scenarios_col = f"{r.golden_passed}/{r.golden_total} ★"
+            else:
+                scenarios_col = str(len(r.scenario_results))
             lines.append(
                 f"| {r.config.knowledge_approach} "
                 f"| {r.config.language} "
@@ -253,7 +305,7 @@ class BenchmarkRunner:
                 f"| {r.config.max_new_tokens} "
                 f"| {model} "
                 f"| {r.avg_score:.2%} "
-                f"| {len(r.scenario_results)} "
+                f"| {scenarios_col} "
                 f"| {r.duration_seconds:.1f}s |"
             )
 
@@ -278,6 +330,7 @@ class BenchmarkRunner:
                     if results
                     else 0.0
                 ),
+                "scoring_mode": results[0].scoring_mode if results else "keyword",
             },
             "results": [
                 {
@@ -285,6 +338,9 @@ class BenchmarkRunner:
                     "avg_score": r.avg_score,
                     "duration_seconds": r.duration_seconds,
                     "timestamp": r.timestamp,
+                    "scoring_mode": r.scoring_mode,
+                    "golden_passed": r.golden_passed,
+                    "golden_total": r.golden_total,
                     "scenario_results": [asdict(sr) for sr in r.scenario_results],
                 }
                 for r in results
@@ -567,6 +623,18 @@ def main() -> None:
         help="Override the model directory (training.output_dir). Useful for benchmarking "
              "a specific checkpoint without editing config.yaml.",
     )
+    parser.add_argument(
+        "--llm-bench",
+        action="store_true",
+        help="Use LLM judge (GoldenTestRunner) for per-config scoring instead of keyword "
+             "matching. Requires --llm-bench-provider.",
+    )
+    parser.add_argument(
+        "--llm-bench-provider",
+        type=str,
+        default=None,
+        help="LLM provider for --llm-bench mode: 'xai', 'azure', or 'azure_gpt53'.",
+    )
 
     args = parser.parse_args()
 
@@ -596,7 +664,20 @@ def main() -> None:
         factory = None
     else:
         factory = build_local_rag_factory(config)
-    runner = BenchmarkRunner(config, response_fn_factory=factory)
+
+    # Optional LLM bench provider
+    llm_bench_provider = None
+    if args.llm_bench:
+        if not args.llm_bench_provider:
+            parser.error("--llm-bench requires --llm-bench-provider (e.g. --llm-bench-provider xai)")
+        llm_bench_provider = load_provider(args.llm_bench_provider, config)
+
+    runner = BenchmarkRunner(
+        config,
+        response_fn_factory=factory,
+        llm_bench_provider=llm_bench_provider,
+        golden_tests_file=args.golden_tests,
+    )
 
     print("📊 Building benchmark matrix …")
     matrix = runner.build_matrix()
@@ -622,9 +703,11 @@ def main() -> None:
         delta = current_avg - baseline_avg
         delta_str = f"+{delta:.4f}" if delta >= 0 else f"{delta:.4f}"
         regression_flag = " ⚠️ REGRESSION" if delta < -0.05 else ""
-        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline={baseline_avg:.4f} delta={delta_str}{regression_flag}")
+        scoring_mode_str = results[0].scoring_mode if results else "keyword"
+        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline={baseline_avg:.4f} delta={delta_str}{regression_flag} scoring={scoring_mode_str}")
     else:
-        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline=none delta=none")
+        scoring_mode_str = results[0].scoring_mode if results else "keyword"
+        print(f"BENCHMARK_REGRESSION: avg_score={current_avg:.4f} baseline=none delta=none scoring={scoring_mode_str}")
 
     # Save new baseline when requested or when none exists yet
     if args.update_baseline or not baseline_file.exists():

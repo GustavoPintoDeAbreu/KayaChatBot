@@ -159,7 +159,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "./models/kaya_v2_synthetic"
+  output_dir: "./models/kaya_gemma4_synth_v6"
   
   # Training hyperparameters (optimized for 2000+ synthetic examples)
   max_steps: 1500  # Reduced from 6000 to prevent overfitting (~1 epoch for larger dataset)

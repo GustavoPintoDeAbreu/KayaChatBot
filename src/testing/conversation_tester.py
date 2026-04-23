@@ -813,8 +813,29 @@ class GoldenTestRunner:
             )
         return scores
 
-    def run(self, verbose: bool = True) -> Dict[str, Any]:
-        """Run all golden tests and return a structured report."""
+    def run(
+        self,
+        verbose: bool = True,
+        response_fn: Optional[Callable[[str], str]] = None,
+    ) -> Dict[str, Any]:
+        """Run all golden tests and return a structured report.
+
+        Args:
+            verbose: Print per-test progress to stdout.
+            response_fn: Optional response function override for this run only.
+                         When provided, temporarily replaces ``self._response_fn``
+                         for the duration of the call.
+        """
+        _orig_fn = self._response_fn
+        if response_fn is not None:
+            self._response_fn = response_fn
+        try:
+            return self._run_inner(verbose=verbose)
+        finally:
+            self._response_fn = _orig_fn
+
+    def _run_inner(self, verbose: bool = True) -> Dict[str, Any]:
+        """Internal run implementation (uses ``self._response_fn``)."""
         if not self.test_cases:
             return {
                 "golden_tests_run": 0,
@@ -1039,6 +1060,12 @@ SCENARIOS: List[dict] = [
         "question_pt": "Quem são os membros do grupo Kaya?",
         "question_en": "Who are the members of the Kaya group?",
         "expected_keywords": ["kaya", "grupo", "membros"],
+        "reference": (
+            "The Kaya group has members including Peter, Gil, Gustavo, Carnall, Rafa, "
+            "Frederico, David (also known as Benny or Benny Pereira), Manuel, Bernardo, "
+            "Chamusca, and Pedro. The group communicates via WhatsApp and meets for "
+            "dinners, drinks, poker nights, padel, and beach outings."
+        ),
     },
     {
         "id": "s002",
@@ -1046,6 +1073,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "O que é que o grupo costuma fazer ao fim de semana?",
         "question_en": "What does the group usually do on weekends?",
         "expected_keywords": ["fim de semana", "weekend"],
+        "reference": (
+            "The Kaya group regularly organises dinners at restaurants like Marginalíssimo, "
+            "drinks, poker nights, padel games, and beach outings at Caxias. Members "
+            "coordinate social events and casual hangouts on weekends."
+        ),
     },
     {
         "id": "s003",
@@ -1053,6 +1085,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Quem é que organiza os jantares do grupo?",
         "question_en": "Who usually organizes the group dinners?",
         "expected_keywords": ["jantar", "dinner", "organiz"],
+        "reference": (
+            "Multiple members organise group events. Carnall frequently coordinates dinners "
+            "and gatherings. Peter also coordinates group plans and restaurant bookings. "
+            "Gustavo participates in group event planning."
+        ),
     },
     {
         "id": "s004",
@@ -1060,6 +1097,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Há alguém no grupo que goste de futebol?",
         "question_en": "Is there anyone in the group who likes football?",
         "expected_keywords": ["futebol", "football"],
+        "reference": (
+            "Several group members enjoy football, including Gil (who broke his nose playing "
+            "football), Peter (who plays football and hosts Benfica viewings), and Gustavo "
+            "(who plays football and coordinates group sports)."
+        ),
     },
     # --- factual (knowledge-base facts) ---
     {
@@ -1068,6 +1110,10 @@ SCENARIOS: List[dict] = [
         "question_pt": "Quando é que o grupo foi criado?",
         "question_en": "When was the group created?",
         "expected_keywords": ["grupo", "group", "cria"],
+        "reference": (
+            "No specific founding date for the Kaya group is available in the knowledge base. "
+            "It is a Portuguese friend group that communicates via WhatsApp and Instagram."
+        ),
     },
     {
         "id": "s006",
@@ -1075,6 +1121,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Qual foi a última viagem do grupo?",
         "question_en": "What was the group's last trip?",
         "expected_keywords": ["viagem", "trip"],
+        "reference": (
+            "No specific information about the group's last trip is available in the current "
+            "context. The group has made beach outings to Caxias and members have travelled "
+            "individually to various locations."
+        ),
     },
     {
         "id": "s007",
@@ -1082,6 +1133,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "O grupo tem alguma tradição especial?",
         "question_en": "Does the group have any special traditions?",
         "expected_keywords": ["tradição", "tradition"],
+        "reference": (
+            "The Kaya group has recurring social traditions: regular dinners at places like "
+            "Marginalíssimo, poker nights (often at Rafa's place), padel games, and beach "
+            "outings to Caxias."
+        ),
     },
     {
         "id": "s008",
@@ -1089,6 +1145,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Onde é que o grupo costuma encontrar-se?",
         "question_en": "Where does the group usually meet?",
         "expected_keywords": ["encontr", "meet", "lugar"],
+        "reference": (
+            "The Kaya group meets at restaurants like Marginalíssimo, at Rafa's apartment or "
+            "villa, at Peter's home, and at beach spots like Caxias. They also meet at bars "
+            "and for poker nights."
+        ),
     },
     # --- conversational (casual chat) ---
     {
@@ -1097,6 +1158,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Olá, tudo bem contigo?",
         "question_en": "Hey, how are you doing?",
         "expected_keywords": ["olá", "hello", "bem", "good", "hi", "hey"],
+        "reference": (
+            "The assistant is Kaya, a bot for the Kaya group. It should respond in a friendly, "
+            "natural way as a helpful assistant, not claim personal activities, physical "
+            "states, or plans of its own."
+        ),
     },
     {
         "id": "s010",
@@ -1104,6 +1170,10 @@ SCENARIOS: List[dict] = [
         "question_pt": "Conta-me uma piada sobre o grupo.",
         "question_en": "Tell me a joke about the group.",
         "expected_keywords": ["grupo", "group"],
+        "reference": (
+            "The assistant should respond creatively and humorously while describing group "
+            "members in third person. It should not claim to be a member of the group itself."
+        ),
     },
     {
         "id": "s011",
@@ -1111,6 +1181,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "O que achas do tempo hoje?",
         "question_en": "What do you think about the weather today?",
         "expected_keywords": ["tempo", "weather"],
+        "reference": (
+            "The assistant is a bot and does not experience weather directly. It should "
+            "acknowledge the question politely without pretending to have outdoor experiences "
+            "or personal weather opinions."
+        ),
     },
     {
         "id": "s012",
@@ -1118,6 +1193,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Qual é a tua comida favorita?",
         "question_en": "What is your favourite food?",
         "expected_keywords": ["comida", "food", "favorit"],
+        "reference": (
+            "The assistant is a bot and does not eat food. It should acknowledge the question "
+            "honestly and redirect appropriately, perhaps noting group members' food "
+            "preferences instead (e.g., Peter enjoys Five Guys with extra cheese and bacon)."
+        ),
     },
     # --- language (language quality / style) ---
     {
@@ -1126,6 +1206,10 @@ SCENARIOS: List[dict] = [
         "question_pt": "Podes responder em português europeu, por favor?",
         "question_en": "Can you answer in European Portuguese, please?",
         "expected_keywords": ["português", "portuguese"],
+        "reference": (
+            "The assistant should confirm it can communicate in European Portuguese and "
+            "respond accordingly in that register."
+        ),
     },
     {
         "id": "s014",
@@ -1133,6 +1217,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Explica-me o que é o RAG em termos simples.",
         "question_en": "Explain what RAG is in simple terms.",
         "expected_keywords": ["rag", "retrieval", "informação", "information"],
+        "reference": (
+            "RAG stands for Retrieval-Augmented Generation. It retrieves relevant information "
+            "from a database or document store, then uses a language model to generate a "
+            "contextually informed response based on that retrieved content."
+        ),
     },
     {
         "id": "s015",
@@ -1140,6 +1229,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Escreve uma mensagem de aniversário para um membro do grupo.",
         "question_en": "Write a birthday message for a group member.",
         "expected_keywords": ["aniversário", "birthday", "parabéns", "happy"],
+        "reference": (
+            "A birthday message for a group member should be warm, celebratory, and in "
+            "European Portuguese. The bot should write it as an assistant composing a "
+            "message, not as a personal friend."
+        ),
     },
     {
         "id": "s016",
@@ -1147,6 +1241,11 @@ SCENARIOS: List[dict] = [
         "question_pt": "Resume a última conversa do grupo em três frases.",
         "question_en": "Summarize the last group conversation in three sentences.",
         "expected_keywords": ["conversa", "conversation", "grupo", "group"],
+        "reference": (
+            "The assistant should provide a brief summary of recent group conversations if "
+            "context is available in the RAG block, or politely explain that no recent "
+            "conversation data is present in the current context."
+        ),
     },
 ]
 
