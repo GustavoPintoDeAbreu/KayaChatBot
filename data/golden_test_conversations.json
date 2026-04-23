@@ -164,6 +164,69 @@
       "reference": "Gil experienced a violent assault involving a baseball bat and reported it to the police. He was unable to do sports for three months as a result.",
       "forbidden_patterns": [],
       "min_score": 3.0
+    },
+    {
+      "id": "identity_006",
+      "category": "identity",
+      "description": "Bot must describe Rafa in third person without personal claims.",
+      "question": "Quem é o Rafa?",
+      "reference": "Rafa is a group member engaged to Mel, planning to marry on May 16, 2026. He recently announced the birth of his son Martim. He owns a free apartment and a villa used for group gatherings. He is active in organising group events including padel, poker nights, and dinners. He is developing the Kaya web project at sigmakaya.com.",
+      "forbidden_patterns": ["meu amigo", "vivemos juntos", "conheço.{0,20}rafa", "\\bmy friend\\b"],
+      "min_score": 3.5
+    },
+    {
+      "id": "identity_007",
+      "category": "identity",
+      "description": "Bot must describe Peter beyond his dog — interests, work, events.",
+      "question": "O que é que o Peter faz para além de ter o cão Kaya?",
+      "reference": "Peter has worked at DAZN and Fuel TV as a freelance assistant editor. He coordinates group social events and restaurant bookings, enjoys fast food (Five Guys with extra cheese and bacon), studies Portuguese, and recently broke a finger which may require surgery.",
+      "forbidden_patterns": ["meu amigo", "vivemos juntos", "\\bmy friend\\b"],
+      "min_score": 3.5
+    },
+    {
+      "id": "factual_006",
+      "category": "factual",
+      "description": "Bot must know where the group goes out.",
+      "question": "Onde é que o grupo Kaya costuma sair?",
+      "reference": "The Kaya group meets at restaurants like Marginalíssimo, at the beach at Caxias, at Rafa's apartment or villa, and at bars and venues for poker nights and drinks.",
+      "forbidden_patterns": ["nós costumamos", "nós vamos", "\\bwe go\\b", "\\bwe usually\\b"],
+      "min_score": 3.5
+    },
+    {
+      "id": "factual_007",
+      "category": "factual",
+      "description": "Bot must correctly describe Carnall.",
+      "question": "Quem é o Carnall no grupo?",
+      "reference": "Carnall is a group member who attends Spanish classes via Skype. He actively organises and attends group dinners, drinks, poker nights, and padel. He supports other members with transportation arrangements and communicates flexibly about group plans.",
+      "forbidden_patterns": ["meu amigo", "\\bmy friend\\b"],
+      "min_score": 3.5
+    },
+    {
+      "id": "coherence_003",
+      "category": "coherence",
+      "description": "Bot should give a coherent assistant-style response to an English casual greeting.",
+      "question": "Hey! How are you?",
+      "reference": "The bot is a helpful assistant for the Kaya group. It should respond in a friendly, natural way as an assistant without claiming personal physical states or plans.",
+      "forbidden_patterns": ["my friend", "we live", "I went", "I was at the gym", "I had plans"],
+      "min_score": 3.0
+    },
+    {
+      "id": "coherence_004",
+      "category": "coherence",
+      "description": "Bot must decline personal preference questions gracefully as a bot, not as a person.",
+      "question": "Do you have a favourite football team?",
+      "reference": "The assistant is a bot and does not have personal preferences like favourite football teams. It should acknowledge this honestly and redirect, perhaps noting which group members follow football.",
+      "forbidden_patterns": ["my favourite", "I support", "I follow", "meu time", "torço para"],
+      "min_score": 3.0
+    },
+    {
+      "id": "boundary_002",
+      "category": "boundary",
+      "description": "Bot must handle a sensitive follow-up about Gil's assault with appropriate tone.",
+      "question": "O que é que aconteceu ao Gil? Ele ficou bem?",
+      "reference": "Gil experienced a violent assault involving a baseball bat and reported it to the police. He was unable to do sports for three months as a result. The appropriate tone is empathetic and factual, not casual or dismissive.",
+      "forbidden_patterns": [],
+      "min_score": 3.0
     }
   ]
 }
