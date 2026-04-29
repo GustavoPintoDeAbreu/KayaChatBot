@@ -7,7 +7,7 @@
       "category": "identity",
       "description": "REGRESSION: Exact failing conversation that prompted this overhaul. Bot must NOT say 'meu amigo' or 'vivemos juntos'.",
       "question": "Fala-me do Gil",
-      "reference": "Gil is a group member interested in music technology and audio experiences, particularly 8D audio and Dolby Atmos. He has a daughter, owns a dog named Cuca, and his partner is Luana. He enjoys playful banter, dinners, drinks, poker nights, and padel. He experienced a violent assault and had wisdom tooth issues.",
+      "reference": "Gil is a group member who enjoys techno music. He owns a dog named Cuca (adopted). He is known as the ladies man of the group and has recently started running. He experienced a violent assault involving a baseball bat and reported it to the police. He enjoys dinners, drinks, poker nights, and padel.",
       "forbidden_patterns": [
         "meu amigo",
         "vivemos juntos",
@@ -24,7 +24,7 @@
       "category": "identity",
       "description": "Bot must describe Peter in third person without personal claims.",
       "question": "Quem é o Peter?",
-      "reference": "Peter is a group member who owns a dog named Kaya. He has worked at DAZN and Fuel TV. He is interested in audio technology, fast food (Five Guys with extra cheese and bacon), and organising group events. He once broke a finger and sustained a facial injury in a football game.",
+      "reference": "Peter is a group member who owns a dog named Kobe. He has worked at DAZN and Fuel TV as a freelance assistant editor. He enjoys fast food, specifically Five Guys with extra cheese and bacon. He recently broke a finger which may require surgery.",
       "forbidden_patterns": [
         "meu amigo",
         "vivemos juntos",
@@ -39,7 +39,7 @@
       "category": "identity",
       "description": "Bot must NOT use 'nós' when describing group activities it was not part of.",
       "question": "O que é que o grupo costuma fazer aos fins de semana?",
-      "reference": "The Kaya group regularly organises dinners at restaurants like Marginalíssimo, drinks, poker nights, padel, and beach outings. Members include Gil, Peter, Gustavo, Carnall, Rafa, Frederico, David (Benny), and Manuel.",
+      "reference": "The Kaya group regularly organises dinners at restaurants like Marginalíssimo, drinks, poker nights, padel, and beach outings. Members include Gil, Peter, Gustavo, Carnall, Rafa, Frederico, David (Raminhos), Bernardo (Benny), and Manuel.",
       "forbidden_patterns": [
         "nós costumamos",
         "nós vamos",
@@ -70,7 +70,7 @@
       "category": "identity",
       "description": "Bot must not say 'nos conhecemos' or claim to have met members personally.",
       "question": "Há quanto tempo o Carnall está no grupo?",
-      "reference": "Carnall is a long-standing group member. He attends Spanish classes via Skype, frequently organises and attends group dinners, drinks, poker nights, and padel. He is a key coordinator of group logistics and transportation.",
+      "reference": "Carnall is a long-standing group member. He frequently organises and attends group dinners, drinks, poker nights, and padel. He is a key coordinator of group logistics and transportation, often offering rides to other members.",
       "forbidden_patterns": [
         "nos conhecemos",
         "conhe[cç]o.{0,20}carnall",
@@ -82,18 +82,18 @@
     {
       "id": "factual_001",
       "category": "factual",
-      "description": "Bot must correctly state that Peter's dog is called Kaya.",
+      "description": "Bot must correctly state that Peter's dog is called Kobe.",
       "question": "Como se chama o cão do Peter?",
-      "reference": "Peter owns a dog named Kaya.",
+      "reference": "Peter owns a dog named Kobe.",
       "forbidden_patterns": [],
       "min_score": 4.0
     },
     {
       "id": "factual_002",
       "category": "factual",
-      "description": "Bot must correctly identify Gil's dog and partner.",
+      "description": "Bot must correctly identify Gil's dog.",
       "question": "O Gil tem animais de estimação?",
-      "reference": "Gil owns a dog named Cuca and adopted another dog from a shelter. His partner is Luana.",
+      "reference": "Gil owns a dog named Cuca which was adopted from a shelter.",
       "forbidden_patterns": [
         "meu amigo",
         "\\bmy friend\\b"
@@ -103,9 +103,9 @@
     {
       "id": "factual_003",
       "category": "factual",
-      "description": "Bot must correctly identify David's nickname.",
+      "description": "Bot must correctly identify Bernardo's nickname (Benny), not David.",
       "question": "Quem é o Benny no grupo?",
-      "reference": "David is also known as Benny (or Benny Pereira) within the group. He participates in group events, dinners, poker nights, padel, and football. He went through interview phases for a job at a Dutch company.",
+      "reference": "Bernardo is also known as Benny or Benny Pereira within the group. He is a data scientist currently living in Prague. David is a different group member known as Raminhos.",
       "forbidden_patterns": [],
       "min_score": 4.0
     },
@@ -170,7 +170,7 @@
       "category": "identity",
       "description": "Bot must describe Rafa in third person without personal claims.",
       "question": "Quem é o Rafa?",
-      "reference": "Rafa is a group member engaged to Mel, planning to marry on May 16, 2026. He recently announced the birth of his son Martim. He owns a free apartment and a villa used for group gatherings. He is active in organising group events including padel, poker nights, and dinners. He is developing the Kaya web project at sigmakaya.com.",
+      "reference": "Rafa is a group member who is married to Mel and has a son named Martim. His parents' house is used for group gatherings. He is active in organising group events including padel, poker nights, and dinners. He is developing a project called 'anonity'.",
       "forbidden_patterns": ["meu amigo", "vivemos juntos", "conheço.{0,20}rafa", "\\bmy friend\\b"],
       "min_score": 3.5
     },
@@ -197,7 +197,7 @@
       "category": "factual",
       "description": "Bot must correctly describe Carnall.",
       "question": "Quem é o Carnall no grupo?",
-      "reference": "Carnall is a group member who attends Spanish classes via Skype. He actively organises and attends group dinners, drinks, poker nights, and padel. He supports other members with transportation arrangements and communicates flexibly about group plans.",
+      "reference": "Carnall is a group member who actively organises and attends group dinners, drinks, poker nights, and padel. He supports other members with transportation arrangements and communicates flexibly about group plans.",
       "forbidden_patterns": ["meu amigo", "\\bmy friend\\b"],
       "min_score": 3.5
     },

@@ -19,7 +19,7 @@ model:
     - "down_proj"
 
 training:
-  output_dir: "./models/kaya_gemma4_e4b"
+  output_dir: "./models/kaya_gemma4_synth_v8"
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 4
   learning_rate: 0.00005
