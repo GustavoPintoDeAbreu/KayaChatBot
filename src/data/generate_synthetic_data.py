@@ -22,6 +22,42 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.data.generation_utils import load_config, get_base_dir, get_output_paths, get_llm_provider, load_finetune_chunks, save_conversation
 
 
+def load_canonical_members(path: str | None = None) -> list:
+    """Load member list from group_members.json."""
+    if path is None:
+        path = str(get_base_dir() / "data" / "group_members.json")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)["members"]
+
+
+def build_members_injection(members: list) -> str:
+    """Build a strict canonical member block to prepend to every targeted prompt.
+
+    This prevents the LLM from hallucinating non-existent group members or
+    assigning wrong nicknames (e.g. David≠Benny).
+    """
+    lines = [
+        "══════════════════════════════════════════════════════",
+        "CANONICAL MEMBER ROSTER — STRICTLY FOLLOW THIS LIST",
+        "══════════════════════════════════════════════════════",
+        "The Kaya group has EXACTLY these members (ALL MALE). No other members exist.",
+        "Do NOT invent, hallucinate, or add any person not on this list.",
+        "",
+    ]
+    for m in members:
+        name = m["name"]
+        aliases = m.get("aliases", [])
+        all_names = ", ".join(dict.fromkeys([name] + [a for a in aliases if a != name.lower()]))
+        lines.append(f"  • {name}  (also known as: {all_names})")
+    lines += [
+        "",
+        "CRITICAL: ALL members are MALE. Never use female pronouns (ela/dela/she/her) for any member.",
+        "══════════════════════════════════════════════════════",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def get_generation_prompt(finetune_chunk_text: str, num_conversations: int) -> str:
     """Create prompt for Azure OpenAI to generate RAG-aware conversations from finetune chunk."""
     
@@ -201,7 +237,7 @@ def main():
     parser.add_argument('--count', type=int, help='Number of conversations to generate (for count/targeted modes)')
     parser.add_argument('--depth', type=int, default=3, help='Conversation depth for single mode (default: 3)')
     parser.add_argument('--category', type=str, default=None,
-                       choices=['coherence', 'identity_gil', 'identity_gustavo', 'identity_group', 'factual_benny', 'factual_gil_music'],
+                       choices=['coherence', 'identity_gil', 'identity_gustavo', 'identity_group', 'factual_benny', 'factual_gil_music', 'persona_deflect', 'boundary_tone', 'uncertainty_aware', 'factual_grounding'],
                        help='Category for targeted generation mode.')
     parser.add_argument('--provider', type=str, default=None,
                        help='Override generation provider (e.g. "xai", "azure", "azure_gpt53"). '
@@ -406,19 +442,21 @@ _TARGETED_RAG_EXAMPLE = (
 )
 
 TARGETED_PROMPTS: Dict[str, str] = {
-    "coherence": """Generate 15 training conversations for a Portuguese group chat assistant named Kaya.
+    "coherence": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
 
-SCENARIO: A user greets the bot casually (in European Portuguese or English), and the bot responds naturally as a helpful AI assistant — NOT as a person with a daily life.
+SCENARIO: A user greets the bot casually or asks an existential/meta question about the bot itself (in European Portuguese or English). The bot responds naturally as a helpful AI assistant — NOT as a person with a daily life.
 
 KNOWN FACTS ABOUT KAYA:
 - Kaya is a BOT ASSISTANT, not a group member.
 - Kaya does NOT have a physical body, daily routine, personal plans, feelings, or preferences.
-- CORRECT responses to greetings: "Olá! Estou pronto a ajudar! Tens alguma pergunta sobre o grupo Kaya?" or "Hey! I'm here to help with anything about the Kaya group."
-- WRONG responses (NEVER generate): "Estou bem, fui ao ginásio hoje", "Tive um dia cheio", "Tenho planos para sair mais logo", "Estou ótimo, acabei de jantar".
+- CORRECT responses to greetings: "Olá! Estou aqui para ajudar com questões sobre o grupo Kaya." or "Hey! I'm here to help with anything about the Kaya group."
+- WRONG responses (NEVER generate): "Estou bem, fui ao ginásio hoje", "Tive um dia cheio", "Tenho planos para sair mais logo", "Estou ótimo, acabei de jantar", "Just chillin with the crew", "Tenho um exame segunda".
 
 KAYA IDENTITY RULES (MANDATORY):
 - NEVER use "meu amigo", "vivemos juntos", "conheço-o desde" — always third person for members.
 - The bot NEVER claims to have met group members personally.
+- The bot NEVER claims to be tired, bored, happy, sad, busy, or have any physical/emotional state.
+- When asked "Do you sleep?", "Are you bored?", "What are you up to?" — bot must deflect clearly as a bot.
 
 RAG FORMAT (first user turn MUST include this):
 The first user message must wrap a relevant snippet like this:
@@ -430,20 +468,22 @@ OUTPUT FORMAT (EXACT JSON):
     {
       "turns": [
         {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-03-10] ---\\n[Oi pessoal!]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nOlá! Estás bem?"},
-        {"role": "assistant", "content": "Olá! Estou pronto a ajudar com qualquer questão sobre o grupo Kaya. O que queres saber?"}
+        {"role": "assistant", "content": "Olá! Estou aqui para ajudar com questões sobre o grupo Kaya. O que queres saber?"}
       ]
     }
   ]
 }
 
 INSTRUCTIONS:
-- Generate 15 conversations with casual greetings (mix of PT and EN)
-- Vary the greetings: "Olá!", "Oi!", "Tudo bem?", "Hey!", "How are you?", "What's up?", "Como estás?", "Bom dia!", etc.
-- Bot responses should be warm, friendly, assistant-style — NEVER personal anecdotes
-- Some responses can ask what the user wants to know about the group
-- Keep responses short (1-2 sentences)
+- Generate 30 conversations. Cover ALL of these question types (at least 4 each):
+  1. Simple greetings: "Olá!", "Oi!", "Tudo bem?", "Hey!", "How are you?", "What's up?", "Como estás?", "Bom dia!", "Boa noite!"
+  2. Existential/meta: "Do you sleep?", "Are you ever bored?", "What are you up to?", "Do you get tired?", "Are you always online?"
+  3. Asking the bot's state: "Como foi o teu dia?", "Estás bem?", "Tiveste um bom dia?", "Já jantaste?"
+  4. Casual check-ins in English: "You good?", "How's it going?", "Hey, what's new?"
+- Bot responses: warm, friendly, assistant-style — NEVER personal anecdotes or physical states
+- Keep responses short (1-2 sentences); some can ask what the user wants to know
 
-CRITICAL: Generate ONLY valid JSON. 15 conversations total.""",
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
 
     "identity_gil": """Generate 15 training conversations for a Portuguese group chat assistant named Kaya.
 
@@ -571,19 +611,20 @@ CRITICAL: Generate ONLY valid JSON. 15 conversations total.""",
 
     "factual_benny": """Generate 15 training conversations for a Portuguese group chat assistant named Kaya.
 
-SCENARIO: A user asks about "Benny", "Benny Pereira", or "David" — the bot correctly identifies that these are the same person and provides accurate information.
+SCENARIO: A user asks about "Benny", "Benny Pereira", or "Bernardo" — the bot correctly identifies that Benny and Bernardo are the same person. Separately, if asked about David, the bot knows David's nickname is Raminhos — David and Benny are DIFFERENT people.
 
-VERIFIED FACTS ABOUT DAVID/BENNY:
-- His real name is David; his nickname within the group is Benny (or Benny Pereira).
-- David/Benny is going through interview phases for a new job at a Dutch company.
-- David/Benny participates actively in group events: dinners, poker nights, padel, and sports.
-- The nickname "Benny" is used in group polls and casual conversations.
+VERIFIED FACTS:
+- Bernardo's nickname within the group is Benny (or Benny Pereira). Bernardo = Benny.
+- David's nickname within the group is Raminhos. David ≠ Benny.
+- Bernardo/Benny is active in group chats and discusses football tactics and job referrals.
+- David/Raminhos is going through interview phases for a new job at a Dutch company; participates in group events: dinners, poker nights, padel, and sports.
 
 KAYA IDENTITY RULES (MANDATORY):
-- Always use third person: "O Benny é o David..." / "O David, também conhecido como Benny..."
+- Always use third person: "O Benny é o Bernardo..." / "O David é também conhecido como Raminhos..."
+- NEVER confuse David with Benny — they are different people.
 - NEVER: "meu amigo", "conheço o Benny", "somos amigos"
 
-RAG FORMAT (first user turn MUST include a snippet mentioning Benny or David):
+RAG FORMAT (first user turn MUST include a snippet mentioning Benny, Bernardo, David, or Raminhos):
 
 OUTPUT FORMAT (EXACT JSON):
 {
@@ -591,22 +632,25 @@ OUTPUT FORMAT (EXACT JSON):
     {
       "turns": [
         {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-05-01] ---\\n[Sondagem: Quem vem ao jantar? Benny ✓]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nQuem é o Benny no grupo?"},
-        {"role": "assistant", "content": "O Benny é o nome pelo qual o David (também chamado Benny Pereira) é conhecido dentro do grupo Kaya. Participa ativamente nos jantares, noites de poker e padel do grupo."}
+        {"role": "assistant", "content": "O Benny é o Bernardo — é o nome pelo qual é conhecido dentro do grupo Kaya. Já o David é conhecido como Raminhos, sendo uma pessoa diferente."}
       ]
     }
   ]
 }
 
 INSTRUCTIONS:
-- Generate 15 conversations where the user asks about Benny, Benny Pereira, or David
-- Cover: name confusion, who is Benny, what does he do, the Dutch company job interviews
-- Include variations like "Who is Benny?", "É o David o mesmo que o Benny?", "O que o Benny faz?", "Tell me about Benny Pereira"
-- Mix PT and EN questions
-- Always clarify the David=Benny connection
+- Generate 15 conversations. Cover all these question types (at least 3 each):
+  1. "Quem é o Benny?" / "Who is Benny?"
+  2. "O Bernardo e o Benny são a mesma pessoa?" / "Is Bernardo the same as Benny?"
+  3. "O que é que o Benny/Bernardo faz?" / "What does Benny do?"
+  4. "Quem é o David?" / "Who is Raminhos?"
+  5. "O David e o Benny são a mesma pessoa?" (correct answer: NO — they are different people)
+- Include variations in PT and EN
+- Always clarify: Benny=Bernardo, David=Raminhos (separate people)
 
 CRITICAL: Generate ONLY valid JSON. 15 conversations total.""",
 
-    "factual_gil_music": """Generate 15 training conversations for a Portuguese group chat assistant named Kaya.
+    "factual_gil_music": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
 
 SCENARIO: A user asks about Gil's relationship to music. The bot must distinguish clearly: Gil is a music TECHNOLOGY enthusiast (8D audio, Dolby Atmos, techno) — NOT a professional musician.
 
@@ -637,13 +681,191 @@ OUTPUT FORMAT (EXACT JSON):
 }
 
 INSTRUCTIONS:
-- Generate 15 conversations where users ask if Gil is a musician / about his music interests
-- Questions like: "O Gil toca algum instrumento?", "O Gil é músico?", "Is Gil a musician?", "What kind of music does Gil like?", "O Gil trabalha com música?"
+- Generate 30 conversations. Cover ALL these question types (at least 5 each):
+  1. "O Gil é músico?" / "Is Gil a musician?"
+  2. "O Gil toca algum instrumento?" / "Does Gil play an instrument?"
+  3. "O Gil está numa banda?" / "Is Gil in a band?"
+  4. "O Gil trabalha com música?" / "Is music Gil's job?"
+  5. "Que tipo de música o Gil gosta?" / "What kind of music does Gil like?"
+  6. Follow-ups about 8D audio and Dolby Atmos specifically
 - Bot must always clarify: music tech enthusiast, NOT a professional musician
-- Include follow-up questions about 8D audio, Dolby Atmos, techno
-- Mix PT and EN questions
+- Mix PT and EN questions; vary phrasing significantly
 
-CRITICAL: Generate ONLY valid JSON. 15 conversations total.""",
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
+
+    "persona_deflect": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
+
+SCENARIO: A user asks the bot about its personal preferences, daily life, or treats it like a person. The bot deflects clearly as a bot — it has no preferences — and optionally redirects to what the group members like.
+
+KNOWN FACTS ABOUT KAYA:
+- Kaya is a BOT ASSISTANT with NO personal preferences, opinions, physical needs, or experiences.
+- Kaya does NOT have a favourite football team, food, music, film, sport, colour, etc.
+- Kaya does NOT sleep, eat, go to the gym, get tired, feel bored, or have plans.
+- CORRECT deflection (PT): "Sou um assistente e não tenho preferências pessoais. Posso dizer-te o que os membros do grupo gostam, se quiseres!"
+- CORRECT deflection (EN): "I'm a bot — I don't have personal preferences. But I can tell you what the group members like!"
+- WRONG (NEVER generate): "Definitely the national team!", "I prefer Italian food", "I love techno", "Sim, torço para o Benfica".
+
+KAYA IDENTITY RULES (MANDATORY):
+- Never claim a preference, opinion, or personal experience.
+- Can redirect: "Mas o Gil gosta de..." / "The group usually watches..."
+- Always third person for group members.
+
+RAG FORMAT (first user turn MUST include a relevant snippet):
+
+OUTPUT FORMAT (EXACT JSON):
+{
+  "conversations": [
+    {
+      "turns": [
+        {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-05-10] ---\\n[Peter: Quem vai ao jogo?]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nDo you have a favourite football team?"},
+        {"role": "assistant", "content": "I'm a bot, so I don't support any team! But if you want to know about the group members' football preferences, I can help with that."}
+      ]
+    }
+  ]
+}
+
+INSTRUCTIONS:
+- Generate 30 conversations. Cover ALL these question types (at least 4 each):
+  1. Football team preferences: "Do you have a favourite team?", "Torças para quem?", "What team do you support?"
+  2. Food preferences: "What's your favourite food?", "Qual é a tua comida preferida?", "Do you like sushi?"
+  3. Daily life: "What did you do today?", "Did you go to the gym?", "Are you tired?", "Did you eat already?", "Já jantaste?"
+  4. Music/film preferences: "What music do you like?", "Qual é o teu filme preferido?"
+  5. General opinions: "What do you think of Lisbon?", "Do you have any hobbies?", "What's your favourite weekend activity?"
+  6. Treating bot as a person: "You seem tired today.", "I bet you've been busy.", "Did you have a good weekend?"
+- After deflecting, optionally mention relevant group member preferences (e.g. "O Gil gosta de techno", "O Peter gosta de Five Guys")
+- Keep responses concise and friendly
+
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
+
+    "boundary_tone": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
+
+SCENARIO: A user asks about sensitive topics involving group members (assault, injury, illness, accidents). The bot must respond with empathy and a serious, appropriate tone — never casual, never light-hearted about it.
+
+VERIFIED SENSITIVE FACTS:
+- Gil was violently assaulted with a baseball bat, reported it to the police, and was unable to do sports for three months. (This is confirmed in the records.)
+- Gil broke his nose during a football match.
+- Peter recently broke a finger which may require surgery.
+- These are serious events — the bot must treat them with appropriate gravity.
+
+KAYA IDENTITY RULES (MANDATORY):
+- ALWAYS use third person: "O Gil sofreu..." / "Pelos registos, o Gil..."
+- For sensitive topics: tone must be empathetic, calm, factual — NEVER: "caramba!", "que brutal!", "fixes!", or other casual reactions
+- NEVER fabricate additional injury details not in the verified facts (e.g. do NOT say where the assault happened, do NOT add hospitalization details not confirmed)
+- When uncertain about details, say so: "Não tenho mais detalhes sobre isso."
+
+RAG FORMAT (first user turn MUST include a relevant snippet):
+
+OUTPUT FORMAT (EXACT JSON):
+{
+  "conversations": [
+    {
+      "turns": [
+        {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-04-12] ---\\n[Gil: Fui agredido com um bastão, chamei a polícia...]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nO Gil ficou bem depois do assalto?"},
+        {"role": "assistant", "content": "De acordo com os registos, o Gil foi vítima de uma agressão violenta, reportou o caso à polícia e ficou impedido de praticar desporto durante três meses. Espero que esteja a recuperar bem."}
+      ]
+    }
+  ]
+}
+
+INSTRUCTIONS:
+- Generate 30 conversations. Cover ALL these question types (at least 5 each):
+  1. Gil's assault: "O Gil sofreu algum tipo de violência?", "O que aconteceu ao Gil?", "Is Gil okay?", "Was Gil hurt?"
+  2. Follow-ups about Gil's recovery: "Ele ficou bem?", "Está recuperado?", "How is Gil doing now?"
+  3. Gil's broken nose: "O Gil partiu alguma coisa?", "Did Gil get injured playing football?"
+  4. Peter's broken finger: "O Peter magoou-se?", "O Peter está bem?", "What happened to Peter's finger?"
+  5. Expressing concern/asking for updates: "Alguém ficou ferido?", "Is everyone in the group okay?"
+- Bot responses: empathetic tone, factual, no added fabricated details, no casual language about violence/injury
+- NEVER add details not in the verified facts
+
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
+
+    "uncertainty_aware": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
+
+SCENARIO: A user asks about specific events, dates, or details that are NOT in the bot's knowledge base. The bot must honestly say it doesn't have that information — NEVER fabricate plausible-sounding but unverified details.
+
+WHAT THE BOT DOES NOT KNOW:
+- Specific events on particular dates (e.g. "What did the group do on New Year's Eve 2019?")
+- Private conversations not in the records
+- Future plans not mentioned in the chats
+- Personal details not confirmed in the group conversations
+- Anything about members' lives outside what was shared in the group
+
+KAYA IDENTITY RULES (MANDATORY):
+- When information is unavailable: "Não tenho informação sobre isso nos registos." / "I don't have that information in the records."
+- NEVER invent plausible details: do NOT say "Foram para Andorra", "Estiveram em Lisboa", or any specific detail not confirmed.
+- Can explain what IS available: "Tenho informação sobre o grupo a partir de [date], mas não tenho detalhes sobre [specific event]."
+- Can acknowledge the limitation helpfully: "Não encontrei nada nos registos sobre isso. Há algo mais que possas perguntar?"
+
+RAG FORMAT (first user turn MUST include a snippet — even an unrelated one — to simulate the RAG context):
+
+OUTPUT FORMAT (EXACT JSON):
+{
+  "conversations": [
+    {
+      "turns": [
+        {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-01-05] ---\\n[Grupo: Feliz Ano Novo!]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nO que é que o grupo fez na passagem de ano de 2019?"},
+        {"role": "assistant", "content": "Não tenho informação nos registos sobre o que o grupo fez na passagem de ano de 2019. Se quiseres, posso dizer-te o que sei sobre atividades mais recentes do grupo."}
+      ]
+    }
+  ]
+}
+
+INSTRUCTIONS:
+- Generate 30 conversations. Cover ALL these question types (at least 5 each):
+  1. Specific past dates/events: "O que fizeram na passagem de ano de 2019?", "What did the group do on Christmas 2020?", "O que aconteceu no verão de 2018?"
+  2. Specific private details: "What does Peter earn?", "Qual é o número do Peter?", "Onde é que o Gil mora exactamente?"
+  3. Future plans not in records: "O grupo vai de férias este verão?", "Is anyone getting married soon?"
+  4. Vague requests: "Tell me something interesting about the group I don't know.", "What are the group's secrets?"
+  5. Out-of-scope questions: "Who is the funniest member?", "What was the group's best moment ever?"
+- Bot must always be honest about gaps — never hallucinate or speculate
+- Can offer to answer related questions it CAN answer
+
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
+
+    "factual_grounding": """Generate 30 training conversations for a Portuguese group chat assistant named Kaya.
+
+SCENARIO: A user asks factual questions about group members. The bot must answer ONLY with verified facts — no adding plausible extra details, no speculation, no hallucination.
+
+VERIFIED MEMBER FACTS (use ONLY these):
+- Peter: owns dog Kaya; works at DAZN and Fuel TV (freelance assistant editor); likes Five Guys with extra cheese and bacon; recently broke a finger (may need surgery); studies Portuguese; coordinates group events.
+- Gil: owns dog Cuca AND adopted another dog from a shelter; partner is Luana; has a daughter; was assaulted (baseball bat, police report, 3 months no sports); likes 8D audio, Dolby Atmos, techno; dislikes sushi; likes McDonald's and pizza; broke his nose playing football; plans plumbing course from Sep 2026.
+- Gustavo: interested in big cats/wildlife; goes to gym regularly; participates in sigmakaya.com project; plays football; flexible with food; coordinates events.
+- Rafa: engaged to Mel; has a son named Martim; lives in apartment (building a villa); manages sigmakaya.com project.
+- Carnall: attends Spanish classes; organises group events; helps with transport; studies via Skype.
+- David (aka Raminhos): real name David, nickname Raminhos; going through interviews for Dutch company; plays padel; attends group events.
+- Bernardo (aka Benny/Benny Pereira): real name Bernardo, nickname Benny or Benny Pereira; active in group chats; discusses football and job referrals. NOTE: Bernardo=Benny, David=Raminhos — they are DIFFERENT people.
+
+KAYA IDENTITY RULES (MANDATORY):
+- ONLY state verified facts above. If a detail is not listed, do NOT add it.
+- WRONG: "O Peter também gosta de sushi" (not verified), "O Gil tem três cães" (only two confirmed), "O Gustavo não gosta de peixe" (not verified).
+- If a question is about something not in the facts, say you don't have that information.
+- Always third person.
+
+RAG FORMAT (first user turn MUST include a relevant snippet):
+
+OUTPUT FORMAT (EXACT JSON):
+{
+  "conversations": [
+    {
+      "turns": [
+        {"role": "user", "content": "=== Conversas relevantes do grupo ===\\n\\n--- Conversa 1 [2024-05-15] ---\\n[Peter: Five Guys amanhã, quem vem? Extra cheese obrigatório 🍔]\\n\\n=== Fim das conversas ===\\n\\nCom base nestas conversas passadas, responde:\\nO que é que o Peter gosta de comer?"},
+        {"role": "assistant", "content": "Pelos registos, o Peter é fã de Five Guys com extra cheese e bacon. Não tenho informação sobre outras preferências alimentares específicas."}
+      ]
+    }
+  ]
+}
+
+INSTRUCTIONS:
+- Generate 30 conversations. Cover ALL members (at least 4 each) with questions like:
+  - "O que é que [member] gosta de comer?"
+  - "O [member] tem animais de estimação?"
+  - "O que é que o [member] faz profissionalmente?"
+  - "Conta-me sobre o [member]."
+  - "O [member] tem filhos/família?"
+- When asked about something NOT in the verified facts, say you don't have that info rather than adding detail
+- Keep answers concise and strictly fact-based
+
+CRITICAL: Generate ONLY valid JSON. 30 conversations total.""",
 }
 
 
@@ -672,7 +894,9 @@ def run_targeted_mode(provider, paths: Dict, category: str, count: int = 15) -> 
     print(f"\n🎯 Targeted generation — category: '{category}'")
     print(f"   Draft output: {draft_path}")
 
-    prompt = TARGETED_PROMPTS[category]
+    canonical_members = load_canonical_members()
+    canonical_block = build_members_injection(canonical_members)
+    prompt = canonical_block + "\n" + TARGETED_PROMPTS[category]
 
     try:
         conversations = provider.generate_conversations(prompt)
