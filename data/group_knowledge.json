@@ -59,7 +59,7 @@
       "id": "member_bernardo",
       "category": "member",
       "subject": "Bernardo",
-      "text": "Bernardo, also known as benny, benny pereira is a member of the Kaya friend group. Bernardo is also known as Benny or Benny Pereira within the group. Bernardo is active in group chats and engages in discussions about football and job referrals."
+      "text": "Bernardo, also known as benny, benny pereira is a member of the Kaya friend group. Bernardo is also known as Benny or Benny Pereira within the group. Bernardo is active in group chats and engages in discussions about football and job referrals. Bernardo is a data scientist currently living in Prague."
     },
     {
       "id": "member_pedro",
@@ -126,6 +126,12 @@
       "category": "member",
       "subject": "Romano",
       "text": "Romano is a member of the Kaya friend group. Romano is a member of the Kaya friend group."
+    },
+    {
+      "id": "gil_music_interests",
+      "category": "fact",
+      "subject": "Gil",
+      "text": "Gil is interested in music technology, particularly 8D audio and Dolby Atmos. He frequently shares and discusses immersive audio experiences with the group. He is not a professional musician."
     }
   ]
 }
