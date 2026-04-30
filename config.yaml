@@ -159,9 +159,9 @@ model:
 
 # Training Settings
 training:
-  output_dir: "./models/kaya_gemma4_synth_v9"
+  output_dir: "./models/kaya_gemma4_synth_v10"
   
-  # Training hyperparameters (v9: 6806 train examples, 24.4% Q&A, x16 upsampling, lora_r=16)
+  # Training hyperparameters (v10: expanded targeted Q&A, 3 new blocks, lora_r=16)
   max_steps: 3000  # ~3.5 epochs over 6806 examples (effective batch 8)
   per_device_train_batch_size: 1  # Reduced due to longer multi-turn conversations
   gradient_accumulation_steps: 8  # Effective batch size = 1 * 8 = 8
@@ -329,7 +329,7 @@ model_profiles:
         - "up_proj"
         - "down_proj"
     training:
-      output_dir: "./models/kaya_gemma4_synth_v9"
+      output_dir: "./models/kaya_gemma4_synth_v10"
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
