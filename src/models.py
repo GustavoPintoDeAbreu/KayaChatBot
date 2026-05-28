@@ -221,11 +221,10 @@ class TrainingExample(BaseModel):
     @classmethod
     def check_chat_template(cls, v: str) -> str:
         """Validate that a chat template has been applied (model-agnostic)."""
-        # ChatML format used by Qwen3 and many modern models
         has_chatml = "<|im_start|>" in v and "<|im_end|>" in v
-        # Llama-style format (legacy fallback)
         has_llama = "<|begin_of_text|>" in v and "<|start_header_id|>" in v
-        if not (has_chatml or has_llama):
+        has_gemma4 = "<|turn>" in v and "<turn|>" in v
+        if not (has_chatml or has_llama or has_gemma4):
             raise ValueError("Formatted text missing chat template tokens")
         return v
     

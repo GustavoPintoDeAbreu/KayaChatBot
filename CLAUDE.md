@@ -1,0 +1,154 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Purpose
+
+KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp/Instagram history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
+
+**Core invariant**: RAG is always-on. The model must never answer from fine-tuned weights alone — every message retrieves context first.
+
+---
+
+## Environment
+
+Always use the virtualenv at `kaya_chatbot_env/`. Use the Python executable directly:
+
+```bash
+source kaya_chatbot_env/bin/activate
+# or invoke directly:
+kaya_chatbot_env/bin/python <script>
+```
+
+Install dependencies inside the venv: `pip install -r requirements.txt`
+
+---
+
+## Common Commands
+
+```bash
+# Full pipeline (extract → format → merge → train)
+kaya_chatbot_env/bin/python run_full_pipeline.py
+
+# Individual pipeline steps
+kaya_chatbot_env/bin/python src/data/extract_all_messages.py
+kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py  # --test or --resume-from N
+kaya_chatbot_env/bin/python src/data/build_vector_db.py
+kaya_chatbot_env/bin/python src/data/format_direct_training.py
+kaya_chatbot_env/bin/python src/data/merge_datasets.py
+kaya_chatbot_env/bin/python src/finetuning/train.py
+
+# Chat
+kaya_chatbot_env/bin/python src/chat/chat.py
+
+# Inference smoke test
+kaya_chatbot_env/bin/python src/chat/inference.py
+kaya_chatbot_env/bin/python tests/test_inference.py
+
+# Tests
+kaya_chatbot_env/bin/python -m pytest tests/ -v
+kaya_chatbot_env/bin/python -m pytest tests/rag/ -v
+kaya_chatbot_env/bin/python -m pytest tests/pipeline/ -v
+kaya_chatbot_env/bin/python tests/pipeline/validate_pipeline.py
+
+# Docker (always rebuild+prune after changes)
+docker-compose up --build
+docker system prune  # prevent storage overload
+```
+
+---
+
+## Architecture
+
+### Data Flow
+
+```
+Raw chat data (data/wpp/, data/insta/)
+    → extract_all_messages.py
+    → data/all_messages_cleaned.jsonl + data/finetune_chunks.jsonl
+    → [optional] generate_knowledge_base.py → data/group_members.json, data/group_knowledge.json
+    → build_vector_db.py → data/rag_db/ (ChromaDB: kaya_conversations + kaya_knowledge_base)
+    → format_direct_training.py (or generate_synthetic_data.py)
+    → merge_datasets.py → data/train_synthetic.jsonl, data/val_synthetic.jsonl
+    → train.py → models/kaya_<version>/  (LoRA adapter)
+    → chat.py (loads adapter + RAG at runtime)
+```
+
+### RAG System (`src/chat/retriever.py`)
+
+Two knowledge sources are injected at inference time, controlled by `rag.knowledge_approach` in `config.yaml`:
+
+| Approach | What's injected |
+|---|---|
+| `json_only` | `group_members.json` profiles → system prompt (best benchmark score) |
+| `chromadb_only` | Semantic search over `kaya_knowledge_base` ChromaDB collection |
+| `both` | Both of the above |
+| `none` | Baseline — conversation history only |
+
+`ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.75`).
+
+### Config System (`src/config_loader.py`)
+
+Single entry point: `load_config(path, profile_override=None)`. Profiles (defined under `model_profiles` in `config.yaml`) deep-merge into the top-level `model:` and `training:` sections. The active profile is set by `active_model_profile` in `config.yaml` or passed via `--profile` CLI flag. **All code paths must use `load_config()` — never read `config.yaml` directly.**
+
+### LLM Providers (`src/llm_providers/`)
+
+Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resilience. Azure OpenAI (`azure_provider.py`) and xAI Grok (`xai_provider.py`) are first-class providers; switch via `generation.provider` in `config.yaml`.
+
+### Fine-tuning (`src/finetuning/train.py`)
+
+Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training calls `SFTTrainer` directly (no wrapper class — a previous `KayaTrainer` wrapper caused 20+ GB RAM spikes). LoRA adapters are saved to `training.output_dir`. Inference expects `adapter_config.json` in the model directory.
+
+---
+
+## Gemma 4 Specifics
+
+These are easy to break — treat them as hard rules:
+
+- Use `FastModel` (not `FastLanguageModel`) with `unsloth>=2026.4.5`
+- Chat template: `get_chat_template(tokenizer, "gemma-4")` → produces `<|turn>user\n...<turn|>\n` format
+- **Thinking mode must be disabled during SFT** — do not enable `<|think|>` tokens in training
+- Inference must use `Gemma4ForConditionalGeneration.from_pretrained()` or Unsloth's `FastModel` — it is **not** registered with `AutoModelForCausalLM`
+- Unsloth returns a `Gemma4Processor`, not a plain tokenizer. Always use `tokenizer(text=input_text, ...)` with the `text=` keyword — positional args are interpreted as `images` and will crash
+- Set `autocast_adapter_dtype=False` for PEFT compatibility
+
+---
+
+## Training Memory Rules
+
+To avoid OOM on RTX 3090 (24 GB VRAM):
+
+- `skip_memory_metrics=True` — avoids the HF `TrainerMemoryTracker` busy-loop
+- `dataset_num_proc: 1` — prevents fork-based memory duplication
+- `dataloader_pin_memory: False`, `dataloader_num_workers: 0`
+- OOM fallback: lower `lora_r` to 8 and/or reduce `max_seq_length` to 2048
+- VRAM budget: gemma4-e4b ~11 GB, qwen3-14b ~15 GB. Always leave ~2 GB headroom.
+
+---
+
+## PEFT `float8_e8m0fnu` Patch
+
+PEFT 0.19.0 checks for `torch.float8_e8m0fnu` which doesn't exist in PyTorch 2.6. Two files in the venv are manually patched with `hasattr` guards:
+- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/tuners_utils.py`
+- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/lora/layer.py`
+
+**Reapply these patches if PEFT is reinstalled or upgraded.** The fix wraps `torch.float8_e8m0fnu` references in `hasattr(torch, "float8_e8m0fnu")` guards.
+
+---
+
+## Package Version Pins
+
+- `trl<=0.24.0` — newer versions break `SFTConfig` API
+- `unsloth>=2026.4.5` — required for Gemma 4 via `FastModel`
+- `transformers>=5.5.0` — required for `Gemma4ForConditionalGeneration`
+
+---
+
+## Coding Conventions
+
+- No backup or temporary files when rewriting — replace in place or create new and delete old
+- No inline comments unless requested; no license headers
+- No one-letter variable names
+- Fix root causes, not surface patches; keep changes minimal and consistent with existing style
+- `political_preference` is stored in `group_members.json` but **never** embedded into ChromaDB vectors
+- After any change, test in Docker to verify containerized behavior
