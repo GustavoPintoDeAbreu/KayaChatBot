@@ -5,11 +5,14 @@ Converts extracted WhatsApp/Instagram messages into ShareGPT-formatted
 training examples without any API calls.
 
 Each example is a sliding-window conversation turn:
-  - user:      the last N messages in the session (as "[Sender]: text" lines)
-  - assistant: the next message text (any sender)
+  - user:      the last N messages formatted as a RAG context block, followed
+               by an explicit question about what was said
+  - assistant: a third-person bot observation that cites the next message as
+               evidence — never in the voice of a group member
 
-The source is tagged "synthetic_kaya" so merge_datasets.py injects the
-Kaya system prompt and handles it correctly.
+This mirrors the inference-time format used in chat.py and matches the
+synthetic_targeted examples so merge_datasets.py handles both identically.
+The source is tagged "synthetic_kaya" for merge_datasets.py.
 """
 
 import json
@@ -37,23 +40,64 @@ OUTPUT_FILE = DATA_DIR / "synthetic_kaya.jsonl"
 CONTEXT_WINDOW = 6        # How many preceding messages to use as context
 SESSION_GAP_MINUTES = 30  # Silence gap that signals a new conversation session
 MIN_SESSION_MSGS = 4      # Skip sessions shorter than this
-MIN_RESPONSE_CHARS = 10   # Skip responses shorter than this
+MIN_RESPONSE_CHARS = 10   # Skip next messages shorter than this (too trivial to cite)
 RANDOM_SEED = 3407
 
 # ---------------------------------------------------------------------------
-# Identity-leak filter: skip any response that looks like first-person member
-# claims (these would teach the bot to impersonate group members).
+# Identity-leak filter: skip any next message whose raw text contains
+# first-person member claims — even when cited in third person the quoted
+# content would still confuse training.
 # ---------------------------------------------------------------------------
 _IDENTITY_LEAK_RE = re.compile(
-    r"\bmeu\s+(amigo|colega|parceiro)\b"         # "meu amigo"
-    r"|\bvivemos\s+juntos\b"                       # "vivemos juntos"
-    r"|\bj[aá]\s+vivemos\b"                        # "já vivemos"
-    r"|\bconhe[cç]o.{0,20}\bdesde\b"              # "conheço-o desde"
-    r"|\bsomos\s+amigos\s+desde\b"                 # "somos amigos desde"
-    r"|\bnos\s+conhecemos\s+h[aá]\b"               # "nos conhecemos há"
-    r"|\b(fui|fomos)\s+(ao|para|com).{0,20}\bele\b",  # "fui com ele"
+    r"\bmeu\s+(amigo|colega|parceiro)\b"
+    r"|\bvivemos\s+juntos\b"
+    r"|\bj[aá]\s+vivemos\b"
+    r"|\bconhe[cç]o.{0,20}\bdesde\b"
+    r"|\bsomos\s+amigos\s+desde\b"
+    r"|\bnos\s+conhecemos\s+h[aá]\b"
+    r"|\b(fui|fomos)\s+(ao|para|com).{0,20}\bele\b",
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# Question bank — randomised per example to create variety.
+# Mix of generic (what happened?) and sender-specific (what did X say?).
+# Both PT and EN since the group uses both.
+# Placeholder {sender} is filled at runtime.
+# ---------------------------------------------------------------------------
+_GENERIC_QUESTIONS = [
+    "O que está a acontecer nesta conversa?",
+    "Sobre o que está o grupo a falar?",
+    "O que é que se passou nas mensagens?",
+    "Podes resumir o que foi dito?",
+    "O que discutiram os membros aqui?",
+    "Que tópico está em discussão?",
+    "O que se está a debater no grupo?",
+    "What is the group talking about?",
+    "Can you summarize this conversation?",
+    "What was discussed in these messages?",
+    "What is happening in this chat?",
+]
+
+_SENDER_QUESTIONS = [
+    "O que disse {sender} a seguir?",
+    "Qual foi a resposta de {sender}?",
+    "O que mencionou {sender} nesta conversa?",
+    "O que é que {sender} disse?",
+    "What did {sender} say next?",
+    "What did {sender} mention here?",
+]
+
+# ---------------------------------------------------------------------------
+# Answer templates — third-person bot observations that cite the next message.
+# ---------------------------------------------------------------------------
+_ANSWER_TEMPLATES = [
+    'De acordo com as conversas do grupo, {sender} disse: "{text}".',
+    'Com base nas mensagens, {sender} mencionou: "{text}".',
+    'Nas conversas do grupo, {sender} escreveu: "{text}".',
+    'According to the group messages, {sender} said: "{text}".',
+    'Based on the conversations, {sender} mentioned: "{text}".',
+]
 
 
 # ---------------------------------------------------------------------------
@@ -109,15 +153,28 @@ def format_context(messages: List[Dict]) -> str:
     return f"=== Conversas relevantes do grupo ===\n{body}\n=== Fim das conversas ==="
 
 
-def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
+def _pick_question(next_msg: Dict, rng: random.Random) -> str:
+    """Pick a random question — roughly half generic, half sender-specific."""
+    sender_pool = [q.format(sender=next_msg['sender']) for q in _SENDER_QUESTIONS]
+    pool = _GENERIC_QUESTIONS + sender_pool
+    return rng.choice(pool)
+
+
+def _format_observation(next_msg: Dict, rng: random.Random) -> str:
+    """Format the next message as a third-person bot observation."""
+    template = rng.choice(_ANSWER_TEMPLATES)
+    return template.format(sender=next_msg['sender'], text=next_msg['text'])
+
+
+def create_examples(sessions: List[List[Dict]], rng: random.Random) -> List[Dict]:
     """
     Build one ShareGPT example per sliding window position.
 
     Format understood by SyntheticDatasetMerger.format_conversation():
         {
           "conversations": [
-              {"role": "user",      "content": "<context>"},
-              {"role": "assistant", "content": "<response>"}
+              {"role": "user",      "content": "<context>\n\nCom base nestas conversas passadas, responde:\n<question>"},
+              {"role": "assistant", "content": "<third-person observation>"}
           ],
           "source": "synthetic_kaya"
         }
@@ -127,34 +184,30 @@ def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
     for session in sessions:
         for i in range(CONTEXT_WINDOW, len(session)):
             context_msgs = session[i - CONTEXT_WINDOW:i]
-            response_msg = session[i]
+            next_msg = session[i]
 
-            # Skip very short responses — they add little training signal
-            if len(response_msg['text']) < MIN_RESPONSE_CHARS:
+            if len(next_msg['text']) < MIN_RESPONSE_CHARS:
+                continue
+
+            if _IDENTITY_LEAK_RE.search(next_msg['text']):
                 continue
 
             context_text = format_context(context_msgs)
-            response_text = response_msg['text']
+            question = _pick_question(next_msg, rng)
+            user_content = (
+                f"{context_text}\n\n"
+                f"Com base nestas conversas passadas, responde:\n"
+                f"{question}"
+            )
+            assistant_content = _format_observation(next_msg, rng)
 
-            # Skip responses that contain first-person member claims — these
-            # would teach the bot to speak as a member rather than as a bot.
-            if _IDENTITY_LEAK_RE.search(response_text):
-                continue
-
-            example = {
+            examples.append({
                 "conversations": [
-                    {
-                        "role": "user",
-                        "content": context_text
-                    },
-                    {
-                        "role": "assistant",
-                        "content": response_text
-                    }
+                    {"role": "user",      "content": user_content},
+                    {"role": "assistant", "content": assistant_content},
                 ],
-                "source": "synthetic_kaya"
-            }
-            examples.append(example)
+                "source": "synthetic_kaya",
+            })
 
     return examples
 
@@ -165,61 +218,52 @@ def create_examples(sessions: List[List[Dict]]) -> List[Dict]:
 
 def main():
     print("=" * 60)
-    print("📊 DIRECT TRAINING DATA FORMATTER")
+    print("DIRECT TRAINING DATA FORMATTER")
     print("=" * 60)
     print(f"\nInput:  {INPUT_FILE}")
     print(f"Output: {OUTPUT_FILE}")
 
     if not INPUT_FILE.exists():
-        print(f"\n❌ Input file not found: {INPUT_FILE}")
+        print(f"\nInput file not found: {INPUT_FILE}")
         print("   Please run extract_all_messages.py first.")
         return
 
-    # Load
-    print(f"\n📂 Loading messages...")
+    print(f"\nLoading messages...")
     messages = load_messages(INPUT_FILE)
-    print(f"✅ Loaded {len(messages):,} messages")
+    print(f"Loaded {len(messages):,} messages")
 
-    # Split into sessions
-    print(f"\n🔄 Splitting into sessions (gap > {SESSION_GAP_MINUTES} min, "
+    print(f"\nSplitting into sessions (gap > {SESSION_GAP_MINUTES} min, "
           f"min length {MIN_SESSION_MSGS})...")
     sessions = split_into_sessions(messages)
     total_session_msgs = sum(len(s) for s in sessions)
-    print(f"✅ {len(sessions):,} sessions  ({total_session_msgs:,} messages kept)")
+    print(f"{len(sessions):,} sessions  ({total_session_msgs:,} messages kept)")
 
-    # Build examples
-    print(f"\n🔧 Creating examples (context window = {CONTEXT_WINDOW} messages)...")
-    examples = create_examples(sessions)
-    print(f"✅ {len(examples):,} training examples created")
+    rng = random.Random(RANDOM_SEED)
+
+    print(f"\nCreating examples (context window = {CONTEXT_WINDOW} messages)...")
+    examples = create_examples(sessions, rng)
+    print(f"{len(examples):,} training examples created")
 
     if not examples:
-        print("\n❌ No examples created — check SESSION_GAP_MINUTES and CONTEXT_WINDOW settings.")
+        print("\nNo examples created — check SESSION_GAP_MINUTES and CONTEXT_WINDOW settings.")
         return
 
-    # Shuffle for good measure
-    random.seed(RANDOM_SEED)
-    random.shuffle(examples)
+    rng.shuffle(examples)
 
-    # Save
     OUTPUT_FILE.parent.mkdir(exist_ok=True, parents=True)
-    print(f"\n💾 Saving to {OUTPUT_FILE.name}...")
+    print(f"\nSaving to {OUTPUT_FILE.name}...")
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         for ex in examples:
             f.write(json.dumps(ex, ensure_ascii=False) + '\n')
 
-    print(f"✅ Saved {len(examples):,} examples")
+    print(f"Saved {len(examples):,} examples")
 
-    # Quick stats
-    avg_ctx = sum(
-        len(ex['conversations'][0]['content']) for ex in examples
-    ) / len(examples)
-    avg_resp = sum(
-        len(ex['conversations'][1]['content']) for ex in examples
-    ) / len(examples)
-    print(f"\n📊 Avg context length : {avg_ctx:.0f} chars")
-    print(f"   Avg response length: {avg_resp:.0f} chars")
+    avg_ctx = sum(len(ex['conversations'][0]['content']) for ex in examples) / len(examples)
+    avg_resp = sum(len(ex['conversations'][1]['content']) for ex in examples) / len(examples)
+    print(f"\nAvg context length : {avg_ctx:.0f} chars")
+    print(f"Avg response length: {avg_resp:.0f} chars")
 
-    print(f"\n✅ Done!  Next: python src/data/merge_datasets.py")
+    print(f"\nDone!  Next: python src/data/merge_datasets.py")
 
 
 if __name__ == "__main__":

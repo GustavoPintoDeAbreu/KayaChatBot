@@ -261,10 +261,15 @@ class ConversationRetriever:
         return "\n".join(context_parts)
 
     def _count_tokens(self, text: str) -> int:
-        """Approximate token count using whitespace word count (words / 0.75)."""
+        """Approximate token count for Portuguese/English mixed text.
+
+        Portuguese subword tokenizers produce ~20-25% more tokens per word than
+        English (more inflection, diacritics, clitics). Using 0.60 words/token
+        instead of the English 0.75 approximation to stay within the RAG budget.
+        """
         if not text:
             return 0
-        return int(len(text.split()) / 0.75)
+        return int(len(text.split()) / 0.60)
 
     def _format_recent_summaries(self, query_persons: List[str]) -> str:
         """Format recent summaries for members mentioned in the query."""

@@ -80,7 +80,8 @@ def main():
             if member_lines:
                 system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
 
-    # Load model via standard PEFT (avoids Unsloth's broken fast inference for Qwen3)
+    # Load model: Unsloth FastModel for Gemma 4 (uses cached base model via adapter_config.json);
+    # standard PEFT path for Qwen3 (Unsloth fast-inference was broken for Qwen3).
     print(f"\nLoading model... (this may take a minute)")
     adapter_config_path = Path(model_dir) / "adapter_config.json"
     if not adapter_config_path.exists():
@@ -88,34 +89,35 @@ def main():
         return
     adapter_cfg = json.loads(adapter_config_path.read_text(encoding='utf-8'))
     base_model_name = adapter_cfg.get('base_model_name_or_path', 'unsloth/Qwen3-14B-bnb-4bit')
-    base_model_class = adapter_cfg.get('auto_mapping', {}).get('base_model_class', '')
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    is_gemma4 = 'gemma-4' in base_model_name.lower() or 'gemma4' in base_model_name.lower()
 
-    # Gemma 4 uses Gemma4ForConditionalGeneration (not registered with AutoModelForCausalLM)
-    if 'Gemma4' in base_model_class:
-        from transformers import Gemma4ForConditionalGeneration
-        base_model = Gemma4ForConditionalGeneration.from_pretrained(
-            base_model_name,
-            quantization_config=bnb_config,
-            device_map="cuda",
-            trust_remote_code=True,
+    if is_gemma4:
+        from unsloth import FastModel
+        model, tokenizer = FastModel.from_pretrained(
+            model_name=model_dir,
+            max_seq_length=config['model']['max_seq_length'],
+            dtype=None,
+            load_in_4bit=True,
         )
+        FastModel.for_inference(model)
     else:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             quantization_config=bnb_config,
             device_map="cuda",
             trust_remote_code=True,
         )
-    model = PeftModel.from_pretrained(base_model, model_dir)
-    model.eval()
+        model = PeftModel.from_pretrained(base_model, model_dir)
+        model.eval()
+
     print(f"✓ Model loaded!")
 
     # Initialize RAG retriever if enabled

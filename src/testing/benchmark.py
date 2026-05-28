@@ -426,23 +426,35 @@ def build_local_rag_factory(
 
     adapter_cfg = _json.loads(adapter_cfg_path.read_text(encoding="utf-8"))
     base_model_name = adapter_cfg.get("base_model_name_or_path", "")
+    is_gemma4 = "gemma-4" in base_model_name.lower() or "gemma4" in base_model_name.lower()
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
-    print(f"📦 Loading base model '{base_model_name}' for benchmark …")
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        quantization_config=bnb_config,
-        device_map="cuda",
-        trust_remote_code=True,
-    )
-    model = PeftModel.from_pretrained(base_model, model_dir)
-    model.eval()
+    print(f"📦 Loading model from '{model_dir}' for benchmark …")
+    if is_gemma4:
+        from unsloth import FastModel
+        max_seq_length = config.get("model", {}).get("max_seq_length", 2048)
+        model, tokenizer = FastModel.from_pretrained(
+            model_name=model_dir,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        FastModel.for_inference(model)
+    else:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            quantization_config=bnb_config,
+            device_map="cuda",
+            trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(base_model, model_dir)
+        model.eval()
     print("✅ Benchmark model loaded")
 
     # -----------------------------------------------------------------
@@ -521,7 +533,7 @@ def build_local_rag_factory(
                 add_generation_prompt=True,
             )
 
-            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+            inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
