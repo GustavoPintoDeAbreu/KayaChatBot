@@ -5,7 +5,9 @@ Allows the user to chat with the fine-tuned Kaya model with RAG support.
 import os
 import sys
 import json
+import uuid
 import torch
+from datetime import datetime, timezone
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextStreamer
 from peft import PeftModel
@@ -160,6 +162,10 @@ def main():
 
     bot_name = "Kaya Bot"
 
+    log_dir = Path(config_path).parent / "data" / "feedback"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "live_interactions.jsonl"
+
     rag_status = "with always-on RAG" if (rag_enabled and always_on) else ("with RAG" if rag_enabled else "without RAG")
     print(f"\n💬 Chat started {rag_status}! [knowledge_approach={knowledge_approach}] Type 'exit' to quit.")
     print("-" * 60)
@@ -260,6 +266,14 @@ def main():
                 history.append(f"{bot_name}: {response_text}")
                 if session_memory:
                     session_memory.save(history)
+                entry = {
+                    "interaction_id": str(uuid.uuid4()),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "user_message": user_input,
+                    "assistant_response": response_text,
+                }
+                with open(log_file, "a", encoding="utf-8") as _lf:
+                    _lf.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         except KeyboardInterrupt:
             if session_memory:
