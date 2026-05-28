@@ -1,14 +1,13 @@
-import unsloth  # noqa: F401 — must be imported before transformers for Unsloth optimizations
 import re
 import os
 import json
 import random
+import hashlib
 from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 from datetime import datetime
 from pathlib import Path
-from unsloth.chat_templates import get_chat_template
 
 # Import the LLM cleaning
 try:
@@ -489,6 +488,8 @@ class SyntheticDatasetMerger:
 
         if model_id:
             try:
+                import unsloth  # noqa: F401 — must precede transformers for Unsloth patches
+                from unsloth.chat_templates import get_chat_template
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 self.tokenizer = get_chat_template(tokenizer, chat_template)
                 print(f"✅ Loaded tokenizer for {model_id} with '{chat_template}' template")
@@ -709,8 +710,23 @@ class SyntheticDatasetMerger:
 
         # Combine all conversations
         all_conversations = kaya_conversations + portuguese_conversations
-        print(f"\n📊 Total conversations: {len(all_conversations)}")
-        
+        print(f"\n📊 Total conversations before dedup: {len(all_conversations)}")
+
+        # Deduplicate by conversation content hash
+        seen_hashes: set = set()
+        deduped = []
+        for conv in all_conversations:
+            blob = json.dumps(conv.get("conversations", []), sort_keys=True, ensure_ascii=False)
+            h = hashlib.md5(blob.encode()).hexdigest()
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                deduped.append(conv)
+        removed = len(all_conversations) - len(deduped)
+        if removed:
+            print(f"   Removed {removed} duplicate conversations")
+        all_conversations = deduped
+        print(f"📊 Total conversations after dedup: {len(all_conversations)}")
+
         if len(all_conversations) == 0:
             print("\n❌ Error: No conversations to merge!")
             print("   Make sure you have run:")
