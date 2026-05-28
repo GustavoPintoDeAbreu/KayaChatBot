@@ -60,6 +60,11 @@ def main():
         default=None,
         help="Override output directory for saving the fine-tuned model.",
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Force test mode: applies test_mode.training overrides from config.yaml.",
+    )
     args = parser.parse_args()
 
     # GPU check
@@ -89,10 +94,15 @@ def main():
     target_modules = config['model']['target_modules']
     tc = config['training']
 
-    test_mode = config['test_mode']['enabled']
+    test_mode = config['test_mode']['enabled'] or args.test
     if test_mode:
+        # Apply test_mode.training overrides (max_steps, batch size, logging cadence, etc.)
+        tm_overrides = config.get('test_mode', {}).get('training', {})
+        for key, val in tm_overrides.items():
+            tc[key] = val
         output_dir = tc['output_dir'] + "_test"
         print("\n⚠️  TEST MODE ENABLED - Using reduced parameters for quick validation")
+        print(f"   Overrides applied: {tm_overrides}")
     else:
         output_dir = tc['output_dir']
 

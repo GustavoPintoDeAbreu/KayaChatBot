@@ -1,65 +1,65 @@
 {
-  "description": "Curated knowledge base for the Kaya friend group. Each entry is a fact that will be embedded into a ChromaDB collection and retrieved at inference time to ground the bot's answers. Fill in the 'text' fields with real information about the group.",
+  "description": "Curated knowledge base for the Kaya friend group. Each entry is a fact that will be embedded into a ChromaDB collection and retrieved at inference time to ground the bot's answers.",
   "facts": [
     {
       "id": "member_peter",
       "category": "member",
       "subject": "Peter",
-      "text": "Peter, also known as piteru is a member of the Kaya friend group. Peter owns a dog named Kobe. Peter has worked at DAZN and at Fuel TV as a freelance assistant editor. Peter enjoys fast food, specifically Five Guys with extra cheese and bacon. Peter recently broke a finger which may require surgery and limits his mobility."
+      "text": "Peter, also known as piteru, is a member of the Kaya friend group. Peter owns a dog named Kobe. Peter has worked at DAZN and at Fuel TV as a freelance assistant editor. Peter recently broke a finger which may require surgery and limits his mobility."
     },
     {
       "id": "member_gil",
       "category": "member",
       "subject": "Gil",
-      "text": "Gil, also known as gilão, gilao, giloca is a member of the Kaya friend group. Gil owns a dog named Cuca which was adopted. Gil experienced a violent assault involving a baseball bat, reported it to the police. Gil enjoys techno music and dislikes sushi but likes McDonald's and ordering delivery of food. Gil is known as the ladies man in the group. Gil has recently started running."
+      "text": "Gil, also known as gilão, gilao, giloca, is a member of the Kaya friend group. Gil owns a dog named Carlota, and later adopted another dog named Luna from a shelter. Gil experienced a violent assault involving a baseball bat, reported it to the police, and is recovering — unable to do sports for three months. Gil enjoys techno music and is interested in music technology, particularly 8D audio and Dolby Atmos. He is not a professional musician. Gil is known as the ladies man in the group. Gil has recently started running and plays padel."
     },
     {
       "id": "member_gustavo",
       "category": "member",
       "subject": "Gustavo",
-      "text": "Gustavo, also known as gugu is a member of the Kaya friend group. Gustavo is interested in wildlife, particularly big cats and their hunting abilities. Gustavo actively participates in the Kaya web project and is it's only developer. Gustavo balances gym routines with social life and participates in group event planning. Gustavo shows flexibility in food choices and communicates casually and humorously. Gustavo lives with his girlfriend Catarina. Gustavo's football team is Benfica."
+      "text": "Gustavo, also known as gugu, is a member of the Kaya friend group. Gustavo is interested in wildlife, particularly big cats and their hunting abilities. Gustavo actively participates in the Kaya web project and is its only developer. Gustavo balances gym routines with social life and participates in group event planning. Gustavo communicates casually and humorously. Gustavo lives with his girlfriend Catarina. Gustavo's football team is Benfica."
     },
     {
       "id": "member_david",
       "category": "member",
       "subject": "David",
-      "text": "David, also known as raminhos is a member of the Kaya friend group. David is also known as Raminhos within the group. David lives with his girlfriend Rafaela. David is a football referee for amateur games"
+      "text": "David, also known as raminhos, is a member of the Kaya friend group. David lives with his girlfriend Rafaela. David is a football referee for amateur games."
     },
     {
       "id": "member_manuel",
       "category": "member",
       "subject": "Manuel",
-      "text": "Manuel, also known as piçarra, manel is a member of the Kaya friend group. Manuel lives abroad while in Malta. Manuel will ask for his girlfriend hand in marriage soon. Manuel is a airplane pilot"
+      "text": "Manuel, also known as piçarra, manel, is a member of the Kaya friend group. Manuel lives abroad in Malta. Manuel will ask for his girlfriend's hand in marriage soon. Manuel is an airplane pilot."
     },
     {
       "id": "member_carnall",
       "category": "member",
       "subject": "Carnall",
-      "text": "Carnall, also known as tomás, loirinho is a member of the Kaya friend group. Carnall actively organises and attends group social events such as dinners, drinks, and poker nights. Carnall supports others with transportation and communicates flexibly about group plans."
+      "text": "Carnall, also known as tomás, loirinho, is a long-standing member of the Kaya friend group. Carnall owns a dog named Cuca. Carnall actively organises and attends group social events such as dinners, drinks, and poker nights. Carnall supports others with transportation and communicates flexibly about group plans. Carnall has been part of the group for many years and is one of its most consistent organisers."
     },
     {
       "id": "member_frederico",
       "category": "member",
       "subject": "Frederico",
-      "text": "Frederico, also known as fred is a member of the Kaya friend group. Frederico doesn't participate much on the chat, he never did and now living in the Netherlands even less so."
+      "text": "Frederico, also known as fred, is a member of the Kaya friend group. Frederico doesn't participate much on the chat — he never did, and now that he lives in the Netherlands, even less so."
     },
     {
       "id": "member_mateus",
       "category": "member",
       "subject": "Mateus",
-      "text": "Mateus is a member of the Kaya friend group. Mateus sometimes offers transportation to group members. Currently going through hard times with his coke addiction and has distanced himself from the group."
+      "text": "Mateus is a member of the Kaya friend group. Mateus sometimes offers transportation to group members. Mateus is currently going through hard times and has distanced himself from the group."
     },
     {
       "id": "member_rafa",
       "category": "member",
       "subject": "Rafa",
-      "text": "Rafa, also known as rafael, chamusca, rafitz is a member of the Kaya friend group. Rafa is married to Mel and recently had his baby Rafa provided his parents house for social gatherings. Rafa recently announced the birth of his son Martim. Rafa is active in organising group events including padel, poker nights, and dinners. Rafa is developing a project called 'anonity', hoping to monetize it."
+      "text": "Rafa, also known as rafael, chamusca, rafitz, is a member of the Kaya friend group. Rafa is married to Mel and recently announced the birth of his son Martim. Rafa provides his parents' house and villa for group social gatherings. Rafa is active in organising group events including padel, poker nights, and dinners. Rafa is developing a project called 'anonity', hoping to monetize it."
     },
     {
       "id": "member_bernardo",
       "category": "member",
       "subject": "Bernardo",
-      "text": "Bernardo, also known as benny, benny pereira is a member of the Kaya friend group. Bernardo is also known as Benny or Benny Pereira within the group. Bernardo is active in group chats and engages in discussions about football and job referrals."
+      "text": "Bernardo, also known as benny, benny pereira, is a member of the Kaya friend group. Bernardo is active in group chats and engages in discussions about football and job referrals. Bernardo is a data scientist currently living in Prague."
     },
     {
       "id": "member_pedro",
@@ -68,64 +68,28 @@
       "text": "Pedro is a member of the Kaya friend group. Pedro participates in group social events and group chats."
     },
     {
-      "id": "peter_dog",
-      "category": "fact",
-      "subject": "Peter",
-      "text": "Peter owns a dog named Kaya. The group's chat is named after Peter's dog."
+      "id": "member_murgeiro",
+      "category": "member",
+      "subject": "Murgeiro",
+      "text": "Murgeiro, also known as joão, jao, is a member of the Kaya friend group."
     },
     {
-      "id": "gil_pets",
-      "category": "fact",
-      "subject": "Gil",
-      "text": "Gil owns a dog named Cuca and recently adopted another dog from a shelter. His partner is Luana and he has a daughter."
-    },
-    {
-      "id": "peter_food",
-      "category": "fact",
-      "subject": "Peter",
-      "text": "Peter enjoys fast food, specifically Five Guys with extra cheese and bacon."
-    },
-    {
-      "id": "gil_assault",
-      "category": "fact",
-      "subject": "Gil",
-      "text": "Gil experienced a violent assault involving a baseball bat. He reported it to the police and is recovering, unable to do sports for three months."
+      "id": "member_romano",
+      "category": "member",
+      "subject": "Romano",
+      "text": "Romano is a member of the Kaya friend group."
     },
     {
       "id": "group_activities",
-      "category": "fact",
+      "category": "group",
       "subject": "group",
-      "text": "The Kaya group regularly organises dinners, poker nights, padel matches, beach outings, and casual hangouts in Lisbon."
-    },
-    {
-      "id": "peter_work",
-      "category": "fact",
-      "subject": "Peter",
-      "text": "Peter secured a job at DAZN and later worked as a freelance assistant editor at Fuel TV."
-    },
-    {
-      "id": "gustavo_profile",
-      "category": "fact",
-      "subject": "Gustavo",
-      "text": "Gustavo is interested in wildlife, particularly big cats, and actively participates in the Kaya web project."
+      "text": "The Kaya group regularly organises dinners at restaurants such as Marginalíssimo, poker nights, padel matches, beach outings at Caxias, and casual hangouts at members' homes including Rafa's villa. The group meets in Lisbon."
     },
     {
       "id": "group_overview",
       "category": "group",
       "subject": "Kaya group overview",
       "text": "Kaya is the name of a Portuguese friend group chat. The group communicates in European Portuguese and English."
-    },
-    {
-      "id": "member_murgeiro",
-      "category": "member",
-      "subject": "Murgeiro",
-      "text": "Murgeiro, also known as joão, jao is a member of the Kaya friend group. Murgeiro is a member of the Kaya friend group."
-    },
-    {
-      "id": "member_romano",
-      "category": "member",
-      "subject": "Romano",
-      "text": "Romano is a member of the Kaya friend group. Romano is a member of the Kaya friend group."
     }
   ]
 }
