@@ -11,81 +11,57 @@ LABEL version="2.0.0" \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies + Python 3.12 via the deadsnakes PPA so the image
+# matches the local virtualenv (Python 3.12) and the documented PEFT patch paths
+# (kaya_chatbot_env/lib/python3.12/...).
 RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3.10-dev \
-    python3-pip \
+    software-properties-common \
+    ca-certificates \
     git \
     wget \
     curl \
     build-essential \
     ninja-build \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Python 3.10 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
-    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
-
-# Upgrade pip, setuptools, wheel (pinned for reproducibility)
-RUN pip install --no-cache-dir \
+# Make python3.12 the default `python` (run_full_pipeline.py and the compose
+# commands invoke bare `python`) and bootstrap pip for it.
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && python -m pip install --no-cache-dir \
     "pip==24.3.1" \
     "setuptools==75.6.0" \
     "wheel==0.45.1" \
     "packaging==24.2" \
     "ninja==1.11.1.1"
 
-# Install PyTorch with CUDA 12.8 support (pinned for reproducibility)
-# torch 2.9.1: required by xformers 0.0.33.post2; torchao 0.17.0 now works (register_constant added in torch 2.7+)
-# unsloth-zoo 2026.4.2 requires torch>=2.4.0,<2.11.0 — torch 2.9.1 is within range
-RUN pip install --no-cache-dir \
+# Install PyTorch with CUDA 12.8 wheels. Kept separate from requirements.txt
+# because torch must come from the CUDA-specific index, not PyPI.
+# torch 2.9.1: required exactly by xformers 0.0.33.post2; within unsloth-zoo's
+# supported range (torch>=2.4.0,<2.11.0).
+RUN python -m pip install --no-cache-dir \
     torch==2.9.1 \
     torchvision==0.24.1 \
     torchaudio==2.9.1 \
     --index-url https://download.pytorch.org/whl/cu128
 
-# Copy requirements file with pinned versions
+# Install all remaining dependencies from requirements.txt — the single source
+# of truth. This keeps the image in lockstep with the local environment and the
+# version constraints in CLAUDE.md (transformers>=5.5.0, trl<=0.24.0,
+# peft==0.19.0, unsloth>=2026.4.5). Previously these were a divergent inline
+# list that violated those constraints.
 COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# Install core ML dependencies (all versions pinned — see requirements.txt)
-# transformers 4.57.6: latest stable 4.x; required >= 4.56.2 by trl 0.29.1
-RUN pip install --no-cache-dir \
-    transformers==4.57.6 \
-    trl==0.29.1 \
-    peft==0.15.2 \
-    accelerate==1.5.2 \
-    bitsandbytes==0.45.5 \
-    datasets==3.6.0 \
-    scikit-learn==1.6.1 \
-    "PyYAML==6.0.2" \
-    "numpy==1.26.4" \
-    "pandas==2.2.3" \
-    "scipy==1.14.1" \
-    "sentencepiece==0.2.1" \
-    "protobuf==5.29.6" \
-    "tiktoken==0.9.0" \
-    "python-dotenv==1.0.1" \
-    "openai==1.109.1" \
-    "xai-sdk==1.1.0" \
-    "chromadb==1.0.0" \
-    "sentence-transformers==3.4.1" \
-    "tqdm==4.67.1" \
-    "colorama==0.4.6" \
-    "ipython==8.30.0"
-
-# Install unsloth, unsloth-zoo and xformers
-# unsloth 2026.4.2 adds Gemma 4 support
-# xformers 0.0.33.post2 requires exactly torch==2.9.1
-# torchao 0.17.0: requires torch 2.7+ (register_constant); works with torch 2.9.1
-RUN pip install --no-cache-dir \
-    unsloth==2026.4.2 \
-    unsloth-zoo==2026.4.2 \
-    xformers==0.0.33.post2 \
-    torchao==0.17.0
-
-# Build and install flash-attention from source (takes ~5-10 minutes)
-# This ensures compatibility with the specific CUDA/PyTorch setup
-RUN pip install --no-cache-dir flash-attn --no-build-isolation
+# Build flash-attention from source (takes ~5-10 minutes). Requires torch to be
+# already installed (--no-build-isolation); not pinned in requirements.txt
+# because there is no prebuilt wheel for this CUDA/torch combination.
+RUN python -m pip install --no-cache-dir flash-attn --no-build-isolation
 
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \
