@@ -1,0 +1,30 @@
+{
+  "description": "TEMPLATE. Copy this file to data/golden_test_conversations.json and fill with your own regression tests. The real file is git-ignored because its reference answers embed personal data. Tests run via GoldenTestRunner in src/testing/conversation_tester.py. See AUDIT_REPORT.md P0-2.",
+  "version": "1.0.0",
+  "tests": [
+    {
+      "id": "identity_001",
+      "category": "identity",
+      "description": "Bot must describe a member in third person, without claiming personal experience with them.",
+      "question": "Tell me about Alice",
+      "reference": "Alice is a group member who enjoys hiking on weekends.",
+      "forbidden_patterns": [
+        "my friend",
+        "we lived together",
+        "\\bwe go\\b",
+        "meu amigo",
+        "vivemos juntos"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "factual_001",
+      "category": "factual",
+      "description": "Bot should answer from retrieved group knowledge, not invent details.",
+      "question": "What does Bob do?",
+      "reference": "Bob works as a software engineer.",
+      "forbidden_patterns": [],
+      "min_score": 3.0
+    }
+  ]
+}

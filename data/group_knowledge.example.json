@@ -1,0 +1,23 @@
+{
+  "description": "TEMPLATE. Copy this file to data/group_knowledge.json and replace with your group's real facts. The real file is git-ignored on purpose (it contains personal data) and is embedded into the ChromaDB knowledge base at build time. See AUDIT_REPORT.md P0-2.",
+  "facts": [
+    {
+      "id": "member_alice",
+      "category": "member",
+      "subject": "Alice",
+      "text": "Alice, also known as ali, is a member of the group. Alice enjoys hiking on weekends."
+    },
+    {
+      "id": "member_bob",
+      "category": "member",
+      "subject": "Bob",
+      "text": "Bob, also known as bobby, is a member of the group. Bob works as a software engineer."
+    },
+    {
+      "id": "group_overview",
+      "category": "group",
+      "subject": "group overview",
+      "text": "This is an example friend group. Replace these facts with your own."
+    }
+  ]
+}
