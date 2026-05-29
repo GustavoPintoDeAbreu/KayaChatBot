@@ -27,6 +27,11 @@ except ImportError:
     except ImportError:
         _memory_enabled = False
 
+try:
+    from src.chat.response_utils import clean_response
+except ImportError:
+    from chat.response_utils import clean_response
+
 def main():
     print("=" * 60)
     print("Kaya Chat Interface with RAG")
@@ -257,10 +262,11 @@ def main():
             # The streamer prints the output. We need to capture it for history too.
             # Since streamer doesn't return the text, we decode the output manually to update history.
             generated_ids = outputs[0][inputs['input_ids'].shape[1]:]
-            response_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-            # Clean up if it generated the stop token text
-            response_text = response_text.split('\n')[0].replace(f"{user_name}:", "")
+            # Trim a hallucinated continuation (model speaking as another turn)
+            # without discarding legitimate multi-line answers.
+            response_text = clean_response(response_text, user_name, bot_name)
 
             if response_text:
                 history.append(f"{bot_name}: {response_text}")
