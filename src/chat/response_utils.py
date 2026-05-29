@@ -43,3 +43,26 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
         kept_lines.append(line)
 
     return "\n".join(kept_lines).strip()
+
+
+def build_member_prompt_suffix(members_data: dict) -> str:
+    """Build the "Membros do grupo Kaya: ..." system-prompt suffix from a loaded
+    group_members.json dict. Returns "" when there are no members.
+
+    Shared by chat.py and web_app.py so the two entry points can't drift apart.
+    """
+    lines = []
+    for member in members_data.get("members", []):
+        line = member["name"]
+        aliases = [a for a in member.get("aliases", []) if a.lower() != member["name"].lower()]
+        if aliases:
+            line += f" (também conhecido como: {', '.join(aliases)})"
+        notes = member.get("notes", "")
+        if notes:
+            # Keep only the first 2 sentences to stay within the token budget.
+            sentences = [s.strip() for s in notes.split(".") if s.strip()]
+            line += f" — {'. '.join(sentences[:2])}."
+        lines.append(line)
+    if not lines:
+        return ""
+    return f"\n\nMembros do grupo Kaya: {'; '.join(lines)}."

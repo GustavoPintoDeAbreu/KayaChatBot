@@ -26,7 +26,7 @@ services:
       - ./models:/app/models
       - ./src:/app/src:ro
       - ./configs:/app/configs:ro
-      - ./config.docker.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro
 
     # Load environment variables from .env file

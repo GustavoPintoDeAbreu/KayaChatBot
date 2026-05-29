@@ -6,6 +6,7 @@ Retrieves relevant conversation chunks based on user queries.
 import os
 import re
 import json
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
@@ -103,19 +104,25 @@ class ConversationRetriever:
         query_lower = query.lower()
         mentioned = []
 
+        # Word-boundary match so short aliases (e.g. "gil", "rafa", "pedro")
+        # don't fire inside unrelated words ("ágil", "garrafa", ...).
         for member in self.group_members:
-            if member in query_lower:
+            if re.search(rf"\b{re.escape(member)}\b", query_lower):
                 mentioned.append(member)
 
         return mentioned
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: Optional[int] = None,
+                 query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
         """
         Retrieve relevant conversation chunks for a query.
 
         Args:
             query: The user's query
             top_k: Number of chunks to retrieve (overrides config)
+            query_embedding: Precomputed normalized query embedding. When None it
+                is computed here; retrieve_all passes one in so the query is only
+                embedded once per turn.
 
         Returns:
             List of retrieved chunks with metadata
@@ -135,8 +142,10 @@ class ConversationRetriever:
         # Extract mentioned persons for filtering
         query_persons = self.extract_query_persons(query) if FILTER_BY_PERSON else []
 
-        # Generate query embedding (normalized to match the stored vectors)
-        query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+        # Generate query embedding (normalized to match the stored vectors),
+        # unless the caller already computed it.
+        if query_embedding is None:
+            query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
         # NOTE: ChromaDB doesn't support $contains, so we retrieve more results and filter post-query
         # Retrieve extra results to account for filtering
@@ -209,7 +218,7 @@ class ConversationRetriever:
                     from datetime import datetime
                     start_dt = datetime.fromisoformat(chunk['timestamp_start'])
                     timestamp_info = f" [{start_dt.strftime('%Y-%m-%d')}]"
-                except:
+                except (ValueError, TypeError):
                     pass
 
             context_parts.append(f"\n--- Conversa {i}{timestamp_info} ---")
@@ -219,7 +228,8 @@ class ConversationRetriever:
 
         return "\n".join(context_parts)
 
-    def retrieve_knowledge(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+    def retrieve_knowledge(self, query: str, top_k: Optional[int] = None,
+                           query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Retrieve relevant facts from the curated knowledge base collection."""
         if not self.knowledge_collection or not self.encoder:
             return []
@@ -228,7 +238,8 @@ class ConversationRetriever:
         if top_k is None:
             top_k = kb_config.get('top_k', 3)
 
-        query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+        if query_embedding is None:
+            query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
         results = self.knowledge_collection.query(
             query_embeddings=[query_embedding],
@@ -313,15 +324,18 @@ class ConversationRetriever:
         max_tokens = self.rag_config.get('max_context_tokens', 3000)
         inject_recent_summaries = self.rag_config.get('inject_recent_summaries', True)
 
+        # Embed the query once and reuse it for both conversation and KB search.
+        query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0] if self.encoder else None
+
         # Always retrieve conversation history (sorted by similarity descending)
-        conv_chunks = self.retrieve(query)
+        conv_chunks = self.retrieve(query, query_embedding=query_embedding)
 
         # Retrieve from knowledge base if approach calls for it
         kb_chunks = []
         if knowledge_approach in ("both", "chromadb_only"):
             kb_config = self.rag_config.get('knowledge_base', {})
             if kb_config.get('enabled', False):
-                kb_chunks = self.retrieve_knowledge(query)
+                kb_chunks = self.retrieve_knowledge(query, query_embedding=query_embedding)
 
         # Inject recent summaries for members mentioned in the query
         recent_summaries_text = ""
@@ -378,13 +392,18 @@ class ConversationRetriever:
         return stats
 
 
-# Global retriever instance
+# Global retriever instance (thread-safe singleton — the web UI may call this
+# from multiple request threads).
 _retriever_instance = None
+_retriever_lock = threading.Lock()
 
 def get_retriever(config: Dict[str, Any]) -> ConversationRetriever:
-    """Get or create retriever instance (singleton pattern)."""
+    """Get or create retriever instance (double-checked locking singleton)."""
     global _retriever_instance
     if _retriever_instance is None:
-        _retriever_instance = ConversationRetriever(config)
-        _retriever_instance.initialize()
+        with _retriever_lock:
+            if _retriever_instance is None:
+                instance = ConversationRetriever(config)
+                instance.initialize()
+                _retriever_instance = instance
     return _retriever_instance

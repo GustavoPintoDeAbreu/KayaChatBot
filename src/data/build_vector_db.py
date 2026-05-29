@@ -74,8 +74,9 @@ class ConversationChunker:
         mentioned = []
         text_lower = text.lower()
 
+        # Word-boundary match so short aliases don't fire inside unrelated words.
         for member in GROUP_MEMBERS:
-            if member in text_lower:
+            if re.search(rf"\b{re.escape(member)}\b", text_lower):
                 mentioned.append(member)
 
         return list(set(mentioned))

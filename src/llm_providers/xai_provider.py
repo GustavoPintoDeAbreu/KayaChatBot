@@ -125,7 +125,7 @@ class XAIProvider(LLMProvider):
                 import re
                 repaired = re.sub(r'"(role|content|turns|conversations)"\s+"', r'"\1": "', repaired)
                 result = json.loads(repaired)
-            except:
+            except Exception:
                 raise ValueError(f"Failed to parse JSON response: {content[:300]}...")
 
         # Extract conversations
@@ -141,7 +141,9 @@ class XAIProvider(LLMProvider):
         # Format conversations
         formatted_conversations = []
         for conv in conversations:
-            # Extract turns
+            # Extract turns (default None so a dict without a known turns key,
+            # or a non-dict/non-list, is skipped instead of raising UnboundLocalError).
+            turns = None
             if isinstance(conv, dict):
                 if 'turns' in conv:
                     turns = conv['turns']

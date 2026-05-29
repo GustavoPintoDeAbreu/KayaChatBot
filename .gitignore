@@ -44,7 +44,6 @@ chroma.sqlite3
 
 # Exceptions: Keep config and documentation
 !config.yaml
-!config.docker.yaml
 !.cursorrules
 !README.md
 !requirements.txt

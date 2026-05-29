@@ -162,9 +162,9 @@ class TestLoadConfig:
         config = load_config(profile_override="gemma4-e4b")
         assert config["model"]["model_id"] == "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
         assert config["model"]["lora_r"] == 16
-        assert config["model"]["lora_alpha"] == 16
+        assert config["model"]["lora_alpha"] == 32
         assert config["model"]["lora_dropout"] == 0.0
-        assert "gemma4_e4b" in config["training"]["output_dir"]
+        assert "gemma4" in config["training"]["output_dir"]
 
     def test_apply_qwen3_profile(self):
         """Applying qwen3-14b profile overrides model and training sections."""

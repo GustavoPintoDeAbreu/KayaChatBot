@@ -420,12 +420,12 @@ class TestCountTokens:
         assert retriever._count_tokens("hello") == 1
 
     def test_many_words(self, retriever):
-        text = " ".join(["word"] * 75)  # 75 words → int(75 / 0.75) = 100
-        assert retriever._count_tokens(text) == 100
+        text = " ".join(["word"] * 75)  # 75 words → int(75 / 0.60) = 125
+        assert retriever._count_tokens(text) == 125
 
     def test_proportional(self, retriever):
         text = " ".join(["w"] * 30)
-        assert retriever._count_tokens(text) == int(30 / 0.75)
+        assert retriever._count_tokens(text) == int(30 / 0.60)
 
 
 # ---------------------------------------------------------------------------
