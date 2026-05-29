@@ -6,6 +6,7 @@ Creates chunks of conversation history and stores them with embeddings.
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Dict, Any
 from collections import defaultdict
@@ -13,8 +14,14 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 import tiktoken
 
+# Make src/ importable when run directly as a script (python src/data/build_vector_db.py)
+# or as a subprocess from incremental_update.py.
+_REPO_ROOT = Path(__file__).parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 # Load configuration
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+CONFIG_PATH = _REPO_ROOT / "config.yaml"
 from src.config_loader import load_config
 config = load_config(str(CONFIG_PATH))
 
