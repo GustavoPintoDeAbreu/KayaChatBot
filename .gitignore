@@ -29,11 +29,13 @@ data/wpp/
 data/rag_db/
 *.jsonl
 *.json
-# Golden test conversations are tracked intentionally
-!data/golden_test_conversations.json
-# Exception: project config JSON files should be tracked
-!data/group_members.json
-!data/group_knowledge.json
+# Only sanitized TEMPLATES are tracked. The real data/group_members.json,
+# data/group_knowledge.json and data/golden_test_conversations.json contain
+# personal data about real people (health, relationships, locations) and MUST
+# stay local / git-ignored. See AUDIT_REPORT.md P0-2.
+!data/group_members.example.json
+!data/group_knowledge.example.json
+!data/golden_test_conversations.example.json
 *.txt
 
 # ChromaDB files
