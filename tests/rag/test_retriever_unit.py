@@ -49,7 +49,7 @@ def retriever(base_config):
 
     # Mock encoder — returns a deterministic unit vector per query
     r.encoder = MagicMock()
-    r.encoder.encode = MagicMock(side_effect=lambda texts: np.ones((len(texts), 8)))
+    r.encoder.encode = MagicMock(side_effect=lambda texts, **kwargs: np.ones((len(texts), 8)))
 
     # Mock conversation collection
     r.collection = MagicMock()
@@ -108,7 +108,7 @@ def retriever_with_members(tmp_path):
     }
     r = ConversationRetriever(config)
     r.encoder = MagicMock()
-    r.encoder.encode = MagicMock(side_effect=lambda texts: np.ones((len(texts), 8)))
+    r.encoder.encode = MagicMock(side_effect=lambda texts, **kwargs: np.ones((len(texts), 8)))
     r.collection = MagicMock()
     r.collection.count.return_value = 100
     r.knowledge_collection = MagicMock()
