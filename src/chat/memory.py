@@ -64,10 +64,14 @@ class SessionMemory:
             self.history_file.parent.mkdir(parents=True, exist_ok=True)
             # Apply hard cap before saving
             to_save = history[-self.MAX_SAVED_MESSAGES:]
-            self.history_file.write_text(
+            # Atomic write: write to a temp file in the same directory, then
+            # os.replace() so a crash mid-write can't corrupt the history file.
+            tmp_file = self.history_file.with_suffix(self.history_file.suffix + ".tmp")
+            tmp_file.write_text(
                 json.dumps(to_save, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            os.replace(tmp_file, self.history_file)
             return True
         except OSError as exc:
             logger.warning("Failed to save chat history to %s: %s", self.history_file, exc)

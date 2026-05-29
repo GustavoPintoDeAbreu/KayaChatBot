@@ -38,14 +38,15 @@ import yaml
 _REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
+from src.config_loader import load_config
 from src.data.extract_all_messages import MAX_TOKENS_PER_CHUNK, MessageChunker, MessageExtractor
 
 # ---------------------------------------------------------------------------
 # Configuration & paths
 # ---------------------------------------------------------------------------
+# Load via the single entry point (load_config — never read config.yaml directly).
 CONFIG_PATH = _REPO_ROOT / "config.yaml"
-with open(CONFIG_PATH, "r", encoding="utf-8") as _f:
-    _config = yaml.safe_load(_f)
+_config = load_config(str(CONFIG_PATH))
 
 # Docker vs. local
 if os.path.exists("/app"):

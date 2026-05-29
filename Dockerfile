@@ -72,7 +72,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Copy project files
 COPY src/ /app/src/
 COPY tests/ /app/tests/
-COPY config.docker.yaml /app/config.yaml
+COPY config.yaml /app/config.yaml
 COPY run_full_pipeline.py /app/
 COPY configs/ /app/configs/
 

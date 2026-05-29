@@ -213,7 +213,7 @@ class InstagramReader:
         try:
             # Try to encode as latin1 then decode as utf8 (common Instagram encoding issue)
             return text.encode('latin1').decode('utf8')
-        except:
+        except (UnicodeDecodeError, UnicodeEncodeError):
             return text
 
     def _clean_text(self, text: str) -> Optional[str]:
@@ -334,7 +334,7 @@ class ConversationFormatter:
         self.messages = messages
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        except:
+        except Exception:
             # Fallback if tokenizer not available locally
             print(
                 "Warning: Could not load tokenizer. Using character-based approximation."
