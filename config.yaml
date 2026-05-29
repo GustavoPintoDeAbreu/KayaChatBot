@@ -220,6 +220,12 @@ rag:
   top_k: 5
   filter_by_person: true
 
+  # Minimum cosine similarity for a retrieved conversation chunk to be injected.
+  # With normalized bge-m3 embeddings + cosine space, similarity is in [-1, 1];
+  # relevant chunks usually score > 0.4. Raise to drop more off-topic context;
+  # set 0.0 to disable filtering. Tune against the benchmark.
+  min_similarity: 0.25
+
   # Knowledge approach for benchmarking
   # Options:
   #   "both"         — JSON members in system prompt AND ChromaDB KB retrieval (overflows 2048-token budget → 0% score)
