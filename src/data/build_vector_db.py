@@ -206,75 +206,41 @@ class VectorDatabaseBuilder:
         self.encoder = None
 
     def initialize(self):
-        """Initialize the vector database and embedding model."""
+        """Initialize the vector database and embedding model.
+
+        The conversation collection is always rebuilt from scratch with cosine
+        space so its distance metric stays consistent with the normalized
+        bge-m3 embeddings. bge-m3 is trained for cosine similarity; the previous
+        default (L2 on un-normalized vectors) degraded ranking and let
+        ``1 - distance`` go negative. Always rebuilding also avoids duplicate
+        chunk IDs from re-adding to an existing collection.
+        """
         print(f"🔧 Initializing vector database at {self.db_path}")
 
         # Load embedding model FIRST to get embedding dimension
         print(f"🤖 Loading embedding model: {self.embedding_model}")
-        # GTE models require trust_remote_code=True
         self.encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
         embedding_dim = self.encoder.get_sentence_embedding_dimension()
         print(f"✅ Embedding model loaded (dimension: {embedding_dim})")
 
-        # Create or get collection
         collection_name = "kaya_conversations"
-        collection_needs_rebuild = False
-        
+
         try:
-            existing_collection = self.client.get_collection(name=collection_name)
-            print(f"📚 Found existing collection '{collection_name}' with {existing_collection.count()} documents")
-            
-            # Check if embedding dimension matches by testing with a dummy embedding
-            test_embedding = self.encoder.encode(["test"], normalize_embeddings=True)[0].tolist()
-            test_dim = len(test_embedding)
-            
-            # Try adding a test document to check dimension compatibility
-            try:
-                # This will fail if dimensions don't match
-                import uuid
-                test_id = f"__test_dim_check_{uuid.uuid4().hex[:8]}__"
-                existing_collection.add(
-                    ids=[test_id],
-                    embeddings=[test_embedding],
-                    documents=["dimension test"],
-                    metadatas=[{"test": True}]
-                )
-                # If successful, delete the test document
-                existing_collection.delete(ids=[test_id])
-                print(f"✅ Dimension check passed (768)")
-                self.collection = existing_collection
-            except Exception as e:
-                if "dimension" in str(e).lower():
-                    print(f"⚠️  Dimension mismatch detected: {e}")
-                    collection_needs_rebuild = True
-                else:
-                    raise
-        except Exception as e:
-            if "does not exist" in str(e).lower() or "not found" in str(e).lower():
-                print(f"📚 Collection '{collection_name}' does not exist")
-                collection_needs_rebuild = True
-            else:
-                print(f"❌ Unexpected error: {e}")
-                raise
-        
-        # Rebuild collection if needed
-        if collection_needs_rebuild:
-            try:
-                print(f"🗑️  Deleting old collection '{collection_name}'...")
-                self.client.delete_collection(name=collection_name)
-            except:
-                pass  # Collection might not exist
-            
-            print(f"📚 Creating new collection '{collection_name}' with dimension {embedding_dim}...")
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                metadata={
-                    "description": "Kaya chatbot conversation chunks for RAG",
-                    "embedding_dimension": embedding_dim,
-                    "embedding_model": self.embedding_model
-                }
-            )
-            print(f"✅ Collection created")
+            self.client.delete_collection(name=collection_name)
+            print(f"🗑️  Deleted existing collection '{collection_name}'")
+        except Exception:
+            pass  # Collection did not exist yet
+
+        self.collection = self.client.create_collection(
+            name=collection_name,
+            metadata={
+                "description": "Kaya chatbot conversation chunks for RAG",
+                "embedding_dimension": embedding_dim,
+                "embedding_model": self.embedding_model,
+                "hnsw:space": "cosine",
+            },
+        )
+        print(f"✅ Collection created (dimension {embedding_dim}, space=cosine)")
 
     def add_chunks(self, chunks: List[Dict]):
         """Add conversation chunks to the vector database."""
@@ -300,7 +266,7 @@ class VectorDatabaseBuilder:
         batch_size = 32
         for i in range(0, len(documents), batch_size):
             batch_docs = documents[i:i+batch_size]
-            batch_embeddings = self.encoder.encode(batch_docs, show_progress_bar=False)
+            batch_embeddings = self.encoder.encode(batch_docs, show_progress_bar=False, normalize_embeddings=True)
             embeddings.extend(batch_embeddings.tolist())
 
         # Add to collection
@@ -350,9 +316,10 @@ class KnowledgeBaseBuilder:
             metadata={
                 "description": "Curated group knowledge facts for Kaya chatbot",
                 "embedding_model": self.embedding_model,
+                "hnsw:space": "cosine",
             }
         )
-        print(f"✅ Knowledge base collection created")
+        print(f"✅ Knowledge base collection created (space=cosine)")
 
     def build_from_json(self, knowledge_file: Path):
         """Load facts from group_knowledge.json and embed them into the collection."""
@@ -381,7 +348,7 @@ class KnowledgeBaseBuilder:
         embeddings = []
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
-            batch_embeddings = self.encoder.encode(batch, show_progress_bar=False)
+            batch_embeddings = self.encoder.encode(batch, show_progress_bar=False, normalize_embeddings=True)
             embeddings.extend(batch_embeddings.tolist())
 
         self.collection.add(
