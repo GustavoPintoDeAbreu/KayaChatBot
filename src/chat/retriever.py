@@ -126,11 +126,17 @@ class ConversationRetriever:
         if top_k is None:
             top_k = self.rag_config.get('top_k', TOP_K)
 
+        # Relevance floor: with normalized embeddings + cosine space,
+        # similarity_score is a true cosine similarity in [-1, 1]. Chunks below
+        # this score are dropped so always-on RAG doesn't inject the
+        # least-irrelevant chunks for off-topic queries. 0.0 disables filtering.
+        min_similarity = self.rag_config.get('min_similarity', 0.0)
+
         # Extract mentioned persons for filtering
         query_persons = self.extract_query_persons(query) if FILTER_BY_PERSON else []
 
-        # Generate query embedding
-        query_embedding = self.encoder.encode([query])[0]
+        # Generate query embedding (normalized to match the stored vectors)
+        query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
         # NOTE: ChromaDB doesn't support $contains, so we retrieve more results and filter post-query
         # Retrieve extra results to account for filtering
@@ -150,25 +156,29 @@ class ConversationRetriever:
             results['metadatas'][0],
             results['distances'][0]
         )):
+            similarity = 1 - distance  # cosine distance → cosine similarity
+            if similarity < min_similarity:
+                continue  # Below relevance floor — skip
+
             # Post-query filtering by person if needed
             if query_persons:
                 participants_list = [p.lower() for p in metadata.get('participants', '').split(',')] if metadata.get('participants') else []
                 mentioned_list = [m.lower() for m in metadata.get('mentioned', '').split(',')] if metadata.get('mentioned') else []
-                
+
                 # Check if any query person is in participants or mentioned (case-insensitive)
                 person_found = any(
                     person in participants_list or person in mentioned_list
                     for person in query_persons
                 )
-                
+
                 if not person_found:
                     continue  # Skip this chunk
-            
+
             retrieved_chunks.append({
                 'rank': len(retrieved_chunks) + 1,
                 'text': doc,
                 'metadata': metadata,
-                'similarity_score': 1 - distance,  # Convert distance to similarity
+                'similarity_score': similarity,
                 'distance': distance,
                 'participants': metadata.get('participants', '').split(',') if metadata.get('participants') else [],
                 'mentioned': metadata.get('mentioned', '').split(',') if metadata.get('mentioned') else [],
@@ -218,7 +228,7 @@ class ConversationRetriever:
         if top_k is None:
             top_k = kb_config.get('top_k', 3)
 
-        query_embedding = self.encoder.encode([query])[0]
+        query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
         results = self.knowledge_collection.query(
             query_embeddings=[query_embedding],
