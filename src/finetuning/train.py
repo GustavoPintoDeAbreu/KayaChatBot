@@ -76,6 +76,10 @@ def main():
         print(f"   GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
         print("   ⚠️  No CUDA GPU detected!")
+        # Don't block on input() in non-interactive runs (Docker/CI) — fail fast.
+        if not sys.stdin.isatty():
+            print("   Non-interactive environment and no GPU — aborting.")
+            return
         if input("   Continue anyway? (y/n): ").lower() != 'y':
             return
 
@@ -92,6 +96,11 @@ def main():
     lora_alpha = config['model']['lora_alpha']
     lora_dropout = config['model']['lora_dropout']
     target_modules = config['model']['target_modules']
+    # Chat template + response-masking markers are profile-driven so non-Gemma
+    # models (e.g. Qwen3/ChatML) train correctly. Defaults preserve gemma-4.
+    chat_template = config['model'].get('chat_template', 'gemma-4')
+    instruction_part = config['model'].get('instruction_part', '<|turn>user\n')
+    response_part = config['model'].get('response_part', '<|turn>model\n')
     tc = config['training']
 
     test_mode = config['test_mode']['enabled'] or args.test
@@ -161,7 +170,7 @@ def main():
         loftq_config=None,
         autocast_adapter_dtype=False,
     )
-    tokenizer = get_chat_template(tokenizer, "gemma-4")
+    tokenizer = get_chat_template(tokenizer, chat_template)
     gc.collect()
     print(f"   [MEM post-LoRA] RSS={rss_gb():.2f}GB | VRAM={torch.cuda.memory_allocated()/1e9:.2f}GB", flush=True)
     model.print_trainable_parameters()
@@ -317,8 +326,8 @@ def main():
 
     trainer = train_on_responses_only(
         trainer,
-        instruction_part="<|turn>user\n",
-        response_part="<|turn>model\n",
+        instruction_part=instruction_part,
+        response_part=response_part,
         num_proc=1,
     )
     print(f"   [MEM post-response_masking] RSS={rss_gb():.2f}GB", flush=True)

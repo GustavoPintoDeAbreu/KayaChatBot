@@ -19,6 +19,7 @@ from transformers import TextIteratorStreamer
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config_loader import load_config
+from src.chat.response_utils import clean_response, build_member_prompt_suffix
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _docker_cfg = "/app/config.yaml"
@@ -68,23 +69,11 @@ knowledge_approach = rag_config.get("knowledge_approach", "both")
 system_prompt = config["data"]["system_prompt"]
 
 _members_file = config.get("data", {}).get("group_members_file")
-if _members_file:
+if _members_file and knowledge_approach in ("both", "json_only"):
     _mf = Path(_members_file) if Path(_members_file).is_absolute() else Path(config_path).parent / _members_file
-    if _mf.exists() and knowledge_approach in ("both", "json_only"):
+    if _mf.exists():
         _members_data = json.loads(_mf.read_text(encoding="utf-8"))
-        _lines = []
-        for m in _members_data.get("members", []):
-            line = m["name"]
-            aliases = [a for a in m.get("aliases", []) if a.lower() != m["name"].lower()]
-            if aliases:
-                line += f" (também conhecido como: {', '.join(aliases)})"
-            notes = m.get("notes", "")
-            if notes:
-                sentences = [s.strip() for s in notes.split(".") if s.strip()]
-                line += f" — {'. '.join(sentences[:2])}."
-            _lines.append(line)
-        if _lines:
-            system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(_lines)}."
+        system_prompt += build_member_prompt_suffix(_members_data)
 
 # ── RAG retriever ────────────────────────────────────────────────────────────
 retriever = None
@@ -181,7 +170,11 @@ def respond(message: str, history: list):
         partial += token
         yield partial
 
-    _log_interaction(message, partial.strip())
+    # Trim any hallucinated continuation (shared with chat.py) for the final
+    # displayed message and the logged turn.
+    cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
+    yield cleaned
+    _log_interaction(message, cleaned)
 
 
 # ── Gradio UI ────────────────────────────────────────────────────────────────
@@ -203,9 +196,18 @@ demo = gr.ChatInterface(
 )
 
 if __name__ == "__main__":
+    # Localhost-only by default: the bot serves private group memory, so it must
+    # not bind to all interfaces without auth. To expose on the LAN, set
+    # chat.web_server_name: "0.0.0.0" AND chat.web_auth: ["user", "password"]
+    # in config.yaml.
+    _chat_cfg = config.get("chat", {})
+    _server_name = _chat_cfg.get("web_server_name", "127.0.0.1")
+    _server_port = int(_chat_cfg.get("web_server_port", 7860))
+    _auth = _chat_cfg.get("web_auth")  # list [user, pass] or null
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_name=_server_name,
+        server_port=_server_port,
+        auth=tuple(_auth) if _auth else None,
         share=False,
         show_error=True,
     )

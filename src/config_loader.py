@@ -71,6 +71,7 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
         profile_name = config.get("active_model_profile") or None
 
     if not profile_name:
+        _validate_config(config)
         return config  # backward compatible: no profile set
 
     profiles = config.get("model_profiles", {})
@@ -89,4 +90,24 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
     if "training" in profile:
         config["training"] = _deep_merge(config.get("training", {}), profile["training"])
 
+    _validate_config(config)
     return config
+
+
+def _validate_config(config: Dict[str, Any]) -> None:
+    """Fail fast on a malformed resolved config (missing required keys).
+
+    Uses the pydantic ConfigModel (extra='allow'), so only the load-bearing
+    sections — training.output_dir, data.system_prompt, rag — are enforced.
+
+    The loader is also a generic utility exercised in unit tests with partial
+    configs that intentionally omit whole sections; only full application
+    configs (those carrying both ``data`` and ``training``) are validated.
+    """
+    if "data" not in config or "training" not in config:
+        return
+    from src.models import ConfigModel
+    try:
+        ConfigModel(**config)
+    except Exception as exc:
+        raise ValueError(f"Invalid configuration in resolved config: {exc}") from exc

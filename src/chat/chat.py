@@ -28,9 +28,9 @@ except ImportError:
         _memory_enabled = False
 
 try:
-    from src.chat.response_utils import clean_response
+    from src.chat.response_utils import clean_response, build_member_prompt_suffix
 except ImportError:
-    from chat.response_utils import clean_response
+    from chat.response_utils import clean_response, build_member_prompt_suffix
 
 def main():
     print("=" * 60)
@@ -62,30 +62,14 @@ def main():
             system_prompt = uncensored_preamble + "\n\n" + system_prompt
 
     members_file = config.get('data', {}).get('group_members_file')
-    if members_file:
-        # Support both absolute paths and relative paths
-        from pathlib import Path as _Path
-        _mf = _Path(members_file)
+    if members_file and knowledge_approach in ('both', 'json_only'):
+        # Support both absolute and relative paths
+        _mf = Path(members_file)
         if not _mf.is_absolute():
-            _mf = _Path(config_path).parent / members_file
-        if _mf.exists() and knowledge_approach in ('both', 'json_only'):
-            import json as _json
-            members_data = _json.loads(_mf.read_text(encoding='utf-8'))
-            member_lines = []
-            for m in members_data.get('members', []):
-                line = m['name']
-                aliases = [a for a in m.get('aliases', []) if a.lower() != m['name'].lower()]
-                if aliases:
-                    line += f" (também conhecido como: {', '.join(aliases)})"
-                notes = m.get('notes', '')
-                if notes:
-                    # Keep only the first 2 sentences to stay within token budget
-                    sentences = [s.strip() for s in notes.split('.') if s.strip()]
-                    short_notes = '. '.join(sentences[:2]) + '.'
-                    line += f" — {short_notes}"
-                member_lines.append(line)
-            if member_lines:
-                system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
+            _mf = Path(config_path).parent / members_file
+        if _mf.exists():
+            members_data = json.loads(_mf.read_text(encoding='utf-8'))
+            system_prompt += build_member_prompt_suffix(members_data)
 
     # Load model: Unsloth FastModel for Gemma 4 (uses cached base model via adapter_config.json);
     # standard PEFT path for Qwen3 (Unsloth fast-inference was broken for Qwen3).

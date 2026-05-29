@@ -147,10 +147,21 @@ def split_into_sessions(messages: List[Dict]) -> List[List[Dict]]:
 
 
 def format_context(messages: List[Dict]) -> str:
-    """Format context messages using the same RAG markers used at inference."""
-    lines = [f"[{m['sender']}]: {m['text']}" for m in messages]
-    body = "\n".join(lines)
-    return f"=== Conversas relevantes do grupo ===\n{body}\n=== Fim das conversas ==="
+    """Format context messages byte-identically to the inference-time retriever.
+
+    Must mirror ``ConversationRetriever.format_context`` (src/chat/retriever.py):
+    a "=== Conversas relevantes do grupo ===" header, a "--- Conversa 1 ---"
+    sub-header, then ``{sender}: {text}`` lines (no brackets). Previously this
+    used ``[{sender}]: {text}`` with no sub-header, so the model trained on a
+    different context shape than it sees at inference (train/serve skew).
+    """
+    body = "\n".join(f"{m['sender']}: {m['text']}" for m in messages)
+    return (
+        "=== Conversas relevantes do grupo ===\n\n"
+        "--- Conversa 1 ---\n"
+        f"{body}\n\n"
+        "=== Fim das conversas ==="
+    )
 
 
 def _pick_question(next_msg: Dict, rng: random.Random) -> str:

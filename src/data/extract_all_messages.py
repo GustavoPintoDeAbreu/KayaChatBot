@@ -13,18 +13,19 @@ from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 import tiktoken
 
-# Load configuration
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
-
 # Make src/ importable when run from any CWD
 import os
 _REPO_ROOT = Path(__file__).parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from src.config_loader import load_config
 from src.data.identity_resolver import SenderResolver
+
+# Load configuration via the single entry point (load_config — never read
+# config.yaml directly), so profile resolution + validation are applied.
+CONFIG_PATH = _REPO_ROOT / "config.yaml"
+config = load_config(str(CONFIG_PATH))
 
 # Configuration
 TEST_MODE = config['test_mode']['enabled']
@@ -318,7 +319,7 @@ class MessageExtractor:
                         current['text'] += ' ' + msg['text']
                         current['timestamp'] = msg['timestamp']  # Update to latest
                         continue
-                except:
+                except (ValueError, KeyError, TypeError):
                     pass
             
             # Different sender or too much time passed
