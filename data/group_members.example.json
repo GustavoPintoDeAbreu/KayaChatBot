@@ -1,0 +1,34 @@
+{
+  "_comment": "TEMPLATE. Copy this file to data/group_members.json and fill in your group's real members. The real file is git-ignored on purpose: it contains personal data about real people and must never be committed. See AUDIT_REPORT.md P0-2.",
+  "group_name": "ExampleGroup",
+  "members": [
+    {
+      "name": "Alice",
+      "aliases": [
+        "alice",
+        "ali"
+      ],
+      "notes": "",
+      "recent_summary": "",
+      "key_facts": [
+        "Alice is a member of the group.",
+        "Alice enjoys hiking on weekends."
+      ],
+      "gender": "female"
+    },
+    {
+      "name": "Bob",
+      "aliases": [
+        "bob",
+        "bobby"
+      ],
+      "notes": "",
+      "recent_summary": "",
+      "key_facts": [
+        "Bob is a member of the group.",
+        "Bob works as a software engineer."
+      ],
+      "gender": "male"
+    }
+  ]
+}
