@@ -195,9 +195,11 @@ class TestMergedTrainingData:
                 ft = rec.get("formatted_text", "")
                 # ChatML format: explicit <|im_start|>system tag
                 has_system = "<|im_start|>system" in ft
-                # Gemma 4 format: system prompt embedded in first <|turn>user\n block
+                # Gemma 4 format: system prompt embedded in first <|turn>user\n block.
+                # The system prompt is in Portuguese ("És o bot assistente...") so we
+                # check for the Gemma turn marker plus the Portuguese bot identifier.
                 if not has_system:
-                    has_system = "<|turn>user\n" in ft and "You are" in ft
+                    has_system = "<|turn>user\n" in ft and ("You are" in ft or "És o bot" in ft or "bot assistente" in ft)
             # Check original.conversations as fallback
             if not has_system:
                 orig_turns = rec.get("original", {}).get("conversations", [])
