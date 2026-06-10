@@ -2,7 +2,9 @@
 # KayaChatBot Python Dependencies — version-pinned for
 # reproducible Docker builds and local development.
 #
-# Pinned against: torch==2.9.1, CUDA 12.8, unsloth==2026.4.5
+# Pinned against: torch==2.6.0, CUDA 12.4, unsloth==2026.4.5
+# (matches the validated kaya_chatbot_env venv — the app runs in Docker,
+#  fine-tuning runs in the venv.)
 #
 # To upgrade: bump the version here AND in Dockerfile, then
 # rebuild the image with --no-cache to test compatibility.
@@ -10,11 +12,12 @@
 
 # --- Unsloth fine-tuning stack ---
 # unsloth 2026.4.5: Gemma 4 E4B fixes (use_cache, grad accum); trl capped at <=0.24.0
-# torchao 0.17.0: requires torch>=2.7 (register_constant); compatible with torch 2.9.x
+# Versions match the validated venv (torch 2.6.0 / cu124).
 unsloth==2026.4.5
-unsloth-zoo==2026.4.5
-xformers==0.0.33.post2  # requires torch==2.9.1
-torchao==0.17.0          # required by unsloth-zoo>=2026.4.2; needs torch>=2.7
+unsloth-zoo==2026.4.7    # min required by unsloth 2026.4.5
+# xformers prebuilt for torch 2.6.0 / cu124 (matches the venv); from the PyTorch index.
+xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-manylinux_2_28_x86_64.whl
+torchao==0.16.0          # version validated in the venv with torch 2.6.0
 
 # --- Transformers ecosystem ---
 # transformers 5.5.0: max allowed by unsloth 2026.4.5 (<=5.5.0)
@@ -22,13 +25,13 @@ torchao==0.17.0          # required by unsloth-zoo>=2026.4.2; needs torch>=2.7
 transformers==5.5.0
 trl==0.24.0
 peft==0.19.0
-accelerate==1.5.2
-bitsandbytes==0.45.5
+accelerate==1.13.0
+bitsandbytes==0.49.2
 datasets==3.6.0
 
 # --- RAG / vector database ---
-chromadb==1.0.0
-sentence-transformers==3.4.1
+chromadb==1.5.5
+sentence-transformers==5.3.0
 
 # --- Data science ---
 numpy==1.26.4
@@ -40,7 +43,7 @@ PyYAML==6.0.2
 # --- Tokenization ---
 sentencepiece==0.2.1
 protobuf==5.29.6
-tiktoken==0.9.0
+tiktoken==0.12.0
 
 # --- LLM providers ---
 openai==1.109.1
@@ -54,3 +57,6 @@ tqdm==4.67.1
 python-dotenv==1.0.1
 colorama==0.4.6
 ipython==8.30.0
+
+# --- Testing (used by the kaya-test container / CI) ---
+pytest==9.0.2
