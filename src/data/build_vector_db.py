@@ -347,8 +347,16 @@ class KnowledgeBaseBuilder:
 
         ids = [fact['id'] for fact in facts]
         documents = [fact['text'] for fact in facts]
+        # Carry optional date fields (mixed-rule dating) into ChromaDB metadata so
+        # the retriever can surface recency when the user asks about timing.
+        # ChromaDB requires scalar metadata values, so missing dates become "".
+        date_fields = ('event_date_hint', 'last_updated', 'source_date_start', 'source_date_end')
         metadatas = [
-            {'category': fact.get('category', ''), 'subject': fact.get('subject', '')}
+            {
+                'category': fact.get('category', ''),
+                'subject': fact.get('subject', ''),
+                **{field: fact.get(field, '') or '' for field in date_fields},
+            }
             for fact in facts
         ]
 

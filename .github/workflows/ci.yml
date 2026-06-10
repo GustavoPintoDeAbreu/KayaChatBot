@@ -1,0 +1,45 @@
+name: CI
+
+# Runs the test suite on every PR to main. This is the merge gate (combine with
+# branch protection: require this check + a PR review). Runs on the self-hosted
+# GPU runner because the image is a CUDA image and tests run inside the
+# kaya-test container.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write placeholder .env
+        # Tests mock external services (see conftest.py); real keys are not
+        # needed. compose requires a .env to exist (env_file + var substitution).
+        run: |
+          cat > .env <<'EOF'
+          XAI_API_KEY=test
+          AZURE_OPENAI_API_KEY_gpt_41_mini=test
+          AZURE_OPENAI_API_KEY_gpt_53_chat=test
+          KAYA_WEB_USER=test
+          KAYA_WEB_PASS=test
+          CLOUDFLARE_TUNNEL_TOKEN=test
+          EOF
+
+      - name: Build test image (cached)
+        run: docker compose --profile test build kaya-test
+
+      - name: Run test suite
+        run: docker compose --profile test run --rm kaya-test
+
+      - name: Clean up .env
+        if: always()
+        run: rm -f .env

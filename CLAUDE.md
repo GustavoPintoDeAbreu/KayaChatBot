@@ -54,6 +54,15 @@ kaya_chatbot_env/bin/python tests/pipeline/validate_pipeline.py
 # Docker (always rebuild+prune after changes)
 docker-compose up --build
 docker system prune  # prevent storage overload
+
+# Dev/Test (Docker)
+docker-compose --profile dev run --rm --service-ports kaya-dev    # web UI, ./src mounted read-write for live edits
+docker-compose --profile test run --rm kaya-test                  # run the pytest suite in-container
+
+# Deployment (on-demand web app — see DEPLOYMENT.md)
+scripts/app_up.sh dev|prod      # power up the app + Cloudflare Tunnel (one GPU → one env at a time)
+scripts/app_down.sh dev|prod    # stop and free the GPU
+scripts/app_status.sh           # running containers + GPU usage
 ```
 
 ---
@@ -87,6 +96,10 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 
 `ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.60`, tuned for Portuguese subword inflation).
 
+**Date-aware facts (mixed rule).** Knowledge facts carry optional date metadata: `event_date_hint` (an explicit temporal phrase pulled from the source text), `source_date_start`/`source_date_end` (the timestamp range of the source messages), and `last_updated`. These are populated by `generate_knowledge_base.py` and embedded into ChromaDB metadata by `build_vector_db.py`. The retriever only surfaces dates when `_has_temporal_intent(query)` matches a timing question (PT/EN keywords); otherwise normal answers stay date-free. When surfacing, an explicit `event_date_hint` wins over the message timestamps (relative age rendered by `_relative_age`). `chat.py`/`web_app.py` also append `Hoje é <date>.` to the runtime system prompt so the model can reason about recency.
+
+**Follow-up suggestions (web UI only).** After each answer, `src/chat/suggestions.py` prompts the already-loaded local model a second time for 2-3 follow-up questions, shown as clickable chips in the Gradio UI (`web_app.py`). Controlled by `chat.suggestions` in `config.yaml`; degrades to no chips on any failure.
+
 ### Config System (`src/config_loader.py`)
 
 Single entry point: `load_config(path, profile_override=None)`. Profiles (defined under `model_profiles` in `config.yaml`) deep-merge into the top-level `model:` and `training:` sections. The active profile is set by `active_model_profile` in `config.yaml` or passed via `--profile` CLI flag. **All code paths must use `load_config()` — never read `config.yaml` directly.**
@@ -98,6 +111,10 @@ Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resi
 ### Fine-tuning (`src/finetuning/train.py`)
 
 Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training calls `SFTTrainer` directly (no wrapper class — a previous `KayaTrainer` wrapper caused 20+ GB RAM spikes). LoRA adapters are saved to `training.output_dir`. Inference expects `adapter_config.json` in the model directory.
+
+### Deployment (`DEPLOYMENT.md`)
+
+The Gradio web app is served **on demand** (not 24/7) on the single GPU box. Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile) with two protection layers: Cloudflare Access (network login) and the Gradio username/password (`KAYA_WEB_USER`/`KAYA_WEB_PASS`, read from env in `web_app.py`, overriding `chat.web_auth`). Two on-demand containers — `kaya-dev` (profile `dev`, port 7861) and `kaya-prod` (profile `prod`, port 7860) — share one GPU, so only one runs at a time (`scripts/app_up.sh` enforces this). CI/CD (`.github/workflows/`) runs on a **self-hosted GPU runner**: `ci.yml` tests every PR, `deploy-dev.yml` stages on merge to `main`, `deploy-prod.yml` is a manual gated promotion (the `prod` GitHub Environment requires reviewer approval). Deploys *stage* a release (build + test gate) and write `.env` from environment secrets; they do not keep a server running — power up with `scripts/app_up.sh`. Full runbook in `DEPLOYMENT.md`.
 
 ---
 

@@ -1,0 +1,61 @@
+name: Deploy (prod)
+
+# Manual, gated promotion to prod. Run this after the dev release has been
+# tested. The `prod` GitHub Environment should have a required-reviewers
+# protection rule, so the run pauses for your approval before deploying.
+#
+# Like dev, this stages the release (build + test gate) and does not keep a
+# server running. Power up with scripts/app_up.sh prod (or set `start: true`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (commit/tag/branch) to deploy"
+        type: string
+        default: main
+      start:
+        description: "Power up the prod app after staging"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy-prod:
+    runs-on: [self-hosted, gpu]
+    environment: prod
+    steps:
+      - name: Checkout ${{ inputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Write .env from secrets
+        run: |
+          cat > .env <<EOF
+          XAI_API_KEY=${{ secrets.XAI_API_KEY }}
+          AZURE_OPENAI_API_KEY_gpt_41_mini=${{ secrets.AZURE_OPENAI_API_KEY_gpt_41_mini }}
+          AZURE_OPENAI_API_KEY_gpt_53_chat=${{ secrets.AZURE_OPENAI_API_KEY_gpt_53_chat }}
+          KAYA_WEB_USER=${{ secrets.KAYA_WEB_USER }}
+          KAYA_WEB_PASS=${{ secrets.KAYA_WEB_PASS }}
+          CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          EOF
+
+      - name: Build prod image (cached)
+        run: docker compose --profile prod build kaya-prod
+
+      - name: Test gate
+        run: docker compose --profile test run --rm kaya-test
+
+      - name: Power up prod (optional)
+        if: ${{ inputs.start == true }}
+        run: ./scripts/app_up.sh prod
+
+      - name: Summary
+        run: |
+          echo "### Prod release staged ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "Ref: \`${{ inputs.ref }}\` (commit \`${{ github.sha }}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Power up: \`scripts/app_up.sh prod\`" >> "$GITHUB_STEP_SUMMARY"

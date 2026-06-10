@@ -7,10 +7,66 @@ import os
 import re
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
+
+# Query keywords that signal the user is asking about *when* something happened
+# or how recent it is. Date metadata is only surfaced into the injected context
+# when one of these matches, so normal questions stay date-free.
+_TEMPORAL_INTENT_PATTERNS = [
+    # Portuguese
+    r"\bquando\b", r"\bh[áa] quanto tempo\b", r"\brecente", r"\bnão? h[áa]\b",
+    r"\b[úu]ltima vez\b", r"\bque dia\b", r"\bque ano\b", r"\bque m[êe]s\b",
+    r"\bdesde quando\b", r"\bh[áa] quantos\b", r"\bantig", r"\bnovidade",
+    r"\batualizad", r"\bda altura\b", r"\bnaquela altura\b",
+    # English
+    r"\bwhen\b", r"\bhow long ago\b", r"\brecent", r"\blast time\b",
+    r"\bhow recent", r"\bwhat year\b", r"\bwhat day\b", r"\bsince when\b",
+    r"\bhow old\b", r"\blatest\b", r"\bup to date\b", r"\bnowadays\b",
+]
+_TEMPORAL_INTENT_RE = re.compile("|".join(_TEMPORAL_INTENT_PATTERNS), re.IGNORECASE)
+
+
+def _has_temporal_intent(query: str) -> bool:
+    """Return True if the query asks about timing/recency of something."""
+    if not query:
+        return False
+    return bool(_TEMPORAL_INTENT_RE.search(query))
+
+
+def _relative_age(iso_date: Optional[str], today: Optional[datetime] = None) -> str:
+    """Render an ISO date as a coarse relative age in European Portuguese.
+
+    Returns e.g. "hoje", "há ~3 dias", "há ~2 meses", "há ~1 ano". Returns an
+    empty string when the date is missing or unparseable so callers can skip it.
+    """
+    if not iso_date:
+        return ""
+    try:
+        then = datetime.fromisoformat(str(iso_date))
+    except (ValueError, TypeError):
+        return ""
+    now = today or datetime.now()
+    # Compare by calendar date so a same-day timestamp reads "hoje" regardless
+    # of the time-of-day component.
+    days = (now.date() - then.date()).days
+    if days < 0:
+        return ""
+    if days == 0:
+        return "hoje"
+    if days < 14:
+        return f"há ~{days} dia{'s' if days != 1 else ''}"
+    if days < 60:
+        weeks = round(days / 7)
+        return f"há ~{weeks} semana{'s' if weeks != 1 else ''}"
+    if days < 365:
+        months = round(days / 30)
+        return f"há ~{months} {'mês' if months == 1 else 'meses'}"
+    years = round(days / 365)
+    return f"há ~{years} ano{'s' if years != 1 else ''}"
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
@@ -203,21 +259,27 @@ class ConversationRetriever:
 
         return retrieved_chunks
 
-    def format_context(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
-        """Format retrieved conversation chunks into context string for the model."""
+    def format_context(self, retrieved_chunks: List[Dict[str, Any]],
+                       show_dates: bool = False) -> str:
+        """Format retrieved conversation chunks into context string for the model.
+
+        Dates are only attached when ``show_dates`` is True (the query asks about
+        timing), so normal answers aren't cluttered with timestamps every turn.
+        """
         if not retrieved_chunks:
             return ""
 
         context_parts = ["=== Conversas relevantes do grupo ==="]
 
         for i, chunk in enumerate(retrieved_chunks, 1):
-            # Format timestamp
+            # Only surface the chunk's date when the user asked about timing.
             timestamp_info = ""
-            if chunk.get('timestamp_start'):
+            if show_dates and chunk.get('timestamp_start'):
                 try:
-                    from datetime import datetime
                     start_dt = datetime.fromisoformat(chunk['timestamp_start'])
-                    timestamp_info = f" [{start_dt.strftime('%Y-%m-%d')}]"
+                    rel = _relative_age(chunk['timestamp_start'])
+                    date_str = start_dt.strftime('%Y-%m-%d')
+                    timestamp_info = f" [{date_str}{f', {rel}' if rel else ''}]"
                 except (ValueError, TypeError):
                     pass
 
@@ -258,19 +320,46 @@ class ConversationRetriever:
                 'subject': metadata.get('subject', ''),
                 'category': metadata.get('category', ''),
                 'similarity_score': 1 - distance,
+                # Date fields (mixed rule): explicit text hint wins over the
+                # source message range. Absent on facts built before dating.
+                'event_date_hint': metadata.get('event_date_hint', ''),
+                'last_updated': metadata.get('last_updated', ''),
+                'source_date_start': metadata.get('source_date_start', ''),
+                'source_date_end': metadata.get('source_date_end', ''),
             })
 
         return knowledge_chunks
 
-    def format_knowledge_context(self, knowledge_chunks: List[Dict[str, Any]]) -> str:
-        """Format retrieved knowledge base facts into context string."""
+    def _fact_date_suffix(self, chunk: Dict[str, Any]) -> str:
+        """Build a recency suffix for a knowledge fact (mixed rule).
+
+        Prefers an explicit temporal expression stated in the source text
+        (``event_date_hint``); otherwise falls back to the source message dates.
+        Returns "" when the fact carries no date info.
+        """
+        hint = (chunk.get('event_date_hint') or '').strip()
+        if hint:
+            return f" (referência temporal: {hint})"
+        anchor = chunk.get('last_updated') or chunk.get('source_date_end')
+        rel = _relative_age(anchor)
+        if rel:
+            return f" (atualizado {rel})"
+        return ""
+
+    def format_knowledge_context(self, knowledge_chunks: List[Dict[str, Any]],
+                                 show_dates: bool = False) -> str:
+        """Format retrieved knowledge base facts into context string.
+
+        Date/recency suffixes are only attached when ``show_dates`` is True.
+        """
         if not knowledge_chunks:
             return ""
 
         context_parts = ["=== Conhecimento sobre o grupo ==="]
         for chunk in knowledge_chunks:
             subject = chunk.get('subject', '')
-            header = f"\n--- {subject} ---" if subject else "\n---"
+            date_suffix = self._fact_date_suffix(chunk) if show_dates else ""
+            header = f"\n--- {subject}{date_suffix} ---" if subject else f"\n---{date_suffix}"
             context_parts.append(header)
             # Truncate to first 3 sentences to stay within the model's token budget
             text = chunk['text']
@@ -324,6 +413,10 @@ class ConversationRetriever:
         max_tokens = self.rag_config.get('max_context_tokens', 3000)
         inject_recent_summaries = self.rag_config.get('inject_recent_summaries', True)
 
+        # Only attach dates/recency to the context when the query asks about timing,
+        # so normal answers stay date-free (per the date-aware-facts design).
+        show_dates = _has_temporal_intent(query)
+
         # Embed the query once and reuse it for both conversation and KB search.
         query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0] if self.encoder else None
 
@@ -349,8 +442,8 @@ class ConversationRetriever:
         #   3. Recent summaries
         def _total() -> int:
             return (
-                self._count_tokens(self.format_context(conv_chunks))
-                + self._count_tokens(self.format_knowledge_context(kb_chunks))
+                self._count_tokens(self.format_context(conv_chunks, show_dates=show_dates))
+                + self._count_tokens(self.format_knowledge_context(kb_chunks, show_dates=show_dates))
                 + self._count_tokens(recent_summaries_text)
             )
 
@@ -368,11 +461,11 @@ class ConversationRetriever:
         # Assemble final context: knowledge → recent summaries → conversations
         context_parts = []
         if kb_chunks:
-            context_parts.append(self.format_knowledge_context(kb_chunks))
+            context_parts.append(self.format_knowledge_context(kb_chunks, show_dates=show_dates))
         if recent_summaries_text:
             context_parts.append(recent_summaries_text)
         if conv_chunks:
-            context_parts.append(self.format_context(conv_chunks))
+            context_parts.append(self.format_context(conv_chunks, show_dates=show_dates))
 
         return "\n\n".join(context_parts)
 

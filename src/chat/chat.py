@@ -71,6 +71,10 @@ def main():
             members_data = json.loads(_mf.read_text(encoding='utf-8'))
             system_prompt += build_member_prompt_suffix(members_data)
 
+    # Give the model a notion of "today" so it can reason about recency when the
+    # user asks about timing (runtime-only, never part of training data).
+    system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
+
     # Load model: Unsloth FastModel for Gemma 4 (uses cached base model via adapter_config.json);
     # standard PEFT path for Qwen3 (Unsloth fast-inference was broken for Qwen3).
     print(f"\nLoading model... (this may take a minute)")

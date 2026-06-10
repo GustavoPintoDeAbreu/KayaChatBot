@@ -96,3 +96,91 @@ services:
     profiles: [data]
     command: python src/data/build_vector_db.py
 
+  # ──────────────────────────────────────────────────────────────
+  # kaya-dev  [profile: dev]
+  # Development container: serves the Gradio web UI with ./src mounted
+  # read-write so live code edits are picked up without a rebuild.
+  # On-demand only — start via scripts/app_up.sh dev (not at boot).
+  # NOTE: dev and prod share the single GPU — run ONE at a time.
+  # Usage: scripts/app_up.sh dev   (or: docker compose --profile dev up -d kaya-dev)
+  # ──────────────────────────────────────────────────────────────
+  kaya-dev:
+    extends:
+      service: kaya-base
+    container_name: kaya-dev
+    profiles: [dev]
+    # Override the base ./src:ro mount so edits inside the repo are live.
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./src:/app/src
+      - ./configs:/app/configs:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro
+    # Publish on 7861 for optional LAN access; the Cloudflare Tunnel reaches the
+    # container directly over the compose network on the same port.
+    ports:
+      - "7861:7861"
+    # Bind Gradio to all interfaces inside the container so the published port
+    # and the tunnel can reach it. KAYA_WEB_USER/PASS come from .env (env_file).
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models/.cache
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - KAYA_WEB_PORT=7861
+    command: python src/chat/web_app.py
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-prod  [profile: prod]
+  # Production container: serves the Gradio web UI from read-only source.
+  # On-demand only — start via scripts/app_up.sh prod (not at boot).
+  # NOTE: dev and prod share the single GPU — run ONE at a time.
+  # Usage: scripts/app_up.sh prod  (or: docker compose --profile prod up -d kaya-prod)
+  # ──────────────────────────────────────────────────────────────
+  kaya-prod:
+    extends:
+      service: kaya-base
+    container_name: kaya-prod
+    profiles: [prod]
+    ports:
+      - "7860:7860"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models/.cache
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - KAYA_WEB_PORT=7860
+    command: python src/chat/web_app.py
+
+  # ──────────────────────────────────────────────────────────────
+  # cloudflared  [profile: tunnel]
+  # Cloudflare Tunnel sidecar — exposes kaya-dev/kaya-prod to the internet
+  # via a remotely-managed tunnel (hostname→service ingress configured in the
+  # Cloudflare dashboard). No inbound ports are opened on the host.
+  # Requires CLOUDFLARE_TUNNEL_TOKEN in .env. See DEPLOYMENT.md.
+  # ──────────────────────────────────────────────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kaya-cloudflared
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-test  [profile: test]
+  # Runs the automated test suite inside the container against the
+  # mounted source and data. No training/inference performed.
+  # Usage: docker-compose --profile test run --rm kaya-test
+  # ──────────────────────────────────────────────────────────────
+  kaya-test:
+    extends:
+      service: kaya-base
+    container_name: kaya-test
+    profiles: [test]
+    command: python -m pytest tests/ -v
+
