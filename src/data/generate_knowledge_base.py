@@ -164,6 +164,64 @@ def chunk_messages(messages: List[Dict], chunk_size_words: int) -> List[List[Dic
     return chunks
 
 
+# Explicit temporal expressions worth capturing as an event_date_hint (PT + EN).
+# These are stored verbatim so the bot can quote "the source said 'recentemente'"
+# rather than guessing from message timestamps (the "mixed" dating rule).
+_EVENT_DATE_PATTERNS = [
+    r"\b\d{4}-\d{2}-\d{2}\b",                      # ISO date
+    r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b",          # dd/mm or dd/mm/yyyy
+    r"\b\d{1,2} de (?:janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?: de \d{4})?\b",
+    r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december) \d{1,2}(?:,? \d{4})?\b",
+    r"\b(?:recentemente|ontem|anteontem|hoje|amanhã|h[áa] (?:uns|umas|poucos|poucas)? ?\d* ?(?:dias?|semanas?|meses|anos?))\b",
+    r"\b(?:n[oa] (?:pr[óo]xim[oa]|passad[oa]|[úu]ltim[oa]) (?:semana|m[êe]s|ano|fim de semana))\b",
+    r"\b(?:este ano|este m[êe]s|esta semana)\b",
+    r"\b(?:recently|yesterday|today|tomorrow|last (?:week|month|year|weekend)|next (?:week|month|year|weekend)|this (?:week|month|year))\b",
+    r"\b(?:days?|weeks?|months?|years?) ago\b",
+]
+_EVENT_DATE_RE = re.compile("|".join(_EVENT_DATE_PATTERNS), re.IGNORECASE)
+
+
+def chunk_date_range(messages: List[Dict]) -> tuple:
+    """Return (min_iso, max_iso) timestamp strings for a chunk's messages.
+
+    Timestamps are ISO strings already sorted chronologically by extraction, but
+    we compute min/max defensively. Returns (None, None) when none are present.
+    """
+    stamps = [str(m.get("timestamp", "")).strip() for m in messages]
+    stamps = [s for s in stamps if s]
+    if not stamps:
+        return None, None
+    return min(stamps), max(stamps)
+
+
+def extract_event_date_hint(text: str) -> Optional[str]:
+    """Return the first explicit temporal expression found in *text*, or None."""
+    if not text:
+        return None
+    match = _EVENT_DATE_RE.search(text)
+    return match.group(0).strip() if match else None
+
+
+def _update_member_dates(
+    info: Dict[str, str], chunk_start: Optional[str], chunk_end: Optional[str],
+    event_hint: Optional[str],
+) -> None:
+    """Fold a chunk's dates into a member's accumulated date info, in place.
+
+    Chunks are processed chronologically, so the widest source range is kept and
+    the latest explicit hint wins (later mentions overwrite earlier ones).
+    """
+    if chunk_start:
+        prev_start = info.get("source_date_start")
+        info["source_date_start"] = min(prev_start, chunk_start) if prev_start else chunk_start
+    if chunk_end:
+        prev_end = info.get("source_date_end")
+        info["source_date_end"] = max(prev_end, chunk_end) if prev_end else chunk_end
+        info["last_updated"] = info["source_date_end"]
+    if event_hint:
+        info["event_date_hint"] = event_hint
+
+
 def format_chunk_for_prompt(messages: List[Dict]) -> str:
     """Convert a list of message dicts into a readable transcript."""
     lines = []
@@ -373,27 +431,46 @@ def save_group_members(
         json.dump(members_data, f, ensure_ascii=False, indent=2)
 
 
+def _apply_date_fields(fact: Dict, date_info: Optional[Dict]) -> None:
+    """Write the mixed-rule date fields onto a fact dict in place (when known)."""
+    if not date_info:
+        return
+    for field in ("source_date_start", "source_date_end", "last_updated", "event_date_hint"):
+        value = date_info.get(field)
+        if value:
+            fact[field] = value
+
+
 def save_group_knowledge(
-    knowledge_data: Dict, profiles: Dict[str, Dict]
+    knowledge_data: Dict, profiles: Dict[str, Dict],
+    member_dates: Optional[Dict[str, Dict]] = None,
 ) -> None:
     """Update group_knowledge.json with member bios and topic_mapping entries.
 
     - Updates existing ``category: member`` facts with the latest biography_summary.
     - Adds / updates ``category: topic_mapping`` facts for each member's
       frequently_discussed_topics.
+    - Writes mixed-rule date fields (source_date_start/end, last_updated,
+      event_date_hint) when ``member_dates`` carries them for the member.
     - Sensitive fields (political_preference) are never written here.
     """
+    member_dates = member_dates or {}
+
     # Build lookup of existing fact IDs
     fact_index: Dict[str, int] = {
         fact["id"]: idx for idx, fact in enumerate(knowledge_data["facts"])
     }
 
     for member_name, profile in profiles.items():
+        date_info = member_dates.get(member_name)
+
         # --- Update member bio fact ---
         bio = profile.get("biography_summary") or profile.get("notes", "")
         member_fact_id = f"member_{member_name.lower()}"
         if bio and member_fact_id in fact_index:
-            knowledge_data["facts"][fact_index[member_fact_id]]["text"] = bio
+            member_fact = knowledge_data["facts"][fact_index[member_fact_id]]
+            member_fact["text"] = bio
+            _apply_date_fields(member_fact, date_info)
 
         # --- Add / update topic_mapping fact ---
         topics = profile.get("frequently_discussed_topics")
@@ -410,6 +487,7 @@ def save_group_knowledge(
             "subject": member_name,
             "text": topic_text,
         }
+        _apply_date_fields(topic_fact, date_info)
 
         if topic_fact_id in fact_index:
             knowledge_data["facts"][fact_index[topic_fact_id]].update(topic_fact)
@@ -480,6 +558,22 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
         m["name"]: m.get("recent_summary", "") for m in members_data["members"]
     }
 
+    # Per-member date tracking (mixed-rule dating). Seeded from any existing
+    # date fields on the member facts so resumed runs don't lose earlier ranges.
+    current_member_dates: Dict[str, Dict[str, str]] = {}
+    _existing_fact_dates = {
+        fact.get("subject"): fact for fact in knowledge_data.get("facts", [])
+        if fact.get("category") == "member"
+    }
+    for m in members_data["members"]:
+        existing_fact = _existing_fact_dates.get(m["name"], {})
+        current_member_dates[m["name"]] = {
+            "source_date_start": existing_fact.get("source_date_start", ""),
+            "source_date_end": existing_fact.get("source_date_end", ""),
+            "last_updated": existing_fact.get("last_updated", ""),
+            "event_date_hint": existing_fact.get("event_date_hint", ""),
+        }
+
     # Chunk messages
     chunks = chunk_messages(messages, chunk_size_words)
     total_chunks = len(chunks)
@@ -517,7 +611,9 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
         print(f"members: {', '.join(mentioned)}", flush=True)
 
+        chunk_start, chunk_end = chunk_date_range(chunk)
         chunk_text = format_chunk_for_prompt(chunk)
+        chunk_event_hint = extract_event_date_hint(chunk_text)
         user_prompt = build_extraction_prompt(
             chunk_text, current_profiles, mentioned, profile_fields
         )
@@ -540,6 +636,10 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
                 if matched_name:
                     current_profiles[matched_name] = merge_profiles(
                         current_profiles[matched_name], profile_data
+                    )
+                    _update_member_dates(
+                        current_member_dates.setdefault(matched_name, {}),
+                        chunk_start, chunk_end, chunk_event_hint,
                     )
                     print(f"    ✅ Updated profile for {matched_name}", flush=True)
                 else:
@@ -567,7 +667,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
         if (i + 1) % checkpoint_every == 0:
             print(f"  💾 Checkpoint after chunk {chunk_idx}...", flush=True)
             save_group_members(members_data, current_profiles, profile_fields, current_recent_summaries)
-            save_group_knowledge(knowledge_data, current_profiles)
+            save_group_knowledge(knowledge_data, current_profiles, current_member_dates)
 
         # Rate limit
         if i < len(chunks) - 1:
@@ -576,7 +676,7 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
     # Final save
     print("\n💾 Saving final results...", flush=True)
     save_group_members(members_data, current_profiles, profile_fields, current_recent_summaries)
-    save_group_knowledge(knowledge_data, current_profiles)
+    save_group_knowledge(knowledge_data, current_profiles, current_member_dates)
 
     # Summary
     print("\n" + "=" * 60, flush=True)

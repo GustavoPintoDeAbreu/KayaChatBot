@@ -40,28 +40,40 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
     "packaging==24.2" \
     "ninja==1.11.1.1"
 
-# Install PyTorch with CUDA 12.8 wheels. Kept separate from requirements.txt
+# Install PyTorch with CUDA 12.4 wheels. Kept separate from requirements.txt
 # because torch must come from the CUDA-specific index, not PyPI.
-# torch 2.9.1: required exactly by xformers 0.0.33.post2; within unsloth-zoo's
-# supported range (torch>=2.4.0,<2.11.0).
+# torch 2.6.0 / cu124: matches the validated kaya_chatbot_env venv so the
+# Gemma 4 inference behaviour in the image is identical to local.
 RUN python -m pip install --no-cache-dir \
-    torch==2.9.1 \
-    torchvision==0.24.1 \
-    torchaudio==2.9.1 \
-    --index-url https://download.pytorch.org/whl/cu128
+    torch==2.6.0 \
+    torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Install all remaining dependencies from requirements.txt — the single source
-# of truth. This keeps the image in lockstep with the local environment and the
-# version constraints in CLAUDE.md (transformers>=5.5.0, trl<=0.24.0,
-# peft==0.19.0, unsloth>=2026.4.5). Previously these were a divergent inline
-# list that violated those constraints.
+# of truth, pinned to the validated venv versions (transformers 5.5.0, trl
+# 0.24.0, peft 0.19.0, unsloth 2026.4.5, xformers cu124).
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# Build flash-attention from source (takes ~5-10 minutes). Requires torch to be
-# already installed (--no-build-isolation); not pinned in requirements.txt
-# because there is no prebuilt wheel for this CUDA/torch combination.
-RUN python -m pip install --no-cache-dir flash-attn --no-build-isolation
+# PEFT 0.19.0 calls getattr(torch, "float8_e8m0fnu") which raises on torch 2.6
+# (that dtype was added later). Mirror the venv patch: guard the lookup with
+# hasattr so missing float8 dtypes are skipped. See CLAUDE.md.
+RUN python - <<'PY'
+import peft.tuners.tuners_utils as m
+path = m.__file__
+src = open(path).read()
+needle = "    for name in UPCAST_DTYPES:\n        torch_dtype = getattr(torch, name)\n"
+guard = "    for name in UPCAST_DTYPES:\n        if not hasattr(torch, name):\n            continue\n        torch_dtype = getattr(torch, name)\n"
+if "if not hasattr(torch, name):" in src:
+    print("PEFT float8 guard already present")
+else:
+    assert needle in src, "PEFT patch anchor not found — peft version changed?"
+    open(path, "w").write(src.replace(needle, guard))
+    print("Applied PEFT float8 guard patch")
+PY
+
+# flash-attention is intentionally NOT installed: it is absent from the validated
+# venv and unsloth runs inference fine without it (falls back to SDPA / xformers).
 
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \

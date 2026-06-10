@@ -281,7 +281,9 @@ class TestFormatContext:
         ctx = retriever.format_context(chunks)
         assert "Conversas relevantes" in ctx
         assert "Peter: hello" in ctx
-        assert "2024-06-15" in ctx
+        # Dates are hidden by default and only shown on timing queries.
+        assert "2024-06-15" not in ctx
+        assert "2024-06-15" in retriever.format_context(chunks, show_dates=True)
 
     def test_multiple_chunks_numbered(self, retriever):
         chunks = [

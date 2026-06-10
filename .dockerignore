@@ -1,0 +1,19 @@
+# Keep the build context small — these are bind-mounted at runtime or not needed.
+kaya_chatbot_env/
+models/
+data/
+outputs/
+reports/
+unsloth_compiled_cache/
+.git/
+.github/
+.claude/
+.venv/
+*.pyc
+__pycache__/
+.pytest_cache/
+.env
+.env.local
+*.log
+*.jsonl
+node_modules/

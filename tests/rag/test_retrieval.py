@@ -27,7 +27,14 @@ print("=" * 60)
 print("\n1️⃣  Checking RAG database...")
 rag_db_path = Path("data/rag_db") if Path("data").exists() else Path("/app/data/rag_db")
 if not rag_db_path.exists():
-    print(f"❌ RAG database not found at {rag_db_path}")
+    msg = f"RAG database not found at {rag_db_path}; run build_vector_db.py first"
+    # Under pytest (e.g. CI on a fresh checkout with no built DB), skip this
+    # integration script gracefully instead of aborting collection. As a
+    # standalone script it still exits non-zero.
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(msg, allow_module_level=True)
+    print(f"❌ {msg}")
     print("   Run: python src/data/build_vector_db.py")
     sys.exit(1)
 

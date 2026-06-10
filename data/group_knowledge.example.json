@@ -1,11 +1,15 @@
 {
-  "description": "TEMPLATE. Copy this file to data/group_knowledge.json and replace with your group's real facts. The real file is git-ignored on purpose (it contains personal data) and is embedded into the ChromaDB knowledge base at build time. See AUDIT_REPORT.md P0-2.",
+  "description": "TEMPLATE. Copy this file to data/group_knowledge.json and replace with your group's real facts. The real file is git-ignored on purpose (it contains personal data) and is embedded into the ChromaDB knowledge base at build time. See AUDIT_REPORT.md P0-2. Optional date fields (event_date_hint, source_date_start, source_date_end, last_updated) are auto-populated by generate_knowledge_base.py and surfaced by the retriever only when the user asks about timing.",
   "facts": [
     {
       "id": "member_alice",
       "category": "member",
       "subject": "Alice",
-      "text": "Alice, also known as ali, is a member of the group. Alice enjoys hiking on weekends."
+      "text": "Alice, also known as ali, is a member of the group. Alice enjoys hiking on weekends.",
+      "event_date_hint": "last month",
+      "source_date_start": "2024-01-05T10:00:00",
+      "source_date_end": "2024-03-20T18:30:00",
+      "last_updated": "2024-03-20T18:30:00"
     },
     {
       "id": "member_bob",
