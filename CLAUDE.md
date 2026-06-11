@@ -56,8 +56,8 @@ docker-compose up --build
 docker system prune  # prevent storage overload
 
 # Dev/Test (Docker)
-docker-compose --profile dev run --rm --service-ports kaya-dev    # web UI, ./src mounted read-write for live edits
-docker-compose --profile test run --rm kaya-test                  # run the pytest suite in-container
+docker compose --profile dev up -d kaya-dev       # dev web UI on :7861, ./src mounted read-write (or use scripts/app_up.sh dev)
+docker compose --profile test run --rm kaya-test  # run the pytest suite in-container
 
 # Deployment (on-demand web app — see DEPLOYMENT.md)
 scripts/app_up.sh dev|prod      # power up the app + Cloudflare Tunnel (one GPU → one env at a time)
