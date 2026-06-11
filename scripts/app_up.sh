@@ -35,7 +35,11 @@ fi
 
 PORT=$([[ "$ENV_NAME" == "dev" ]] && echo 7861 || echo 7860)
 
-echo "🚀 Powering up kaya-${ENV_NAME} + cloudflared ..."
+# Expose the running commit to the app (shown in the UI header). Falls back to
+# "unknown" inside the container if unset.
+export KAYA_VERSION="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+echo "🚀 Powering up kaya-${ENV_NAME} + cloudflared (commit ${KAYA_VERSION}) ..."
 docker compose --profile "$ENV_NAME" --profile tunnel up -d "kaya-${ENV_NAME}" cloudflared
 
 echo
