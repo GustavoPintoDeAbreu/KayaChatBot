@@ -1,23 +1,20 @@
 name: Deploy (prod)
 
-# Manual, gated promotion to prod. Run this after the dev release has been
-# tested. The `prod` GitHub Environment should have a required-reviewers
-# protection rule, so the run pauses for your approval before deploying.
+# Make a chosen commit the LIVE prod web app. Run after the change is on main.
+# The `prod` GitHub Environment has a required-reviewer rule, so the run pauses
+# for approval before it touches the live site.
 #
-# Like dev, this stages the release (build + test gate) and does not keep a
-# server running. Power up with scripts/app_up.sh prod (or set `start: true`).
+# Deploys into the dedicated ~/kaya-prod checkout (separate from the dev copy)
+# and restarts the always-on prod container — see scripts/deploy_prod.sh and
+# DEPLOYMENT.md. One-time: clone ~/kaya-prod and symlink models/ + data/.
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref (commit/tag/branch) to deploy"
+        description: "Git ref (commit/tag/branch) to make live"
         type: string
         default: main
-      start:
-        description: "Power up the prod app after staging"
-        type: boolean
-        default: false
 
 concurrency:
   group: deploy-prod
@@ -28,14 +25,14 @@ jobs:
     runs-on: [self-hosted, gpu]
     environment: prod
     steps:
-      - name: Checkout ${{ inputs.ref }}
+      - name: Checkout (for the deploy script)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
 
-      - name: Write .env from secrets
+      - name: Write prod .env from secrets
         run: |
-          cat > .env <<EOF
+          PROD_DIR="${KAYA_PROD_DIR:-$HOME/kaya-prod}"
+          mkdir -p "$PROD_DIR"
+          cat > "$PROD_DIR/.env" <<EOF
           XAI_API_KEY=${{ secrets.XAI_API_KEY }}
           AZURE_OPENAI_API_KEY_gpt_41_mini=${{ secrets.AZURE_OPENAI_API_KEY_gpt_41_mini }}
           AZURE_OPENAI_API_KEY_gpt_53_chat=${{ secrets.AZURE_OPENAI_API_KEY_gpt_53_chat }}
@@ -44,18 +41,10 @@ jobs:
           CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           EOF
 
-      - name: Build prod image (cached)
-        run: docker compose --profile prod build kaya-prod
-
-      - name: Test gate
-        run: docker compose --profile test run --rm kaya-test
-
-      - name: Power up prod (optional)
-        if: ${{ inputs.start == true }}
-        run: ./scripts/app_up.sh prod
+      - name: Deploy to prod (build + restart live container)
+        run: ./scripts/deploy_prod.sh "${{ inputs.ref }}"
 
       - name: Summary
         run: |
-          echo "### Prod release staged ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "Ref: \`${{ inputs.ref }}\` (commit \`${{ github.sha }}\`)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Power up: \`scripts/app_up.sh prod\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Prod deployed ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "Ref \`${{ inputs.ref }}\` is now live at the prod hostname." >> "$GITHUB_STEP_SUMMARY"

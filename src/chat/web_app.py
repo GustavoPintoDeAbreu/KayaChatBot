@@ -229,11 +229,16 @@ def _hide_chips():
 
 
 # ── Gradio UI ────────────────────────────────────────────────────────────────
+_env_label = os.environ.get("KAYA_ENV", "")
+_version = os.environ.get("KAYA_VERSION", "unknown")
+_version_line = f"\n\n<sub>{_env_label + ' · ' if _env_label else ''}commit `{_version}`</sub>"
+
 with gr.Blocks(title="Kaya Bot 🤖") as demo:
     gr.Markdown(
         "# Kaya Bot 🤖\n"
         "Chat com o bot do grupo Kaya. "
         "Tem acesso à memória das conversas e aos perfis dos membros do grupo."
+        + _version_line
     )
 
     # Gradio 6.x uses the OpenAI-style messages format ({"role","content"}) by

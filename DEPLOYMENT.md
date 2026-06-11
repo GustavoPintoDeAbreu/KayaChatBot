@@ -1,8 +1,10 @@
 # Deployment Guide
 
 How the Kaya web app is served to other computers, and how the CI/CD pipeline
-deploys it. The app runs **on demand** on a single RTX 3090 box — it is not
-running 24/7. Deployment *stages* a release; you power it up when you want it.
+deploys it. The box is **serving-only**: `kaya-prod` is the **always-on**
+production app (auto-recovers after reboot). "Push to prod" rebuilds and restarts
+the live container from a dedicated `~/kaya-prod` checkout. `kaya-dev` exists for
+occasional manual testing and shares the single GPU, so only one runs at a time.
 
 ---
 
@@ -83,52 +85,69 @@ fine-tuned model + RAG  (GPU)
 
 ---
 
+## Prod runs from its own checkout (`~/kaya-prod`)
+
+Prod is **always-on** and serves from a dedicated checkout, separate from where you
+develop (`~/Desktop/KayaChatBot`). This is what makes "push to prod" actually update
+the live site, and lets you keep editing without affecting it.
+
+**One-time setup on the box:**
+```bash
+git clone git@github.com:GustavoPintoDeAbreu/KayaChatBot.git ~/kaya-prod
+ln -s ~/Desktop/KayaChatBot/models ~/kaya-prod/models   # share the 42GB models (symlink, no copy)
+ln -s ~/Desktop/KayaChatBot/data   ~/kaya-prod/data     # share data/rag_db
+cp  ~/Desktop/KayaChatBot/.env     ~/kaya-prod/.env     # or let CI write it from prod secrets
+sudo systemctl enable docker                            # so prod auto-starts after a reboot
+```
+
 ## The pipeline
 
 | Stage | Trigger | Workflow | What it does |
 |---|---|---|---|
-| Test | PR to `main` | `ci.yml` | Builds the image, runs `pytest` in the `kaya-test` container. Merge gate. |
-| Deploy dev | merge to `main` | `deploy-dev.yml` | Writes `.env` from `dev` secrets, rebuilds, runs the test gate, **stages** the dev release. |
-| Deploy prod | manual (`workflow_dispatch`) | `deploy-prod.yml` | Pauses for `prod` approval, then writes `.env` from `prod` secrets, rebuilds, tests, **stages** the prod release. |
+| Test | PR to `main` | `ci.yml` | Builds the image, runs `pytest` in `kaya-test`. Merge gate. |
+| Validate | merge to `main` | `validate-main.yml` | Rebuilds + runs the test suite so main is known-deployable. No container start. |
+| Deploy prod | manual (`workflow_dispatch`) | `deploy-prod.yml` | Pauses for `prod` approval, writes `.env` from `prod` secrets into `~/kaya-prod`, then runs `scripts/deploy_prod.sh` → **rebuilds and restarts the live prod container** on the chosen ref. |
 
-Flow: open PR → CI + review → merge → dev staged automatically → test it (power
-up dev) → run **Deploy (prod)** → approve the gate → power up prod.
+Flow: open PR → CI + review → merge → `main` validated automatically → run
+**Deploy (prod)** → approve the gate → the live site is now on that commit.
 
-Each deploy workflow has an optional `start: true` input to power the app up
-automatically after staging; otherwise it stays off until you run `app_up.sh`.
+**What's live:** the UI header shows the env + commit, and `scripts/app_status.sh`
+shows the running container. To make a specific version live, pass its ref to
+**Deploy (prod)** (defaults to `main`).
 
 ---
 
-## Power-up / power-down runbook
+## Runbook
 
 ```bash
-# Start (also starts the Cloudflare Tunnel). Refuses if the other env is up.
-scripts/app_up.sh dev      # → http://localhost:7861  + dev.kaya.example.com
-scripts/app_up.sh prod     # → http://localhost:7860  + kaya.example.com
+# Make a commit live (the normal "push to prod"); CI's Deploy (prod) calls this.
+scripts/deploy_prod.sh             # deploy main
+scripts/deploy_prod.sh <ref>       # deploy a specific commit/tag/branch
 
-# Check what's running and GPU usage
-scripts/app_status.sh
-
-# Stop and free the GPU
-scripts/app_down.sh dev
-scripts/app_down.sh prod
-scripts/app_down.sh all    # stop both apps + the tunnel
+# Manually power an env up/down (also starts/stops the Cloudflare Tunnel).
+scripts/app_up.sh prod             # → http://localhost:7860 + prod hostname
+scripts/app_up.sh dev              # → http://localhost:7861 + dev hostname (stops prod first; one GPU)
+scripts/app_down.sh prod|dev|all   # stop and free the GPU
+scripts/app_status.sh              # running containers + GPU usage
 
 # Follow logs (model load takes ~1 min)
 docker compose logs -f kaya-prod
 ```
 
-**One GPU rule:** dev and prod cannot both hold the model. `app_up.sh` refuses to
-start one while the other is running — stop the other first.
+**Reboot recovery:** `kaya-prod` and `cloudflared` use `restart: unless-stopped`,
+so with `sudo systemctl enable docker` the site comes back automatically after a
+reboot/power-cycle — no manual step. (If the box is *off*, the site is down and
+visitors get a Cloudflare tunnel error until it's back.)
 
-### Rotating the Gradio password
-Update `KAYA_WEB_USER` / `KAYA_WEB_PASS` in the GitHub environment secrets and the
-box's `.env`, then `app_down.sh <env> && app_up.sh <env>`.
+**One GPU rule:** the box is serving-only and the GPU fits one model at a time.
+Running the `dev` container or fine-tuning means stopping prod first
+(`deploy_prod.sh`/`app_up.sh` stop the other env automatically). For quick local
+iteration, prefer the venv (`kaya_chatbot_env/bin/python ...`) and `pytest`, which
+don't need the GPU and don't disturb the live site.
 
-### Always-on dev (optional)
-If you later want dev to stay up across reboots, the `kaya-dev`/`cloudflared`
-services already set `restart: unless-stopped` on the tunnel; add the same to
-`kaya-dev` and start it once with `docker compose --profile dev --profile tunnel up -d`.
+### Rotating the Gradio password / tunnel token
+Update the value in the `prod` (and `dev`) GitHub environment secrets **and** in
+`~/kaya-prod/.env`, then redeploy: `scripts/deploy_prod.sh`.
 
 ---
 
