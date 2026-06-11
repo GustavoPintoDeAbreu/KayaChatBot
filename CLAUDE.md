@@ -59,8 +59,9 @@ docker system prune  # prevent storage overload
 docker compose --profile dev up -d kaya-dev       # dev web UI on :7861, ./src mounted read-write (or use scripts/app_up.sh dev)
 docker compose --profile test run --rm kaya-test  # run the pytest suite in-container
 
-# Deployment (on-demand web app — see DEPLOYMENT.md)
-scripts/app_up.sh dev|prod      # power up the app + Cloudflare Tunnel (one GPU → one env at a time)
+# Deployment (see DEPLOYMENT.md)
+scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
+scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one GPU → one env at a time)
 scripts/app_down.sh dev|prod    # stop and free the GPU
 scripts/app_status.sh           # running containers + GPU usage
 ```
@@ -114,7 +115,11 @@ Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training 
 
 ### Deployment (`DEPLOYMENT.md`)
 
-The Gradio web app is served **on demand** (not 24/7) on the single GPU box. Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile) with two protection layers: Cloudflare Access (network login) and the Gradio username/password (`KAYA_WEB_USER`/`KAYA_WEB_PASS`, read from env in `web_app.py`, overriding `chat.web_auth`). Two on-demand containers — `kaya-dev` (profile `dev`, port 7861) and `kaya-prod` (profile `prod`, port 7860) — share one GPU, so only one runs at a time (`scripts/app_up.sh` enforces this). CI/CD (`.github/workflows/`) runs on a **self-hosted GPU runner**: `ci.yml` tests every PR, `deploy-dev.yml` stages on merge to `main`, `deploy-prod.yml` is a manual gated promotion (the `prod` GitHub Environment requires reviewer approval). Deploys *stage* a release (build + test gate) and write `.env` from environment secrets; they do not keep a server running — power up with `scripts/app_up.sh`. Full runbook in `DEPLOYMENT.md`.
+`kaya-prod` is the **always-on** production web app. The box is **serving-only** (fine-tuning is done separately). Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile) with two protection layers: Cloudflare Access (network login) and the Gradio username/password (`KAYA_WEB_USER`/`KAYA_WEB_PASS`, read from env in `web_app.py`, overriding `chat.web_auth`). The UI header shows the running env + commit (`KAYA_ENV`/`KAYA_VERSION`).
+
+**Prod runs from its own checkout** at `~/kaya-prod` (separate from this dev copy), with `models/` and `data/` symlinked to the shared originals — so you can develop here without touching the live site. `kaya-prod` has `restart: unless-stopped`, so with Docker enabled on boot (`sudo systemctl enable docker`) the site **auto-recovers after a reboot**.
+
+**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) calls `deploy_prod.sh` to update the live site. `kaya-dev` (port 7861) is for occasional manual dev runs only and shares the single GPU with prod (run one at a time). Full runbook in `DEPLOYMENT.md`.
 
 ---
 

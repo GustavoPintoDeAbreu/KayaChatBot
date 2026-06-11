@@ -130,20 +130,24 @@ services:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - GRADIO_SERVER_NAME=0.0.0.0
       - KAYA_WEB_PORT=7861
+      - KAYA_ENV=dev
+      - KAYA_VERSION=${KAYA_VERSION:-unknown}
     command: python src/chat/web_app.py
 
   # ──────────────────────────────────────────────────────────────
   # kaya-prod  [profile: prod]
-  # Production container: serves the Gradio web UI from read-only source.
-  # On-demand only — start via scripts/app_up.sh prod (not at boot).
-  # NOTE: dev and prod share the single GPU — run ONE at a time.
-  # Usage: scripts/app_up.sh prod  (or: docker compose --profile prod up -d kaya-prod)
+  # The always-on production web app. Deployed via scripts/deploy_prod.sh
+  # (from the ~/kaya-prod checkout) and kept running by restart: unless-stopped,
+  # so it auto-recovers after a reboot once Docker starts on boot
+  # (`sudo systemctl enable docker`). See DEPLOYMENT.md.
+  # NOTE: dev and prod share the single GPU — only one runs at a time.
   # ──────────────────────────────────────────────────────────────
   kaya-prod:
     extends:
       service: kaya-base
     container_name: kaya-prod
     profiles: [prod]
+    restart: unless-stopped
     ports:
       - "7860:7860"
     environment:
@@ -153,6 +157,8 @@ services:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - GRADIO_SERVER_NAME=0.0.0.0
       - KAYA_WEB_PORT=7860
+      - KAYA_ENV=prod
+      - KAYA_VERSION=${KAYA_VERSION:-unknown}
     command: python src/chat/web_app.py
 
   # ──────────────────────────────────────────────────────────────

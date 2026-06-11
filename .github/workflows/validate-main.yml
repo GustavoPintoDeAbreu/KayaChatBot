@@ -1,0 +1,50 @@
+name: Validate (main)
+
+# Post-merge validation gate: on every push to main, rebuild the image and run
+# the test suite so we know main is deployable. It does NOT start any container
+# (prod is the always-on env and shares the single GPU). Promote to the live
+# site with the Deploy (prod) workflow.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: validate-main
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write placeholder .env
+        # Tests mock external services; real keys aren't needed. compose just
+        # requires .env to exist (env_file + var substitution).
+        run: |
+          cat > .env <<'EOF'
+          XAI_API_KEY=test
+          AZURE_OPENAI_API_KEY_gpt_41_mini=test
+          AZURE_OPENAI_API_KEY_gpt_53_chat=test
+          KAYA_WEB_USER=test
+          KAYA_WEB_PASS=test
+          CLOUDFLARE_TUNNEL_TOKEN=test
+          EOF
+
+      - name: Build image (cached)
+        run: docker compose --profile test build kaya-test
+
+      - name: Test suite
+        run: docker compose --profile test run --rm kaya-test
+
+      - name: Clean up .env
+        if: always()
+        run: rm -f .env
+
+      - name: Summary
+        run: |
+          echo "### main validated ✅ (\`${{ github.sha }}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Promote to the live site with the **Deploy (prod)** workflow." >> "$GITHUB_STEP_SUMMARY"
