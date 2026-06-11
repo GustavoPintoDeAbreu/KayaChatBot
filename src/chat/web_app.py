@@ -236,7 +236,9 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
         "Tem acesso à memória das conversas e aos perfis dos membros do grupo."
     )
 
-    chatbot = gr.Chatbot(type="messages", height=480, label="Kaya Bot")
+    # Gradio 6.x uses the OpenAI-style messages format ({"role","content"}) by
+    # default and removed the `type` kwarg, which is the format this app produces.
+    chatbot = gr.Chatbot(height=480, label="Kaya Bot")
     last_context = gr.State("")
 
     with gr.Row():
