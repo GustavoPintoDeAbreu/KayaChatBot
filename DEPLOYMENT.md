@@ -139,3 +139,38 @@ cp .env.example .env   # fill in KAYA_WEB_USER/PASS at minimum
 scripts/app_up.sh dev
 # open http://<box-LAN-IP>:7861 from another computer on the same network
 ```
+
+---
+
+## Troubleshooting (gotchas hit during setup)
+
+- **`cloudflared`: "Provided Tunnel token is not valid."** You copied the
+  **truncated** token. The dashboard shows it abbreviated (e.g. `eyJhIjoi...In0=`);
+  hand-selecting that copies the literal `...`. Use the **Copy button on the full
+  connector install command** and take the whole `--token eyJ…` value. Also strip
+  any trailing punctuation — a stray `.` makes it invalid. Tokens are base64
+  (`eyJ…`), ~250 chars, and never contain `...` or end in `.`.
+
+- **Cloudflare Access: "Unable to find your Access application / invalid URL."**
+  The hostname→app binding went stale (common with the **"Published application
+  routes" (Beta)** tunnel feature). Fix: **delete the Access application and
+  recreate it fresh** — a new app gets a clean AUD and binds correctly. When
+  creating it, choose destination type **Public DNS** for a public hostname
+  (`dev.sigmakayachat.pt`), not "Private destinations".
+
+- **Tunnel routes must use your real domain.** If a route still points at a
+  placeholder like `example.com`, the hostname won't resolve. Each public
+  hostname route is `<sub>.<your-domain>` → `http://kaya-dev:7861` (dev) /
+  `http://kaya-prod:7860` (prod). The connector picks up route edits live — no
+  restart needed.
+
+- **502 at the public URL.** The target container isn't powered up — the app is
+  on-demand. Run `scripts/app_up.sh dev` (or `prod`).
+
+- **One GPU.** dev and prod can't both hold the model; `app_up.sh` refuses to
+  start one while the other runs. Stop the other first (`scripts/app_down.sh`).
+
+- **Verifying from the box without logging in:** `curl -sI https://dev.<domain>`
+  — a 302 to `*.cloudflareaccess.com/.../login/...` means Access is gating it
+  correctly; the "Unable to find application" body means the binding is stale
+  (recreate the app, above).
