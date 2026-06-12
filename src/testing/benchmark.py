@@ -469,30 +469,21 @@ def build_local_rag_factory(
         print(f"⚠️  Retriever unavailable ({exc}); running without RAG context.")
 
     # -----------------------------------------------------------------
-    # Pre-build member-profile lines for JSON injection
+    # Pre-build the member-profile suffix for JSON injection. Uses the shared
+    # build_member_prompt_suffix() so the benchmark injects exactly what the live
+    # chat (chat.py / web_app.py) does and the two can't drift apart.
     # -----------------------------------------------------------------
+    from src.chat.response_utils import build_member_prompt_suffix
     base_system_prompt = config.get("data", {}).get("system_prompt", "")
     members_file = config.get("data", {}).get("group_members_file", "")
-    member_lines: List[str] = []
+    member_suffix = ""
     if members_file:
         mf = _Path(members_file)
         if not mf.is_absolute():
             mf = _Path("config.yaml").resolve().parent / members_file
         if mf.exists():
             members_data = _json.loads(mf.read_text(encoding="utf-8"))
-            for m in members_data.get("members", []):
-                line: str = m["name"]
-                aliases = [a for a in m.get("aliases", []) if a.lower() != m["name"].lower()]
-                if aliases:
-                    line += f" (também conhecido como: {', '.join(aliases)})"
-                notes = m.get("notes", "")
-                key_facts = m.get("key_facts", [])
-                if key_facts:
-                    line += f" — {'. '.join(key_facts)}."
-                elif notes:
-                    sentences = [s.strip() for s in notes.split(".") if s.strip()]
-                    line += f" — {'. '.join(sentences[:3])}."
-                member_lines.append(line)
+            member_suffix = build_member_prompt_suffix(members_data)
 
     inf_config = config.get("inference", {})
 
@@ -502,8 +493,8 @@ def build_local_rag_factory(
         top_k = cfg.top_k
 
         system_prompt = base_system_prompt
-        if member_lines and knowledge_approach in ("both", "json_only"):
-            system_prompt += f"\n\nMembros do grupo Kaya: {'; '.join(member_lines)}."
+        if member_suffix and knowledge_approach in ("both", "json_only"):
+            system_prompt += member_suffix
 
         def response_fn(question: str) -> str:
             context = ""

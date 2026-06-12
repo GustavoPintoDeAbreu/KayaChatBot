@@ -5,6 +5,26 @@ model stack, and reused by every chat entry point (chat.py, web_app.py).
 """
 
 
+def coerce_text(content) -> str:
+    """Flatten a chat message ``content`` into a plain string.
+
+    Gradio 6.x uses a multimodal message format whose ``content`` can be a string,
+    a dict like ``{"type": "text", "text": "…"}``, or a list of such parts. When a
+    suggestion chip is clicked the value round-trips as one of those structured
+    forms, and reading it directly rendered the raw ``[{'text': …, 'type': 'text'}]``
+    to the user (and into the interaction log). Normalize every shape to text here.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return str(content.get("text", "") or "")
+    if isinstance(content, (list, tuple)):
+        return " ".join(coerce_text(part) for part in content).strip()
+    return str(content)
+
+
 def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str:
     """Clean a raw generated response.
 
@@ -46,23 +66,42 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
 
 
 def build_member_prompt_suffix(members_data: dict) -> str:
-    """Build the "Membros do grupo Kaya: ..." system-prompt suffix from a loaded
+    """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
-    Shared by chat.py and web_app.py so the two entry points can't drift apart.
+    Shared by chat.py, web_app.py and the benchmark so every entry point injects
+    the same member knowledge and can't drift apart. Each member contributes its
+    aliases plus its curated ``key_facts`` (falling back to ``notes``) so the model
+    actually has the member details at inference time — not just names. The phrasing
+    is deliberately conversational (no "(também conhecido como: …)" template) so the
+    model doesn't echo a typed-looking list back at the user.
     """
     lines = []
     for member in members_data.get("members", []):
-        line = member["name"]
-        aliases = [a for a in member.get("aliases", []) if a.lower() != member["name"].lower()]
+        name = member["name"]
+        aliases = [a for a in member.get("aliases", []) if a.lower() != name.lower()]
+        line = f"- {name}"
         if aliases:
-            line += f" (também conhecido como: {', '.join(aliases)})"
+            line += f" (também lhe chamam {', '.join(aliases)})"
+
+        key_facts = member.get("key_facts") or []
         notes = member.get("notes", "")
-        if notes:
-            # Keep only the first 2 sentences to stay within the token budget.
+        if key_facts:
+            line += ": " + " ".join(
+                fact.rstrip(".") + "." for fact in key_facts if fact.strip()
+            )
+        elif notes:
             sentences = [s.strip() for s in notes.split(".") if s.strip()]
-            line += f" — {'. '.join(sentences[:2])}."
+            if sentences:
+                line += ": " + ". ".join(sentences[:3]) + "."
         lines.append(line)
+
     if not lines:
         return ""
-    return f"\n\nMembros do grupo Kaya: {'; '.join(lines)}."
+
+    intro = (
+        "\n\nO que sabes sobre cada membro do grupo Kaya (usa isto para responder, "
+        "incluindo palpites e avaliações sobre o grupo; fala deles de forma natural, "
+        "não como uma lista formatada):\n"
+    )
+    return intro + "\n".join(lines)

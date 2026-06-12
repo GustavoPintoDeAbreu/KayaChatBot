@@ -19,7 +19,7 @@ from transformers import TextIteratorStreamer
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config_loader import load_config
-from src.chat.response_utils import clean_response, build_member_prompt_suffix
+from src.chat.response_utils import clean_response, build_member_prompt_suffix, coerce_text as _coerce_text
 from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
 
@@ -151,7 +151,7 @@ def _build_user_turn(message: str, history: list) -> tuple:
         for item in history[-4:]:
             if isinstance(item, dict):
                 role = "User" if item.get("role") == "user" else "Kaya Bot"
-                content = item.get("content") or ""
+                content = _coerce_text(item.get("content"))
                 if content:
                     recent_lines.append(f"{role}: {content}")
         if recent_lines:
@@ -165,7 +165,7 @@ def bot_stream(history: list):
 
     Yields (history, context) so the suggestion step can reuse the RAG context.
     """
-    message = history[-1]["content"]
+    message = _coerce_text(history[-1]["content"])
     prior = history[:-1]
 
     # Serialize all GPU work (RAG retrieval + streaming generation) behind the
@@ -221,8 +221,8 @@ def make_suggestions(history: list, context: str):
     if not SUGGESTIONS_ENABLED or len(history) < 2:
         return [gr.update(visible=False, value="") for _ in range(SUGGESTION_COUNT)]
 
-    user_msg = history[-2].get("content", "")
-    bot_msg = history[-1].get("content", "")
+    user_msg = _coerce_text(history[-2].get("content"))
+    bot_msg = _coerce_text(history[-1].get("content"))
     try:
         with gpu_section(config):
             suggestions = generate_suggestions(
@@ -244,7 +244,7 @@ def make_suggestions(history: list, context: str):
 
 def add_user_message(message: str, history: list):
     """Append a user message and clear the input box."""
-    message = (message or "").strip()
+    message = _coerce_text(message).strip()
     if not message:
         return "", history
     return "", history + [{"role": "user", "content": message}]

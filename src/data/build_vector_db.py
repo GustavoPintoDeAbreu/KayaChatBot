@@ -31,6 +31,11 @@ CHUNK_SIZE_TOKENS = RAG_CONFIG['chunk_size_tokens']
 CHUNK_OVERLAP_TOKENS = RAG_CONFIG['chunk_overlap_tokens']
 EMBEDDING_MODEL = RAG_CONFIG['embedding_model']
 
+# Term blocklist: messages/facts mentioning these are dropped before embedding so
+# blocked terms (e.g. "Dolby Atmos") never surface in retrieval.
+from src.data.term_blocklist import compile_blocklist, filter_messages, redact_sentences, is_blocked
+BLOCKLIST_PATTERNS = compile_blocklist(config.get('data', {}).get('blocked_terms', []))
+
 # Detect if running in Docker
 _BASE_DIR = Path("/app") if os.path.exists('/app') else Path(__file__).parent.parent.parent
 DATA_DIR = _BASE_DIR / "data"
@@ -343,6 +348,22 @@ class KnowledgeBaseBuilder:
             print("⚠️  No facts found in knowledge file")
             return
 
+        # Redact blocked-term sentences from each fact; drop facts left empty.
+        if BLOCKLIST_PATTERNS:
+            cleaned_facts = []
+            redacted = 0
+            for fact in facts:
+                new_text = redact_sentences(fact.get('text', ''), BLOCKLIST_PATTERNS)
+                if new_text != fact.get('text', ''):
+                    redacted += 1
+                if not new_text.strip():
+                    continue  # whole fact was about a blocked term
+                fact = {**fact, 'text': new_text}
+                cleaned_facts.append(fact)
+            if redacted:
+                print(f"🚫 Blocklist: redacted {redacted} knowledge fact(s)")
+            facts = cleaned_facts
+
         print(f"📥 Embedding {len(facts)} knowledge facts...")
 
         ids = [fact['id'] for fact in facts]
@@ -424,6 +445,14 @@ def main():
     if not messages:
         print("❌ No messages loaded!")
         return
+
+    # Drop messages mentioning blocked terms before chunking/embedding.
+    if BLOCKLIST_PATTERNS:
+        before = len(messages)
+        messages = filter_messages(messages, BLOCKLIST_PATTERNS)
+        dropped = before - len(messages)
+        if dropped:
+            print(f"🚫 Blocklist: dropped {dropped} message(s) mentioning blocked terms")
 
     # ------------------------------------------------------------------ #
     #  Part 1: Conversation history collection                             #
