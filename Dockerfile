@@ -86,7 +86,6 @@ COPY src/ /app/src/
 COPY tests/ /app/tests/
 COPY config.yaml /app/config.yaml
 COPY run_full_pipeline.py /app/
-COPY configs/ /app/configs/
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/models /app/outputs /app/reports/benchmarks
