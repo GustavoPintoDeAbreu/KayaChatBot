@@ -52,10 +52,16 @@ def main():
     model_id = config.get("model", {}).get("model_id", None)
     print(f"🤖 Using model_id for tokenizer: {model_id}")
 
+    # Source file is configurable so a run can use the on-prem generated bank
+    # (data/synthetic_local.jsonl) instead of the legacy synthetic_kaya.jsonl.
+    _src = config.get("data", {}).get("synthetic_source_file", "./data/synthetic_kaya.jsonl")
+    _src_path = _src if os.path.isabs(_src) else f"{data_dir}/{Path(_src).name}"
+    print(f"📄 Synthetic source: {_src_path}")
+
     # Only use RAG-aware Kaya data (no general Portuguese alpaca data)
     # The model should learn from RAG examples only
     merger = SyntheticDatasetMerger(
-        kaya_file=f"{data_dir}/synthetic_kaya.jsonl",
+        kaya_file=_src_path,
         portuguese_file=None,  # Removed: not RAG-aware, would confuse the model
         output_train=output_train,
         output_val=output_val,

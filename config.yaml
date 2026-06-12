@@ -105,6 +105,11 @@ data:
     - "Dolby Atmos"
     - "8d"  # matches "8d", "8D audio", "som 8d" (whole-word, case-insensitive); not "18d"
 
+  # Which synthetic file merge_datasets.py builds train/val from. Switch to
+  # ./data/synthetic_local.jsonl after running generate_local_synthetic.py to
+  # train on the on-prem, behavior-targeted bank instead of the legacy data.
+  synthetic_source_file: "./data/synthetic_kaya.jsonl"
+
 # Pipeline Settings
 pipeline:
   # Set skip_synthetic: true to skip API-based generation and use direct message formatting instead.
@@ -121,6 +126,26 @@ pipeline:
   # which only adds messages newer than the last processed date and deduplicates by hash.
   # When false (default), the full extract_all_messages.py re-extracts everything.
   incremental: false
+
+# On-prem synthetic data generation (src/data/generate_local_synthetic.py).
+# A local "teacher" model generates synthesized, behavior-targeted training
+# targets — no group data leaves the box. Run it, then point
+# data.synthetic_source_file at output_file and retrain.
+synthetic_generation:
+  # On-prem teacher, loaded in 4-bit via transformers (quantized at load).
+  # unsloth/Qwen3.5-27B (dense) → ~17GB VRAM in 4-bit, fits a 24GB GPU for
+  # inference (full-precision download is large, one-time). Qwen3.5-35B-A3B
+  # (~22GB MoE) is an option if it fits. Any HF instruct model id works; a
+  # prequantized 4-bit repo, if available, shrinks the download.
+  teacher_model_id: "unsloth/Qwen3.5-27B"
+  output_file: "./data/synthetic_local.jsonl"
+  knowledge_approach: "json_only"   # how RAG context is built for each question
+  min_words: 6                      # reject answers shorter than this
+  # Teacher sampling (Qwen3.5 instruct recommended defaults)
+  max_new_tokens: 400
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
 
 # Knowledge Generation Settings (used when pipeline.generate_knowledge: true)
 knowledge_generation:
