@@ -108,7 +108,7 @@ data:
   # Which synthetic file merge_datasets.py builds train/val from. Switch to
   # ./data/synthetic_local.jsonl after running generate_local_synthetic.py to
   # train on the on-prem, behavior-targeted bank instead of the legacy data.
-  synthetic_source_file: "./data/synthetic_kaya.jsonl"
+  synthetic_source_file: "./data/synthetic_local.jsonl"
 
 # Pipeline Settings
 pipeline:
@@ -192,7 +192,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "./models/kaya_gemma4_synth_v13"
+  output_dir: "./models/kaya_gemma4_synth_v14"
   
   # Training hyperparameters (v10: expanded targeted Q&A, 3 new blocks, lora_r=16)
   max_steps: 3000  # ~3.5 epochs over 6806 examples (effective batch 8)
@@ -403,7 +403,7 @@ model_profiles:
         - "up_proj"
         - "down_proj"
     training:
-      output_dir: "./models/kaya_gemma4_synth_v13"
+      output_dir: "./models/kaya_gemma4_synth_v14"
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005

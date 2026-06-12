@@ -88,9 +88,19 @@ class TeacherModel:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
-        prompt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # We want direct synthesized answers, not chain-of-thought. Disable
+        # thinking when the template supports it (Qwen3/Qwen3.5); fall back
+        # gracefully for templates that don't accept the kwarg. strip_thinking()
+        # downstream is the safety net either way.
+        try:
+            prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
         inputs = self.tokenizer(text=[prompt], return_tensors="pt").to("cuda")
         with self._torch.no_grad():
             out = self.model.generate(
