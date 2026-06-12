@@ -49,7 +49,7 @@ kaya_chatbot_env/bin/python tests/test_inference.py
 kaya_chatbot_env/bin/python -m pytest tests/ -v
 kaya_chatbot_env/bin/python -m pytest tests/rag/ -v
 kaya_chatbot_env/bin/python -m pytest tests/pipeline/ -v
-kaya_chatbot_env/bin/python tests/pipeline/validate_pipeline.py
+kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 
 # Docker (always rebuild+prune after changes)
 docker-compose up --build

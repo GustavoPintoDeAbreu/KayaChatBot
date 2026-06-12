@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import re
 
-DATA_DIR = Path("/app/data") if Path("/app").exists() else Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path("/app/data") if Path("/app").exists() else Path(__file__).parent.parent / "data"
 
 def check_file(filepath, description):
     """Check if file exists and show stats"""
