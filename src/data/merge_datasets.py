@@ -63,6 +63,10 @@ def main():
         kaya_ratio=1.0,  # 100% RAG-aware Kaya Q&A data
         model_id=model_id,
         chat_template=config.get("model", {}).get("chat_template", "gemma-4"),
+        # Bake the live persona into training (no train/inference drift) and apply
+        # the term blocklist so blocked content never enters the fine-tune.
+        kaya_system_prompt=config.get("data", {}).get("system_prompt"),
+        blocked_terms=config.get("data", {}).get("blocked_terms", []),
     )
     
     train_count, val_count = merger.merge_and_split()
