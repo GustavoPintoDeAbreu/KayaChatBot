@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.config_loader import load_config
 from src.chat.response_utils import clean_response, build_member_prompt_suffix
 from src.chat.suggestions import generate_suggestions
+from src.chat.gpu_lock import gpu_section, GpuBusyError
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _docker_cfg = "/app/config.yaml"
@@ -114,6 +115,20 @@ _suggestions_cfg = config.get("chat", {}).get("suggestions", {})
 SUGGESTIONS_ENABLED = _suggestions_cfg.get("enabled", True)
 SUGGESTION_COUNT = int(_suggestions_cfg.get("count", 3))
 
+# Concurrency: the box has one GPU, so generation + RAG run one job at a time.
+# Gradio's queue (set up at launch) provides fairness/queue position; the GPU lock
+# (src/chat/gpu_lock.py) is the hard guarantee that serializes CUDA work.
+_concurrency_cfg = config.get("chat", {}).get("concurrency", {})
+CONCURRENCY_ENABLED = _concurrency_cfg.get("enabled", True)
+MAX_CONCURRENT = int(_concurrency_cfg.get("max_concurrent", 1))
+MAX_QUEUE_SIZE = int(_concurrency_cfg.get("max_queue_size", 32))
+
+_BUSY_MESSAGE = (
+    "⏳ Estou ocupado a responder a outras mensagens neste momento. "
+    "Tenta novamente daqui a pouco. / I'm busy with other messages right now — "
+    "please try again in a moment."
+)
+
 
 def _build_user_turn(message: str, history: list) -> tuple:
     """Return (user_message_full, context) for a turn.
@@ -152,43 +167,53 @@ def bot_stream(history: list):
     """
     message = history[-1]["content"]
     prior = history[:-1]
-    user_message_full, context = _build_user_turn(message, prior)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message_full},
-    ]
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
+    # Serialize all GPU work (RAG retrieval + streaming generation) behind the
+    # shared lock so concurrent users don't race on CUDA. Held for the whole
+    # stream; released when this generator is exhausted. If the GPU stays busy
+    # past the timeout, degrade to a friendly busy message instead of hanging.
+    try:
+        with gpu_section(config):
+            user_message_full, context = _build_user_turn(message, prior)
 
-    # timeout=60s prevents the iterator from hanging if the generation thread crashes
-    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0)
-    gen_kwargs = dict(
-        **inputs,
-        streamer=streamer,
-        max_new_tokens=_inf.get("max_new_tokens", 512),
-        temperature=_inf.get("temperature", 1.0),
-        do_sample=True,
-        top_p=_inf.get("top_p", 0.95),
-        top_k=_inf.get("top_k", 64),
-        repetition_penalty=_inf.get("repetition_penalty", 1.0),
-        use_cache=True,
-    )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message_full},
+            ]
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
 
-    # Run generation in a background thread; iterate tokens on the main thread
-    Thread(target=model.generate, kwargs=gen_kwargs, daemon=True).start()
+            # timeout=60s prevents the iterator from hanging if the generation thread crashes
+            streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0)
+            gen_kwargs = dict(
+                **inputs,
+                streamer=streamer,
+                max_new_tokens=_inf.get("max_new_tokens", 512),
+                temperature=_inf.get("temperature", 1.0),
+                do_sample=True,
+                top_p=_inf.get("top_p", 0.95),
+                top_k=_inf.get("top_k", 64),
+                repetition_penalty=_inf.get("repetition_penalty", 1.0),
+                use_cache=True,
+            )
 
-    history = history + [{"role": "assistant", "content": ""}]
-    partial = ""
-    for token in streamer:
-        partial += token
-        history[-1]["content"] = partial
-        yield history, context
+            # Run generation in a background thread; iterate tokens on the main thread
+            Thread(target=model.generate, kwargs=gen_kwargs, daemon=True).start()
 
-    cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
-    history[-1]["content"] = cleaned
-    yield history, context
-    _log_interaction(message, cleaned)
+            history = history + [{"role": "assistant", "content": ""}]
+            partial = ""
+            for token in streamer:
+                partial += token
+                history[-1]["content"] = partial
+                yield history, context
+
+            cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
+            history[-1]["content"] = cleaned
+            yield history, context
+        _log_interaction(message, cleaned)
+    except GpuBusyError:
+        history = history + [{"role": "assistant", "content": _BUSY_MESSAGE}]
+        yield history, ""
 
 
 def make_suggestions(history: list, context: str):
@@ -199,11 +224,12 @@ def make_suggestions(history: list, context: str):
     user_msg = history[-2].get("content", "")
     bot_msg = history[-1].get("content", "")
     try:
-        suggestions = generate_suggestions(
-            model, tokenizer, config, user_msg, bot_msg, context,
-            count=SUGGESTION_COUNT,
-        )
-    except Exception as exc:  # noqa: BLE001 — chips are best-effort
+        with gpu_section(config):
+            suggestions = generate_suggestions(
+                model, tokenizer, config, user_msg, bot_msg, context,
+                count=SUGGESTION_COUNT,
+            )
+    except Exception as exc:  # noqa: BLE001 — chips are best-effort (incl. GpuBusyError)
         print(f"⚠️  Suggestion generation failed: {exc}")
         suggestions = []
 
@@ -313,6 +339,13 @@ if __name__ == "__main__":
             "KAYA_WEB_USER/KAYA_WEB_PASS (or chat.web_auth) — the bot exposes "
             "private group memory."
         )
+
+    # Queue requests so concurrent users wait their turn on the single GPU.
+    # default_concurrency_limit caps how many generation events run at once;
+    # max_size bounds the backlog (extra users get a busy message). The app-level
+    # GPU lock in bot_stream/make_suggestions is the hard serialization guarantee.
+    if CONCURRENCY_ENABLED:
+        demo.queue(default_concurrency_limit=MAX_CONCURRENT, max_size=MAX_QUEUE_SIZE)
 
     demo.launch(
         server_name=_server_name,
