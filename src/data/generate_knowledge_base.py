@@ -72,6 +72,13 @@ DEFAULT_PROFILE_FIELDS = [
 # Fields that must NOT be embedded into ChromaDB (sensitive / private)
 SENSITIVE_FIELDS = {"political_preference"}
 
+# Term blocklist (see src/data/term_blocklist.py). Populated from config in main();
+# applied in merge_profiles so blocked terms (e.g. "Dolby Atmos") never re-enter
+# member interests/topics/bios on regeneration.
+sys.path.insert(0, str(BASE_DIR))
+from src.data.term_blocklist import compile_blocklist, filter_list, redact_sentences
+_BLOCKLIST_PATTERNS: list = []
+
 # ---------------------------------------------------------------------------
 # Extraction prompt template
 # ---------------------------------------------------------------------------
@@ -365,9 +372,11 @@ def merge_profiles(
 
         if field in list_fields:
             if isinstance(new_val, list):
+                new_val = filter_list(new_val, _BLOCKLIST_PATTERNS)
                 merged[field] = merge_list_field(merged.get(field), new_val)
         elif field == "biography_summary":
             old_bio = merged.get("biography_summary", "") or ""
+            new_val = redact_sentences(new_val, _BLOCKLIST_PATTERNS)
             if not new_val or new_val.strip() in old_bio:
                 pass  # Nothing new
             else:
@@ -511,6 +520,10 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
 
     # Load config
     config = load_config()
+    global _BLOCKLIST_PATTERNS
+    _BLOCKLIST_PATTERNS = compile_blocklist(config.get("data", {}).get("blocked_terms", []))
+    if _BLOCKLIST_PATTERNS:
+        print(f"🚫 Blocklist active: {config['data']['blocked_terms']}", flush=True)
     profile_fields = get_profile_fields(config)
     kg_config = config.get("knowledge_generation", {})
     words_per_token = 0.75
