@@ -528,21 +528,11 @@ class SyntheticDatasetMerger:
 
         return conversations
 
-    # Emoji ranges (incl. the trailing-😊 habit the group disliked) plus the
-    # variation-selector and ZWJ used to compose them. Stripped from assistant
-    # targets so the fine-tuned model stops ending messages with emojis.
-    _EMOJI_RE = re.compile(
-        "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
-        "\U0000FE00-\U0000FE0F\U00002B00-\U00002BFF\U0000200D]+"
-    )
-
     def strip_emojis(self, text: str) -> str:
-        """Remove emojis and tidy the whitespace they leave behind."""
-        cleaned = self._EMOJI_RE.sub("", text)
-        # Collapse spaces and fix a space-before-punctuation left by a removed emoji.
-        cleaned = re.sub(r"\s+([.!?,;:])", r"\1", cleaned)
-        cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
-        return cleaned
+        """Remove emojis and tidy whitespace. Delegates to synthetic_filters so the
+        train-time scrub and the generation-time scrub share one implementation."""
+        from src.data.synthetic_filters import strip_emojis as _strip
+        return _strip(text)
 
     def clean_filler_words(self, text: str) -> str:
         """
@@ -598,7 +588,7 @@ class SyntheticDatasetMerger:
 
         # Get system prompt for the conversation
         source = conversation.get('source', '')
-        if source in ('synthetic_kaya', 'synthetic_targeted'):
+        if source in ('synthetic_kaya', 'synthetic_targeted', 'synthetic_local'):
             # Inject the persona used at inference time. Sourced from config.yaml
             # data.system_prompt (passed in by merge_datasets) so training and
             # inference can't drift; the inline string is only a legacy fallback.
