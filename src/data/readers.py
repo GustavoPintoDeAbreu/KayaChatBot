@@ -475,6 +475,8 @@ class SyntheticDatasetMerger:
         kaya_ratio: float = 0.8,  # Target ratio of Kaya data (0.0-1.0)
         model_id: str = None,
         chat_template: str = "gemma-4",
+        kaya_system_prompt: Optional[str] = None,
+        blocked_terms: Optional[List[str]] = None,
     ):
         _data = Path(__file__).parent.parent.parent / "data"
         self.kaya_file = Path(kaya_file) if kaya_file else _data / "synthetic_kaya.jsonl"
@@ -485,6 +487,15 @@ class SyntheticDatasetMerger:
         self.kaya_ratio = kaya_ratio
         self.chat_template = chat_template
         self.tokenizer = None
+        # Persona baked into Kaya training examples. Sourced from config.yaml
+        # data.system_prompt so training and inference can't drift apart.
+        self.kaya_system_prompt = kaya_system_prompt
+        # Term blocklist (Dolby Atmos etc.): conversations mentioning a blocked
+        # term are dropped so they never enter the fine-tune.
+        from src.data.term_blocklist import compile_blocklist
+        self.blocklist_patterns = compile_blocklist(blocked_terms or [])
+        self.dropped_blocked = 0
+        self.stripped_emoji = 0
 
         if model_id:
             try:
@@ -516,6 +527,22 @@ class SyntheticDatasetMerger:
                     continue
 
         return conversations
+
+    # Emoji ranges (incl. the trailing-😊 habit the group disliked) plus the
+    # variation-selector and ZWJ used to compose them. Stripped from assistant
+    # targets so the fine-tuned model stops ending messages with emojis.
+    _EMOJI_RE = re.compile(
+        "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
+        "\U0000FE00-\U0000FE0F\U00002B00-\U00002BFF\U0000200D]+"
+    )
+
+    def strip_emojis(self, text: str) -> str:
+        """Remove emojis and tidy the whitespace they leave behind."""
+        cleaned = self._EMOJI_RE.sub("", text)
+        # Collapse spaces and fix a space-before-punctuation left by a removed emoji.
+        cleaned = re.sub(r"\s+([.!?,;:])", r"\1", cleaned)
+        cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
+        return cleaned
 
     def clean_filler_words(self, text: str) -> str:
         """
@@ -561,36 +588,26 @@ class SyntheticDatasetMerger:
         if not turns or len(turns) < 2:
             return None
 
+        # Term blocklist: drop the whole conversation if any turn mentions a
+        # blocked term, so it never enters the fine-tune (e.g. Dolby Atmos).
+        if self.blocklist_patterns:
+            from src.data.term_blocklist import is_blocked
+            if any(is_blocked(t.get('content', ''), self.blocklist_patterns) for t in turns):
+                self.dropped_blocked += 1
+                return None
+
         # Get system prompt for the conversation
         source = conversation.get('source', '')
         if source in ('synthetic_kaya', 'synthetic_targeted'):
-            # Inject the same system prompt used at inference time for all Kaya conversations.
-            # This must match config.yaml data.system_prompt to avoid train/inference mismatch.
-            system_prompt = (
-                "És o bot assistente do grupo de amigos 'Kaya'. "
-                "Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo. "
-                "Quando te fazem perguntas, respondes com base no que sabes dessas conversas. "
-                "Podes conversar de forma casual. "
-                "Fala em português europeu ou inglês de forma natural. "
-                "Não és um membro do grupo — és um bot com acesso à memória coletiva do grupo. "
-                "Nunca fales na primeira pessoa sobre experiências pessoais com membros do grupo. "
-                "Refere-te sempre aos membros na terceira pessoa. "
-                "Não digas 'o meu amigo', 'vivemos juntos' ou outras afirmações pessoais. "
-                "Aprendeste sobre eles através de conversas do grupo, não por experiência pessoal direta. "
-                "Quando respondes a saudações casuais ou perguntas sobre o teu estado, mantém o papel de assistente "
-                "— não simules ter um dia de trabalho, planos pessoais, atividades físicas ou outros aspetos de uma vida humana. "
-                "Tens memória do grupo, não uma vida própria. "
-                "Quando alguém te cumprimenta (ex: 'Olá!', 'How are you?', 'Tudo bem?'), responde sempre como assistente: "
-                "'Olá! Estou aqui para ajudar com questões sobre o grupo Kaya.' "
-                "— nunca inventes um estado físico, humor, planos ou atividades pessoais. "
-                "Não tens preferências pessoais como equipas de futebol, comida favorita ou opiniões próprias "
-                "— se te perguntarem, diz claramente que és um bot sem preferências e redireciona para o que os membros do grupo gostam. "
-                "Se não tiveres informação verificada sobre algo (evento específico, data, detalhe), diz claramente que não tens essa informação "
-                "— nunca inventes detalhes plausíveis mas não confirmados. "
-                "Limita sempre as tuas respostas aos factos que conheces das conversas e da base de conhecimento "
-                "— não acrescentes detalhes especulativos. "
-                "Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério "
-                "— nunca uses linguagem casual ou inapropriada nesses contextos."
+            # Inject the persona used at inference time. Sourced from config.yaml
+            # data.system_prompt (passed in by merge_datasets) so training and
+            # inference can't drift; the inline string is only a legacy fallback.
+            system_prompt = self.kaya_system_prompt or (
+                "És o bot do grupo de amigos 'Kaya'. Respondes a qualquer pergunta "
+                "de forma directa e com personalidade, dando a tua avaliação quando "
+                "ta pedem, em português europeu ou inglês. Não és um membro do grupo "
+                "— referes-te aos membros na terceira pessoa. Não terminas as "
+                "mensagens com emojis."
             )
         else:
             # Use provided system prompt for Portuguese instruction data
@@ -610,9 +627,15 @@ class SyntheticDatasetMerger:
             if not content:
                 continue
 
-            # Apply filler word cleaning to assistant responses
+            # Apply filler word cleaning + emoji stripping to assistant responses
             if role in ['assistant', 'gpt', 'bot']:
                 content = self.clean_filler_words(content)
+                stripped = self.strip_emojis(content)
+                if stripped != content:
+                    self.stripped_emoji += 1
+                    content = stripped
+                if not content:
+                    continue  # response was emoji-only
 
             # Map role names
             if role in ['user', 'human']:
@@ -752,6 +775,9 @@ class SyntheticDatasetMerger:
                 })
 
         print(f"✅ Successfully formatted {len(formatted_data)}/{len(all_conversations)} conversations")
+        if self.blocklist_patterns:
+            print(f"🚫 Blocklist: dropped {self.dropped_blocked} conversation(s) mentioning blocked terms")
+        print(f"😶 Emoji: stripped from {self.stripped_emoji} assistant response(s)")
 
         # Shuffle
         print(f"\n🎲 Shuffling dataset...")
