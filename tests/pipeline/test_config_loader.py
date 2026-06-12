@@ -338,3 +338,76 @@ class TestDeepMergePassThrough:
         assert cfg["model"]["max_seq_length"] == 2048
         assert cfg["training"]["output_dir"] == "./models/base"
         assert cfg["training"]["max_steps"] == 500
+
+
+# ---------------------------------------------------------------------------
+# TestRealConfig — integration tests against the live config.yaml
+# ---------------------------------------------------------------------------
+
+class TestRealConfig:
+    """Integration tests that load the actual project config.yaml."""
+
+    def test_default_path_resolves_to_project_root(self):
+        """load_config() with no arguments should resolve to the real config.yaml."""
+        config = load_config()
+        assert "model" in config
+        assert "training" in config
+
+    def test_active_model_profile_in_yaml(self, tmp_path):
+        """active_model_profile set in YAML is used when no override provided."""
+        cfg_text = """
+model:
+  model_id: "base_model"
+  lora_r: 32
+  lora_alpha: 32
+training:
+  output_dir: "./models/base"
+  learning_rate: 0.0001
+active_model_profile: profile-b
+model_profiles:
+  profile-a:
+    model:
+      model_id: "model_a"
+      lora_r: 16
+    training:
+      output_dir: "./models/a"
+  profile-b:
+    model:
+      model_id: "model_b"
+    training:
+      output_dir: "./models/b"
+"""
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(cfg_text, encoding="utf-8")
+        config = load_config(str(cfg_file))
+        assert config["model"]["model_id"] == "model_b"
+        assert config["training"]["output_dir"] == "./models/b"
+
+    def test_qwen3_profile_present_in_real_config(self):
+        """The real config.yaml must contain the qwen3-14b and gemma4-e4b profiles."""
+        config = load_config()
+        profiles = config.get("model_profiles", {})
+        assert "qwen3-14b" in profiles, "qwen3-14b profile missing from config.yaml"
+        assert "gemma4-e4b" in profiles, "gemma4-e4b profile missing from config.yaml"
+
+    def test_gemma4_model_id_correct(self):
+        """gemma4-e4b profile must use the real HuggingFace model ID."""
+        config = load_config()
+        gemma_id = config["model_profiles"]["gemma4-e4b"]["model"]["model_id"]
+        assert gemma_id == "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+
+    def test_apply_gemma4_profile(self):
+        """Applying gemma4-e4b profile overrides model and training sections."""
+        config = load_config(profile_override="gemma4-e4b")
+        assert config["model"]["model_id"] == "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+        assert config["model"]["lora_r"] == 16
+        assert config["model"]["lora_alpha"] == 32
+        assert config["model"]["lora_dropout"] == 0.0
+        assert "gemma4" in config["training"]["output_dir"]
+
+    def test_apply_qwen3_profile(self):
+        """Applying qwen3-14b profile overrides model and training sections."""
+        config = load_config(profile_override="qwen3-14b")
+        assert config["model"]["model_id"] == "unsloth/Qwen3-14B-bnb-4bit"
+        assert config["model"]["lora_r"] == 32
+        assert "kaya_qwen3_14b" in config["training"]["output_dir"]
