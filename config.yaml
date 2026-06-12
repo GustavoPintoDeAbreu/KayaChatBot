@@ -103,7 +103,7 @@ data:
   # them — e.g. "Dolby Atmos" leaking from cinema chat into member bios.
   blocked_terms:
     - "Dolby Atmos"
-    - "8D audio"
+    - "8d"  # matches "8d", "8D audio", "som 8d" (whole-word, case-insensitive); not "18d"
 
 # Pipeline Settings
 pipeline:
