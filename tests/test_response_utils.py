@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.chat.response_utils import clean_response
+from src.chat.response_utils import clean_response, coerce_text
 
 
 class TestCleanResponse:
@@ -59,3 +59,26 @@ class TestCleanResponse:
         text = "First sentence.\nSecond sentence."
         result = clean_response(text, user_name="Gustavo")
         assert "Second sentence." in result
+
+
+class TestCoerceText:
+    """Guards the suggestion-chip formatting bug: a content-block list must never
+    render as ``[{'text': …, 'type': 'text'}]``."""
+
+    def test_plain_string_unchanged(self):
+        assert coerce_text("Quem é o gugu?") == "Quem é o gugu?"
+
+    def test_content_block_list_flattened(self):
+        content = [{"text": "Como podemos melhorar isso?", "type": "text"}]
+        assert coerce_text(content) == "Como podemos melhorar isso?"
+
+    def test_single_content_block_dict(self):
+        assert coerce_text({"type": "text", "text": "Olá"}) == "Olá"
+
+    def test_multi_part_list_joined(self):
+        content = [{"type": "text", "text": "parte um"}, {"type": "text", "text": "parte dois"}]
+        assert coerce_text(content) == "parte um parte dois"
+
+    def test_none_and_empty(self):
+        assert coerce_text(None) == ""
+        assert coerce_text([]) == ""
