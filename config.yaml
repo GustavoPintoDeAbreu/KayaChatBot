@@ -218,6 +218,15 @@ chat:
     max_new_tokens: 64
     temperature: 0.7
 
+  # Concurrency / request queue. The box has ONE GPU, so generation + RAG run one
+  # job at a time; extra users wait in line (Gradio shows queue position). The
+  # app-level GPU lock is the hard guarantee that serializes CUDA work.
+  concurrency:
+    enabled: true
+    max_concurrent: 1      # GPU jobs at once (also Gradio's concurrency_limit)
+    max_queue_size: 32     # max users waiting before new ones get a busy message
+    acquire_timeout: 120   # seconds to wait for the GPU lock before giving up
+
   # Web UI (Gradio) bind settings. Localhost-only by default for privacy — the
   # bot serves private group memory, so it must not be exposed without auth.
   # To reach it from another device, set web_server_name: "0.0.0.0" AND
