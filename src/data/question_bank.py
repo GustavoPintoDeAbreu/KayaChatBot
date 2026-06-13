@@ -22,10 +22,14 @@ _TRAITS_PT = [
     "convencido", "engraçado", "inteligente", "trabalhador", "preguiçoso",
     "dramático", "calmo", "teimoso", "generoso", "competitivo", "sarcástico",
     "stressado", "novo", "velho", "alto", "baixo", "barulhento", "reservado",
+    "responsável", "aventureiro", "desportista", "romântico", "cético",
+    "otimista", "carismático", "desorganizado", "pontual", "rabugento",
+    "festeiro", "poupado", "gastador", "cabeça no ar",
 ]
 _TRAITS_EN = [
     "arrogant", "funny", "smart", "hard-working", "lazy", "dramatic",
     "chill", "stubborn", "generous", "competitive", "sarcastic",
+    "adventurous", "responsible", "romantic", "optimistic", "charismatic",
 ]
 
 # Per-member question templates ({n} = a member name or alias).
@@ -59,7 +63,9 @@ _OPINION_PT = [
 _OPINION_TOPICS = [
     "política", "futebol", "a forma como o grupo conversa",
     "os planos de viagem do grupo", "tecnologia", "música",
-    "a dinâmica do grupo", "eventos mundiais",
+    "a dinâmica do grupo", "eventos mundiais", "as discussões do grupo",
+    "as piadas internas do grupo", "a comida preferida do grupo",
+    "os jogos de poker e padel", "o futuro do grupo",
 ]
 
 _GENERAL = [
@@ -68,9 +74,16 @@ _GENERAL = [
     "Há quanto tempo é que se conhecem?",
     "Descreve a dinâmica do grupo.",
     "Qual é a vibe do grupo?",
+    "Quais são as piadas internas do grupo?",
+    "Que tipo de planos é que o grupo costuma fazer?",
+    "Quem é que costuma organizar as cenas do grupo?",
+    "Sobre o que é que o grupo mais fala?",
+    "Quem é o líder do grupo?",
     "Who are the members of the group?",
     "How did the group meet?",
     "Describe the group's dynamic.",
+    "What does the group usually talk about?",
+    "What are the group's inside jokes?",
 ]
 
 
