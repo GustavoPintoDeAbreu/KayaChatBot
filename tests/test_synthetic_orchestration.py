@@ -10,7 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.generate_local_synthetic import generate_dataset, build_user_turn
+from src.data.generate_local_synthetic import (
+    generate_dataset,
+    build_user_turn,
+    mine_questions,
+    parse_mined_question,
+)
 
 
 class StubRetriever:
@@ -76,6 +81,34 @@ def test_generate_dataset_filters_and_formats():
     # generation instruction + persona were sent to the teacher
     assert "PERSONA SUFFIX" in teacher.calls[0][0]
     assert "INSTRUÇÕES DE GERAÇÃO" in teacher.calls[0][0]
+
+
+class TestMining:
+    def test_parse_mined_question_basic(self):
+        assert parse_mined_question("Quem organizou o jantar?") == "Quem organizou o jantar?"
+
+    def test_parse_strips_thinking_and_junk(self):
+        raw = "<think>hmm</think>\n- “O que aconteceu no Porto?” extra"
+        assert parse_mined_question(raw) == "O que aconteceu no Porto?"
+
+    def test_parse_no_question_returns_empty(self):
+        assert parse_mined_question("uma afirmação sem pergunta") == ""
+
+    def test_mine_questions_dedups_and_caps(self):
+        teacher = StubTeacher({"A": "Quem foi ao Porto?", "B": "Quem foi ao Porto?",
+                               "C": "O que comeram?"}, default="Pergunta genérica?")
+        # chunks map to A/B (dup) and C → 2 unique
+        chunks = ["chunk A", "chunk B", "chunk C"]
+        out = mine_questions(chunks, teacher, target=10, seed=1)
+        assert "Quem foi ao Porto?" in out
+        assert "O que comeram?" in out
+        assert len(out) == len(set(q.lower() for q in out))
+
+    def test_mine_questions_respects_target(self):
+        teacher = StubTeacher({}, default="Uma pergunta qualquer?")
+        # all chunks yield the same default → dedup leaves 1 regardless of target
+        out = mine_questions(["a", "b", "c"], teacher, target=2, seed=1)
+        assert len(out) == 1
 
 
 def test_generate_dataset_streams_via_callback():
