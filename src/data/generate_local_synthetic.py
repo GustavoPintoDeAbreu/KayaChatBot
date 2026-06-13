@@ -33,10 +33,65 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+import random
+
 from src.config_loader import load_config
 from src.data.question_bank import build_questions, load_members
-from src.data.synthetic_filters import clean_and_accept
+from src.data.synthetic_filters import clean_and_accept, strip_thinking
 from src.chat.response_utils import build_member_prompt_suffix
+
+# System prompt for mining conversational questions from real chat chunks. This
+# gives the dataset breadth beyond the per-member/superlative templates: natural
+# questions grounded in what the group actually talked about.
+_MINE_SYSTEM_PROMPT = (
+    "És um gerador de perguntas. Lês um excerto de conversa de um grupo de amigos "
+    "e escreves UMA pergunta curta e natural (em português europeu ou inglês) que "
+    "um membro poderia fazer a um assistente sobre o conteúdo, o evento ou as "
+    "pessoas mencionadas. A pergunta deve fazer sentido sozinha, sem o excerto. "
+    "Responde APENAS com a pergunta."
+)
+
+
+def parse_mined_question(raw: str) -> str:
+    """Extract a single clean question from the teacher's mining output."""
+    raw = strip_thinking(raw)
+    for line in raw.splitlines():
+        line = line.strip().strip("\"'“”-•* ")
+        if "?" in line:
+            return line[: line.index("?") + 1].strip()
+    return ""
+
+
+def mine_questions(
+    chunk_texts: List[str], teacher: Any, target: int, seed: int = 3407,
+    max_chunk_chars: int = 1200,
+) -> List[str]:
+    """Use the teacher to turn real conversation chunks into natural questions.
+
+    Stops at ``target`` accepted questions. teacher needs ``.generate``; chunk
+    sampling is seeded for reproducibility. Deduplicated (case-insensitive).
+    """
+    if target <= 0 or not chunk_texts:
+        return []
+    pool = list(chunk_texts)
+    random.Random(seed).shuffle(pool)
+    out: List[str] = []
+    seen = set()
+    for chunk in pool:
+        if len(out) >= target:
+            break
+        user = f"Excerto:\n{chunk[:max_chunk_chars]}\n\nEscreve uma pergunta."
+        try:
+            raw = teacher.generate(_MINE_SYSTEM_PROMPT, user)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Mining failed on a chunk: {exc}")
+            continue
+        q = parse_mined_question(raw)
+        key = q.lower()
+        if q and key not in seen and len(q.split()) >= 3:
+            seen.add(key)
+            out.append(q)
+    return out
 
 # Appended to the persona so the teacher synthesizes instead of quoting and
 # never emits emojis — the two things the group complained about.
@@ -195,6 +250,9 @@ def main() -> None:
     parser.add_argument("--out", type=str, default=None, help="Output JSONL path override.")
     parser.add_argument("--teacher-model", type=str, default=None,
                         help="Override synthetic_generation.teacher_model_id.")
+    parser.add_argument("--mine", type=int, default=None,
+                        help="Mine N conversational questions from chat chunks (overrides config).")
+    parser.add_argument("--no-mine", action="store_true", help="Disable question mining.")
     args = parser.parse_args()
 
     config = load_config(str(_REPO_ROOT / "config.yaml"))
@@ -210,14 +268,37 @@ def main() -> None:
     members = load_members(data_cfg.get("group_members_file", "./data/group_members.json"))
     member_suffix = build_member_prompt_suffix(members)
 
-    questions = build_questions(members, per_category=args.per_category)
-    print(f"🧩 Question bank: {len(questions)} questions")
+    template_questions = build_questions(members, per_category=args.per_category)
+    print(f"🧩 Template question bank: {len(template_questions)} questions")
 
     # Retriever (on-prem RAG context).
     from src.chat.retriever import get_retriever
     retriever = get_retriever(config)
 
     teacher = TeacherModel(teacher_id, sampling=sg)
+
+    # Mine extra conversational questions from real chat chunks for breadth.
+    mine_count = 0 if args.no_mine else (args.mine if args.mine is not None else int(sg.get("mine_count", 0)))
+    mined_questions: List[str] = []
+    if mine_count and not args.smoke:
+        try:
+            chunk_texts = retriever.collection.get(include=["documents"]).get("documents", [])
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Could not load conversation chunks for mining: {exc}")
+            chunk_texts = []
+        print(f"⛏️  Mining up to {mine_count} questions from {len(chunk_texts)} chunks…")
+        mined_questions = mine_questions(chunk_texts, teacher, mine_count)
+        print(f"⛏️  Mined {len(mined_questions)} conversational questions")
+
+    # Combine + dedup (templates first, then mined), keep order, final shuffle.
+    seen = set()
+    questions = []
+    for q in template_questions + mined_questions:
+        if q.lower() not in seen:
+            seen.add(q.lower())
+            questions.append(q)
+    random.Random(3407).shuffle(questions)
+    print(f"🧩 Total question bank: {len(questions)} questions")
 
     if args.smoke:
         stats = generate_dataset(
