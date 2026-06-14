@@ -44,9 +44,15 @@ chroma.sqlite3
 
 # Exceptions: Keep config and documentation
 !config.yaml
-!.cursorrules
 !README.md
 !requirements.txt
+
+# ===================================
+# AI assistant / editor local configs
+# ===================================
+.claude/
+.cursorrules
+.github/copilot-instructions.md
 
 # ===================================
 # Credentials & Secrets (CRITICAL)
