@@ -154,3 +154,7 @@ reports/benchmarks/benchmark_*.json
 # Batch Files
 # ===================================
 *.bat
+# WhatsApp bridge — local/private, never commit
+data/waha/
+data/whatsapp_sessions/
+data/whatsapp_contacts.json
