@@ -12,16 +12,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 
-import torch
 import gradio as gr
 from transformers import TextIteratorStreamer
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config_loader import load_config
-from src.chat.response_utils import clean_response, build_member_prompt_suffix, coerce_text as _coerce_text
+from src.chat.response_utils import clean_response, coerce_text as _coerce_text
 from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
+from src.chat.engine import get_engine, build_system_prompt
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _docker_cfg = "/app/config.yaml"
@@ -29,68 +29,21 @@ _local_cfg = str(Path(__file__).parent.parent.parent / "config.yaml")
 config_path = _docker_cfg if os.path.exists(_docker_cfg) else _local_cfg
 config = load_config(config_path)
 
-# ── Model ───────────────────────────────────────────────────────────────────
-model_dir = config["training"]["output_dir"]
-_adapter_cfg_path = Path(model_dir) / "adapter_config.json"
-if not _adapter_cfg_path.exists():
-    raise FileNotFoundError(f"adapter_config.json not found in {model_dir}")
-
-base_model_name = json.loads(_adapter_cfg_path.read_text())["base_model_name_or_path"]
-is_gemma4 = "gemma-4" in base_model_name.lower() or "gemma4" in base_model_name.lower()
-
-print(f"Loading model from {model_dir} …")
-if is_gemma4:
-    from unsloth import FastModel
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=model_dir,
-        max_seq_length=config["model"]["max_seq_length"],
-        dtype=None,
-        load_in_4bit=True,
-    )
-    FastModel.for_inference(model)
-else:
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-    from peft import PeftModel
-    _bnb = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    _base = AutoModelForCausalLM.from_pretrained(
-        base_model_name, quantization_config=_bnb, device_map="cuda", trust_remote_code=True
-    )
-    model = PeftModel.from_pretrained(_base, model_dir)
-    model.eval()
-print("✓ Model loaded")
+# ── Engine (single model load, shared with the WhatsApp bridge) ──────────────
+# The model is loaded once per process by get_engine(); importing this module
+# from whatsapp_server.py reuses the same instance instead of loading twice.
+_engine = get_engine(config)
+model = _engine.model
+tokenizer = _engine.tokenizer
+retriever = _engine.retriever
+rag_enabled = _engine.rag_enabled
+rag_config = config.get("rag", {})
+knowledge_approach = _engine.knowledge_approach
 
 # ── System prompt ────────────────────────────────────────────────────────────
-rag_config = config.get("rag", {})
-knowledge_approach = rag_config.get("knowledge_approach", "both")
-system_prompt = config["data"]["system_prompt"]
-
-_members_file = config.get("data", {}).get("group_members_file")
-if _members_file and knowledge_approach in ("both", "json_only"):
-    _mf = Path(_members_file) if Path(_members_file).is_absolute() else Path(config_path).parent / _members_file
-    if _mf.exists():
-        _members_data = json.loads(_mf.read_text(encoding="utf-8"))
-        system_prompt += build_member_prompt_suffix(_members_data)
-
-# Give the model a notion of "today" so it can reason about recency when the user
-# asks about timing (runtime-only, never part of training data).
-system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
-
-# ── RAG retriever ────────────────────────────────────────────────────────────
-retriever = None
-rag_enabled = rag_config.get("enabled", False)
-if rag_enabled:
-    try:
-        from src.chat.retriever import get_retriever
-        retriever = get_retriever(config)
-        print("✓ RAG retriever initialized")
-    except Exception as exc:
-        print(f"⚠️  RAG initialization failed: {exc}")
+# The web UI keeps its historical behaviour (no uncensored preamble); the
+# WhatsApp bridge builds its own prompt via build_system_prompt() at startup.
+system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
 
 # ── Interaction logger ────────────────────────────────────────────────────────
 _log_dir = Path(config_path).parent / "data" / "feedback"

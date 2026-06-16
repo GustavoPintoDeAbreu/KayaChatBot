@@ -273,6 +273,34 @@ chat:
   web_server_port: 7860
   web_auth: null
 
+# WhatsApp bridge (src/chat/whatsapp_server.py + WAHA container).
+# Off by default. The bridge connects to a self-hosted WAHA instance over the
+# Docker network; WAHA links a DEDICATED number (never the personal one) via QR.
+# In a group the bot replies only when @-mentioned or when someone replies to it.
+whatsapp:
+  enabled: true
+  # mock_mode (or env KAYA_WHATSAPP_MOCK=1) captures replies instead of sending —
+  # used to develop/test the whole flow before a real number/WAHA session exists.
+  mock_mode: false
+  waha_base_url: "http://waha:3000"
+  waha_session: "default"
+  waha_api_key: null          # set via env KAYA_WAHA_API_KEY in production
+  bot_jid: ""                 # the bot number's JID; left blank → auto-learned from WAHA (incl. its @lid)
+  webhook_token: ""           # shared secret; WAHA must send it as the X-Webhook-Token header
+  send_seen: true             # show read receipt + typing indicator before replying
+  history_turns: 10           # how many recent lines of per-chat history to feed the model
+  sessions_dir: "data/whatsapp_sessions"
+  group:
+    respond_on_mention: true
+    respond_on_reply: true
+  # Map a member's real phone (digits, with country code) -> name so the model
+  # knows who is speaking (improves RAG person-filtering + personalization).
+  # Works for @lid chats too: the adapter matches on the real number behind the @lid.
+  # NOTE: real numbers are PII — keep them OUT of git. Put them in the gitignored
+  # file data/whatsapp_contacts.json (merged in at startup), not here. Example:
+  #   { "351XXXXXXXXX": "Gustavo", "351YYYYYYYYY": "Rafa" }
+  contacts: {}
+
 # RAG Settings
 rag:
   enabled: true
