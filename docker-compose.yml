@@ -148,6 +148,7 @@ services:
     container_name: kaya-prod
     profiles: [prod]
     restart: unless-stopped
+    depends_on: [waha]
     ports:
       - "7860:7860"
     environment:
@@ -159,7 +160,11 @@ services:
       - KAYA_WEB_PORT=7860
       - KAYA_ENV=prod
       - KAYA_VERSION=${KAYA_VERSION:-unknown}
-    command: python src/chat/web_app.py
+      - KAYA_WAHA_URL=http://waha:3000
+      - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
+      - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+    # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
+    command: python -m src.chat.whatsapp_server
 
   # ──────────────────────────────────────────────────────────────
   # cloudflared  [profile: tunnel]
@@ -183,15 +188,17 @@ services:
   # WhatsApp Web protocol behind REST + webhooks so the Python bridge speaks
   # plain HTTP (no Node in our codebase). Links a DEDICATED number via QR at
   # the WAHA dashboard (http://localhost:3000) — never the personal number.
-  # It POSTs inbound messages to the bridge running inside kaya-prod/kaya-dev
-  # (run that container with `python -m src.chat.whatsapp_server` instead of
-  # web_app.py). See WHATSAPP.md.
-  # Usage: docker compose --profile whatsapp up -d waha
+  # It POSTs inbound messages to the live bridge (kaya-prod, which runs
+  # whatsapp_server and serves the UI + webhook). The [whatsapp] profile is the
+  # on-demand dev variant that targets kaya-whatsapp instead. See WHATSAPP.md.
+  # Usage (dev): docker compose --profile whatsapp up -d waha kaya-whatsapp
   # ──────────────────────────────────────────────────────────────
   waha:
     image: devlikeapro/waha:latest
     container_name: kaya-waha
-    profiles: [whatsapp]
+    # In the [prod] profile too so it starts alongside kaya-prod (the live bridge);
+    # [whatsapp] is the on-demand dev variant pointing at kaya-whatsapp.
+    profiles: [whatsapp, prod]
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"   # WAHA dashboard / REST — localhost only
@@ -203,8 +210,8 @@ services:
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
       # Auto-start a session named "default"; scan its QR at http://localhost:3000.
       - WHATSAPP_START_SESSION=default
-      # WAHA pushes inbound messages to the bridge's webhook on the compose network.
-      - WHATSAPP_HOOK_URL=http://kaya-whatsapp:7860/whatsapp/webhook
+      # WAHA pushes inbound messages to the live bridge (kaya-prod) on the compose network.
+      - WHATSAPP_HOOK_URL=http://kaya-prod:7860/whatsapp/webhook
       - WHATSAPP_HOOK_EVENTS=message
       - WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       # Stable dashboard/swagger login (otherwise WAHA generates a random password
