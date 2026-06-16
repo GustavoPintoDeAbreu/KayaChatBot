@@ -8,8 +8,9 @@ or external service. Privacy is a core requirement: all data stays on-device.
 import json
 import logging
 import os
+import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -86,3 +87,49 @@ class SessionMemory:
         except OSError as exc:
             logger.warning("Failed to clear chat history at %s: %s", self.history_file, exc)
             return False
+
+
+def _safe_key(key: str) -> str:
+    """Turn a WhatsApp chat id (e.g. ``"3519...@g.us"``) into a safe filename."""
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    return sanitized[:120] or "unknown"
+
+
+class KeyedSessionMemory:
+    """Per-conversation history for the WhatsApp bridge.
+
+    Unlike ``SessionMemory`` (one global file for the single-user CLI), WhatsApp
+    has many independent conversations — one per DM and one per group. This keeps
+    a separate rolling history file per chat id under ``base_dir`` so a group's
+    context never leaks into a DM (and vice versa). Each file is a list of
+    ``"<who>: <text>"`` lines, reusing ``SessionMemory`` for the atomic-write and
+    capping behaviour. Privacy invariant is preserved: everything stays on disk
+    locally, nothing is sent anywhere.
+    """
+
+    def __init__(self, base_dir: str = "data/whatsapp_sessions", max_lines: int = 20):
+        self.base_dir = Path(base_dir)
+        if not self.base_dir.is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            self.base_dir = project_root / base_dir
+        self.max_lines = max_lines
+        self._stores: Dict[str, SessionMemory] = {}
+
+    def _store(self, chat_id: str) -> SessionMemory:
+        if chat_id not in self._stores:
+            path = self.base_dir / f"{_safe_key(chat_id)}.json"
+            self._stores[chat_id] = SessionMemory(str(path))
+        return self._stores[chat_id]
+
+    def recent(self, chat_id: str, limit: Optional[int] = None) -> List[str]:
+        """Return the most recent lines for a chat (oldest→newest)."""
+        history = self._store(chat_id).load() or []
+        limit = limit if limit is not None else self.max_lines
+        return history[-limit:]
+
+    def append(self, chat_id: str, line: str) -> None:
+        """Append one ``"<who>: <text>"`` line, capping the rolling window."""
+        store = self._store(chat_id)
+        history = store.load() or []
+        history.append(line)
+        store.save(history[-self.max_lines:])

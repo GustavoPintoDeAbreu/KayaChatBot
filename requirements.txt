@@ -52,6 +52,13 @@ xai-sdk==1.1.0
 # --- Web UI ---
 gradio==6.15.1
 
+# --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
+# fastapi/uvicorn/httpx ship transitively with gradio 6.15; pinned here so the
+# WhatsApp webhook server + WAHA client are explicit, reproducible deps.
+fastapi==0.136.3
+uvicorn==0.42.0
+httpx==0.28.1
+
 # --- Utilities ---
 tqdm==4.67.1
 python-dotenv==1.0.1

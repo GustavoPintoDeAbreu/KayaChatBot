@@ -178,6 +178,76 @@ services:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
 
   # ──────────────────────────────────────────────────────────────
+  # waha  [profile: whatsapp]
+  # Self-hosted WhatsApp HTTP API (https://waha.devlike.pro). Wraps the
+  # WhatsApp Web protocol behind REST + webhooks so the Python bridge speaks
+  # plain HTTP (no Node in our codebase). Links a DEDICATED number via QR at
+  # the WAHA dashboard (http://localhost:3000) — never the personal number.
+  # It POSTs inbound messages to the bridge running inside kaya-prod/kaya-dev
+  # (run that container with `python -m src.chat.whatsapp_server` instead of
+  # web_app.py). See WHATSAPP.md.
+  # Usage: docker compose --profile whatsapp up -d waha
+  # ──────────────────────────────────────────────────────────────
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: kaya-waha
+    profiles: [whatsapp]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"   # WAHA dashboard / REST — localhost only
+    volumes:
+      - ./data/waha:/app/.sessions   # persist the linked-device session
+    environment:
+      # NOWEB (Baileys, websocket) instead of the default browser-based WEBJS:
+      # no Chromium, far more stable on a server, reliable pairing-code linking.
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      # Auto-start a session named "default"; scan its QR at http://localhost:3000.
+      - WHATSAPP_START_SESSION=default
+      # WAHA pushes inbound messages to the bridge's webhook on the compose network.
+      - WHATSAPP_HOOK_URL=http://kaya-whatsapp:7860/whatsapp/webhook
+      - WHATSAPP_HOOK_EVENTS=message
+      - WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
+      # Stable dashboard/swagger login (otherwise WAHA generates a random password
+      # each boot). Reuses the web-app creds so the QR page at :3000 is easy to reach.
+      - WAHA_DASHBOARD_USERNAME=${KAYA_WEB_USER:-admin}
+      - WAHA_DASHBOARD_PASSWORD=${KAYA_WEB_PASS:-admin}
+      - WHATSAPP_SWAGGER_USERNAME=${KAYA_WEB_USER:-admin}
+      - WHATSAPP_SWAGGER_PASSWORD=${KAYA_WEB_PASS:-admin}
+      # Forward the shared secret so the bridge can verify the webhook.
+      # Format is Header:Value pairs separated by ';'.
+      - WHATSAPP_HOOK_CUSTOM_HEADERS=X-Webhook-Token:${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+
+  # ──────────────────────────────────────────────────────────────
+  # kaya-whatsapp  [profile: whatsapp]
+  # The bridge process: serves the Gradio UI AND the WhatsApp webhook on the
+  # same loaded model (python -m src.chat.whatsapp_server). Shares the single GPU
+  # with kaya-prod/kaya-dev — run only ONE of the three at a time.
+  # Usage: docker compose --profile whatsapp up -d waha kaya-whatsapp
+  # ──────────────────────────────────────────────────────────────
+  kaya-whatsapp:
+    extends:
+      service: kaya-base
+    container_name: kaya-whatsapp
+    profiles: [whatsapp]
+    depends_on: [waha]
+    ports:
+      - "7860:7860"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models/.cache
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - KAYA_WEB_PORT=7860
+      - KAYA_ENV=whatsapp
+      - KAYA_VERSION=${KAYA_VERSION:-unknown}
+      - KAYA_WAHA_URL=http://waha:3000
+      - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
+      - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+      - KAYA_WHATSAPP_DEBUG=${KAYA_WHATSAPP_DEBUG:-}
+    command: python -m src.chat.whatsapp_server
+
+  # ──────────────────────────────────────────────────────────────
   # kaya-test  [profile: test]
   # Runs the automated test suite inside the container against the
   # mounted source and data. No training/inference performed.
