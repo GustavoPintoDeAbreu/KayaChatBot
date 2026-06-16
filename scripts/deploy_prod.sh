@@ -42,17 +42,19 @@ fi
 export KAYA_VERSION="$(git rev-parse --short HEAD)"
 echo "🔖 Deploying commit $KAYA_VERSION"
 
-# Free the GPU: prod is the always-on env, so stop dev if it's up (one GPU).
-if docker ps --format '{{.Names}}' | grep -qx "kaya-dev"; then
-  echo "🛑 Stopping kaya-dev (shares the single GPU) ..."
-  docker compose --profile dev stop kaya-dev || true
-fi
+# Free the GPU and release container names/ports from any other env. dev and the
+# on-demand WhatsApp dev container (kaya-whatsapp) may belong to a DIFFERENT
+# compose project, so stop them by name. WAHA is recreated below in the prod
+# project (its linked-device session persists in the ./data/waha volume).
+echo "🛑 Stopping other envs that share the single GPU / names ..."
+docker rm -f kaya-dev kaya-whatsapp kaya-waha 2>/dev/null || true
 
 echo "🔨 Building image ..."
 docker compose build kaya-prod
 
-echo "🚀 (Re)starting prod + tunnel ..."
-docker compose --profile prod --profile tunnel up -d --force-recreate kaya-prod cloudflared
+# kaya-prod runs the WhatsApp bridge (UI + webhook); waha is its inbound gateway.
+echo "🚀 (Re)starting prod + WAHA + tunnel ..."
+docker compose --profile prod --profile tunnel up -d --force-recreate kaya-prod waha cloudflared
 
 echo
 echo "✅ Prod is now serving commit $KAYA_VERSION (ref: $REF)."
