@@ -4,6 +4,73 @@ Kept dependency-free so it can be imported and unit-tested without loading the
 model stack, and reused by every chat entry point (chat.py, web_app.py).
 """
 
+import re
+
+# Cues that a question is asking for an elaborate answer rather than a quick reply.
+# Used to raise the generation length budget only when warranted (see
+# ``wants_long_answer``). Kept conservative so normal chit-chat stays short.
+_LONG_ANSWER_CUES = (
+    "explica",
+    "explicar",
+    "descreve",
+    "descrever",
+    "conta",
+    "detalhe",
+    "detalhada",
+    "pormenor",
+    "lista",
+    "enumera",
+    "resume",
+    "resumo",
+    "porque",
+    "porquê",
+    "explain",
+    "describe",
+    "detail",
+    "list",
+    "summar",
+    "why",
+    "elaborate",
+)
+
+
+def wants_long_answer(text: str, long_word_threshold: int = 30) -> bool:
+    """Heuristic: does this message ask for an elaborate/long answer?
+
+    True when the message contains an elaboration cue (``explica``, ``descreve``,
+    ``lista``, ``why`` …) or is itself long (a detailed question tends to want a
+    detailed answer). Otherwise False → the caller keeps replies short and chatty.
+    Mirrors the lightweight keyword approach used by ``_has_temporal_intent`` in
+    the retriever.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(cue in lowered for cue in _LONG_ANSWER_CUES):
+        return True
+    return len(text.split()) >= long_word_threshold
+
+
+def truncate_history_line(line: str, max_words: int = 40) -> str:
+    """Shorten one ``"<who>: <text>"`` history line to its first ``max_words``.
+
+    Prior bot turns can be ~200-word paragraphs; pasted back verbatim as
+    ``"Conversa recente:"`` context they invite the model to copy them wholesale
+    (the observed "stuck" / repetition bug). Truncating to a gist keeps the
+    speaker label and enough context for continuity without handing the model a
+    block to regurgitate. The ``"<who>: "`` prefix is preserved and not counted.
+    """
+    if not line:
+        return line
+    who, sep, body = line.partition(": ")
+    if not sep:  # no label — treat the whole line as body
+        who, body = "", line
+    words = body.split()
+    if len(words) <= max_words:
+        return line
+    snippet = " ".join(words[:max_words]) + " …"
+    return f"{who}{sep}{snippet}" if sep else snippet
+
 
 def coerce_text(content) -> str:
     """Flatten a chat message ``content`` into a plain string.
@@ -52,6 +119,15 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
         if cleaned.lower().startswith(label.lower()):
             cleaned = cleaned[len(label):].lstrip()
             break
+
+    # 1b. Drop a leading stage-direction the model sometimes echoes from the prompt,
+    #     e.g. "[reply as Gustavo] …" / "[responde como Gustavo] …".
+    cleaned = re.sub(
+        r"^\[\s*(?:reply as|responde como|respond as)\b[^\]]*\]\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
 
     # 2. Cut at the first hallucinated user turn, keeping all prior lines.
     user_turn_labels = [f"{user_name}:", "User:", "Utilizador:"]

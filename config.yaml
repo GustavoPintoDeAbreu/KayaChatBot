@@ -233,11 +233,16 @@ training:
 
 # Inference Settings
 inference:
-  max_new_tokens: 768  # Raised from 512 so answers can synthesize/elaborate, not just quote
+  max_new_tokens: 768  # Elaboration ceiling — used when a question explicitly asks for detail
+  max_new_tokens_default: 256  # Chatty default; replies stay short unless detail is requested
   temperature: 1.0
   top_p: 0.95
   top_k: 64
-  repetition_penalty: 1.0
+  repetition_penalty: 1.2      # >1 discourages verbatim regurgitation of prior turns
+  no_repeat_ngram_size: 3      # Hard-block any repeated 3-gram (kills copy-the-last-answer loops)
+  # Steers default replies short & chatty (WhatsApp). Dropped automatically when the
+  # question asks for detail (see response_utils.wants_long_answer). Set "" to disable.
+  brevity_hint: "Responde de forma breve, direta e natural, em 1 a 3 frases, como numa conversa de WhatsApp. Só te alongas se te pedirem explicitamente."
 
 # Chat Settings
 chat:
@@ -288,7 +293,7 @@ whatsapp:
   bot_jid: ""                 # the bot number's JID; left blank → auto-learned from WAHA (incl. its @lid)
   webhook_token: ""           # shared secret; WAHA must send it as the X-Webhook-Token header
   send_seen: true             # show read receipt + typing indicator before replying
-  history_turns: 10           # how many recent lines of per-chat history to feed the model
+  history_turns: 6            # how many recent lines of per-chat history to feed the model
   sessions_dir: "data/whatsapp_sessions"
   group:
     respond_on_mention: true
