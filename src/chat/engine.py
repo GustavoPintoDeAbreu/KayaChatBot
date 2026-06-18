@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.chat.gpu_lock import gpu_section
-from src.chat.response_utils import build_member_prompt_suffix, clean_response
+from src.chat.response_utils import (
+    build_member_prompt_suffix,
+    clean_response,
+    truncate_history_line,
+    wants_long_answer,
+)
 
 
 def build_system_prompt(
@@ -147,7 +152,10 @@ class KayaEngine:
         if context:
             parts.append(context)
         if recent_lines:
-            parts.append("Conversa recente:\n" + "\n".join(recent_lines))
+            # Truncate prior turns to a gist so the model can't copy its own long
+            # previous answers back verbatim (the repetition / "stuck" bug).
+            trimmed = [truncate_history_line(line) for line in recent_lines]
+            parts.append("Conversa recente:\n" + "\n".join(trimmed))
         parts.append(f"{speaker_label}: {message}")
         return "\n\n".join(parts), context
 
@@ -165,8 +173,25 @@ class KayaEngine:
         the display name of who is talking, used both as the prompt label and to
         trim any hallucinated continuation in ``clean_response``.
         """
+        # Dynamic length: short & chatty by default, raised to the elaboration
+        # ceiling only when the question actually asks for detail. An explicit
+        # caller-supplied cap always wins.
+        wants_long = wants_long_answer(message)
+        if max_new_tokens is None:
+            if wants_long:
+                max_new_tokens = self._inf.get("max_new_tokens", 512)
+            else:
+                max_new_tokens = self._inf.get(
+                    "max_new_tokens_default", min(256, self._inf.get("max_new_tokens", 512))
+                )
+
         with gpu_section(self.config):
             user_turn, _context = self.build_user_turn(message, recent_lines, speaker_label=speaker)
+            # A token cap alone won't make replies feel chatty — the model writes full
+            # paragraphs well under it. Steer brevity explicitly unless detail was asked.
+            brevity_hint = self._inf.get("brevity_hint", "")
+            if brevity_hint and not wants_long:
+                user_turn += f"\n\n({brevity_hint})"
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_turn},
@@ -177,12 +202,13 @@ class KayaEngine:
             inputs = self.tokenizer(text=[prompt], return_tensors="pt").to("cuda")
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens or self._inf.get("max_new_tokens", 512),
+                max_new_tokens=max_new_tokens,
                 temperature=self._inf.get("temperature", 1.0),
                 do_sample=True,
                 top_p=self._inf.get("top_p", 0.95),
                 top_k=self._inf.get("top_k", 64),
                 repetition_penalty=self._inf.get("repetition_penalty", 1.0),
+                no_repeat_ngram_size=self._inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,
             )
             generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
