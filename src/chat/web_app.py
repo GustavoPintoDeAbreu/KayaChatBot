@@ -147,6 +147,7 @@ def bot_stream(history: list):
                 top_p=_inf.get("top_p", 0.95),
                 top_k=_inf.get("top_k", 64),
                 repetition_penalty=_inf.get("repetition_penalty", 1.0),
+                no_repeat_ngram_size=_inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,
             )
 
