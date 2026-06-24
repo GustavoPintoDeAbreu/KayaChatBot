@@ -24,7 +24,7 @@ from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
 from src.chat.engine import get_engine, build_system_prompt
 from src.chat import metrics
-from src.chat.web_search import maybe_web_search
+from src.chat.web_search import maybe_web_search, WebSearchResult
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _docker_cfg = "/app/config.yaml"
@@ -74,10 +74,10 @@ _BUSY_MESSAGE = (
 
 
 def _build_user_turn(message: str, history: list) -> tuple:
-    """Return (user_message_full, context) for a turn.
+    """Return (user_message_full, context, web_result) for a turn.
 
     ``history`` is the prior chat (list of {"role","content"} dicts) excluding the
-    current message.
+    current message. ``web_result`` is a ``WebSearchResult`` (used=False when none ran).
     """
     context = ""
     if rag_enabled and retriever:
@@ -91,12 +91,11 @@ def _build_user_turn(message: str, history: list) -> tuple:
         parts.append(context)
     # Out-of-group / general-knowledge questions: augment with live web results
     # (no-op unless web_search is enabled + a key is set + the query is off-topic).
-    web_used = False
+    web_result = WebSearchResult()
     if retriever:
-        web_block = maybe_web_search(message, retriever, config)
-        if web_block:
-            parts.append(web_block)
-            web_used = True
+        web_result = maybe_web_search(message, retriever, config)
+        if web_result.used:
+            parts.append(web_result.context)
     if history:
         recent_lines = []
         for item in history[-4:]:
@@ -108,7 +107,7 @@ def _build_user_turn(message: str, history: list) -> tuple:
         if recent_lines:
             parts.append("Conversa recente:\n" + "\n".join(recent_lines))
     parts.append(f"User: {message}")
-    return "\n\n".join(parts), context, web_used
+    return "\n\n".join(parts), context, web_result
 
 
 def bot_stream(history: list):
@@ -126,7 +125,7 @@ def bot_stream(history: list):
     # past the timeout, degrade to a friendly busy message instead of hanging.
     try:
         with gpu_section(config):
-            user_message_full, context, web_used = _build_user_turn(message, prior)
+            user_message_full, context, web_result = _build_user_turn(message, prior)
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -161,6 +160,9 @@ def bot_stream(history: list):
                 yield history, context
 
             cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
+            # Append a source line so the user can see the answer is web-grounded.
+            if web_result.used and web_result.citation_line():
+                cleaned = f"{cleaned}\n\n{web_result.citation_line()}"
             history[-1]["content"] = cleaned
             yield history, context
         metrics.log_interaction(
@@ -168,7 +170,7 @@ def bot_stream(history: list):
             user_message=message,
             assistant_response=cleaned,
             latency_ms=(time.perf_counter() - _t0) * 1000.0,
-            web_search_used=web_used,
+            web_search_used=web_result.used,
         )
     except GpuBusyError:
         history = history + [{"role": "assistant", "content": _BUSY_MESSAGE}]

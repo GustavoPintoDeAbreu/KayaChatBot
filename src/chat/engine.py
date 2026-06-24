@@ -134,11 +134,14 @@ class KayaEngine:
     def build_user_turn(
         self, message: str, recent_lines: Optional[List[str]] = None, speaker_label: str = "User"
     ) -> tuple:
-        """Return ``(user_message_full, context)`` for one turn.
+        """Return ``(user_message_full, context, web_result)`` for one turn.
 
         ``recent_lines`` is a list of already-formatted ``"<who>: <text>"`` lines.
         The RAG context is retrieved fresh for every turn (RAG is always-on).
+        ``web_result`` is a ``WebSearchResult`` (``used=False`` when no web search ran).
         """
+        from src.chat.web_search import maybe_web_search, WebSearchResult
+
         context = ""
         if self.rag_enabled and self.retriever:
             try:
@@ -153,20 +156,18 @@ class KayaEngine:
             parts.append(context)
         # Out-of-group / general-knowledge questions: augment with live web results
         # (no-op unless web_search is enabled + a key is set + the query is off-topic).
-        web_block = ""
+        web_result = WebSearchResult()
         if self.retriever:
-            from src.chat.web_search import maybe_web_search
-
-            web_block = maybe_web_search(message, self.retriever, self.config)
-            if web_block:
-                parts.append(web_block)
+            web_result = maybe_web_search(message, self.retriever, self.config)
+            if web_result.used:
+                parts.append(web_result.context)
         if recent_lines:
             # Truncate prior turns to a gist so the model can't copy its own long
             # previous answers back verbatim (the repetition / "stuck" bug).
             trimmed = [truncate_history_line(line) for line in recent_lines]
             parts.append("Conversa recente:\n" + "\n".join(trimmed))
         parts.append(f"{speaker_label}: {message}")
-        return "\n\n".join(parts), context
+        return "\n\n".join(parts), context, web_result
 
     def generate_reply(
         self,
@@ -195,7 +196,9 @@ class KayaEngine:
                 )
 
         with gpu_section(self.config):
-            user_turn, _context = self.build_user_turn(message, recent_lines, speaker_label=speaker)
+            user_turn, _context, web_result = self.build_user_turn(
+                message, recent_lines, speaker_label=speaker
+            )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
             brevity_hint = self._inf.get("brevity_hint", "")
@@ -223,7 +226,13 @@ class KayaEngine:
             generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
             raw = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-        return clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
+        reply = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
+        # Append a source line so the user can see the answer is web-grounded.
+        if web_result.used:
+            citation = web_result.citation_line()
+            if citation:
+                reply = f"{reply}\n\n{citation}"
+        return reply
 
 
 _engine_instance: Optional[KayaEngine] = None
