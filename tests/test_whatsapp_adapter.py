@@ -246,6 +246,23 @@ def test_history_isolated_between_dm_and_group(tmp_path):
     assert grp["reply"].startswith("reply[Alice|0]")
 
 
+def test_history_isolated_between_two_dms(tmp_path):
+    """Two different people DMing the bot must never share context.
+
+    Guards the privacy guarantee: KeyedSessionMemory keys history by chat_id, so
+    one user's conversation can't bleed into another's.
+    """
+    adapter, _ = make_adapter(tmp_path)
+    # Alice has a 2-line exchange in her DM.
+    adapter.handle_event(dm_event("olá sou a Alice", sender=ALICE, name="Alice"))
+    # Bob's first DM must see zero prior lines (his own fresh context).
+    bob = adapter.handle_event(dm_event("e eu sou o Bob", sender="351922222222@c.us", name="Bob"))
+    assert bob["reply"].startswith("reply[Bob|0]")
+    # Alice's next turn still sees only her own history (2 lines), not Bob's.
+    alice2 = adapter.handle_event(dm_event("ainda aqui", sender=ALICE, name="Alice"))
+    assert alice2["reply"].startswith("reply[Alice|2]")
+
+
 # ── DM whitelist (anti-spam) ────────────────────────────────────────────────────
 def _wl(**extra):
     return {"enabled": True, "dm_only": True, "allowed": ["351911111111"], **extra}
