@@ -164,6 +164,17 @@ class WhatsAppAdapter:
         self.respond_on_reply = bool(group_cfg.get("respond_on_reply", True))
         # phone/JID -> display name, so the model knows who is speaking
         self.contacts = {_normalize_jid(k): v for k, v in (wcfg.get("contacts", {}) or {}).items()}
+        # DM anti-spam whitelist. When enabled, direct messages are only answered
+        # for sender numbers in ``allowed`` (groups stay governed by @mention). The
+        # numbers are loaded from the gitignored data/whatsapp_whitelist.json and
+        # merged into ``whatsapp.whitelist.allowed`` by whatsapp_server at startup.
+        whitelist_cfg = wcfg.get("whitelist", {}) or {}
+        self.whitelist_enabled = bool(whitelist_cfg.get("enabled", False))
+        self.whitelist_dm_only = bool(whitelist_cfg.get("dm_only", True))
+        self.whitelist_numbers = {
+            _phone_from_alt(n) for n in (whitelist_cfg.get("allowed", []) or []) if n
+        }
+        self.clear_commands = {"/clear", "/limpar"}
         self.history_turns = int(wcfg.get("history_turns", 10))
         self.send_seen = bool(wcfg.get("send_seen", True))
         # Messages older than this (unix seconds) are ignored — set on startup so a
@@ -183,7 +194,7 @@ class WhatsAppAdapter:
         if self.ignore_before_ts and msg.timestamp and msg.timestamp < self.ignore_before_ts:
             return False
         if not msg.is_group:
-            return True  # DM: always
+            return self._dm_allowed(msg)  # DM: gated by whitelist when enabled
         mentioned = (
             self.respond_on_mention
             and bool(self.bot_jids.intersection(msg.mentioned_ids))
@@ -194,6 +205,22 @@ class WhatsAppAdapter:
             and msg.reply_to_participant in self.bot_jids
         )
         return bool(mentioned or replied)
+
+    def _dm_allowed(self, msg: InboundMessage) -> bool:
+        """Anti-spam gate for direct messages.
+
+        When the whitelist is disabled the bot answers every DM (original
+        behaviour). When enabled, only DMs from whitelisted numbers are answered;
+        everyone else is silently ignored so a leaked number can't be spammed.
+        """
+        if not self.whitelist_enabled:
+            return True
+        candidates = {
+            _phone_from_alt(msg.sender_phone),
+            _phone_from_alt(msg.sender_id),
+            msg.sender_id.split("@", 1)[0].strip().lower(),
+        }
+        return bool(candidates & self.whitelist_numbers)
 
     # ── speaker identity ──────────────────────────────────────────────────────
     def resolve_speaker(self, msg: InboundMessage) -> str:
@@ -251,6 +278,14 @@ class WhatsAppAdapter:
         if not text:
             return None
 
+        # ``/clear`` (or ``/limpar``): wipe this chat's recent context so the bot
+        # stops fixating on prior turns. Handled before generation; not stored.
+        if text.strip().lower() in self.clear_commands:
+            self.session_store._store(msg.chat_id).clear()
+            reply = "Contexto limpo — esqueci as mensagens recentes desta conversa."
+            self.waha_client.send_text(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply, "command": "clear"}
+
         if self.send_seen:
             self.waha_client.send_seen(msg.chat_id)
             self.waha_client.start_typing(msg.chat_id)
@@ -273,4 +308,10 @@ class WhatsAppAdapter:
         reply_to = msg.message_id if msg.is_group else None
         self.waha_client.send_text(msg.chat_id, reply, reply_to=reply_to)
 
-        return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply}
+        return {
+            "chat_id": msg.chat_id,
+            "speaker": speaker,
+            "reply": reply,
+            "user_text": text,
+            "is_group": msg.is_group,
+        }

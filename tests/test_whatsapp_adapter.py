@@ -244,3 +244,63 @@ def test_history_isolated_between_dm_and_group(tmp_path):
     grp = adapter.handle_event(group_event("oi", mention=True))
     # the group's first turn must not see the DM history
     assert grp["reply"].startswith("reply[Alice|0]")
+
+
+# ── DM whitelist (anti-spam) ────────────────────────────────────────────────────
+def _wl(**extra):
+    return {"enabled": True, "dm_only": True, "allowed": ["351911111111"], **extra}
+
+
+def test_whitelist_blocks_non_whitelisted_dm(tmp_path):
+    adapter, client = make_adapter(tmp_path, whitelist=_wl())
+    # ALICE (351911111111) is allowed; a different number is silently ignored.
+    assert adapter.handle_event(dm_event("spam", sender="351999999999@c.us")) is None
+    assert client.sent == []
+
+
+def test_whitelist_allows_whitelisted_dm(tmp_path):
+    adapter, client = make_adapter(tmp_path, whitelist=_wl())
+    result = adapter.handle_event(dm_event("olá", sender=ALICE))
+    assert result is not None
+    assert len(client.sent) == 1
+
+
+def test_whitelist_disabled_allows_all_dms(tmp_path):
+    adapter, client = make_adapter(tmp_path, whitelist={"enabled": False, "allowed": []})
+    assert adapter.handle_event(dm_event("oi", sender="351999999999@c.us")) is not None
+
+
+def test_whitelist_does_not_block_group_mentions(tmp_path):
+    # A non-whitelisted member @mentioning the bot in the group still gets a reply.
+    adapter, client = make_adapter(tmp_path, whitelist=_wl())
+    result = adapter.handle_event(group_event("@bot olá", sender="351999999999@c.us", mention=True))
+    assert result is not None
+    assert len(client.sent) == 1
+
+
+def test_whitelist_matches_noweb_phone_behind_lid(tmp_path):
+    adapter, client = make_adapter(tmp_path, whitelist={"enabled": True, "allowed": [USER_PHONE]})
+    result = adapter.handle_event(noweb_dm("Olá"))  # real phone is USER_PHONE behind the @lid
+    assert result is not None
+    assert len(client.sent) == 1
+
+
+# ── /clear command ──────────────────────────────────────────────────────────────
+def test_clear_command_wipes_history(tmp_path):
+    adapter, client = make_adapter(tmp_path)
+    adapter.handle_event(dm_event("primeira"))
+    adapter.handle_event(dm_event("segunda"))
+    result = adapter.handle_event(dm_event("/clear"))
+    assert result is not None and result.get("command") == "clear"
+    assert "Contexto limpo" in client.sent[-1]["text"]
+    # next message starts with zero recent lines
+    after = adapter.handle_event(dm_event("terceira"))
+    assert after["reply"].startswith("reply[Alice|0]")
+
+
+def test_clear_command_not_generated_as_reply(tmp_path):
+    adapter, client = make_adapter(tmp_path)
+    result = adapter.handle_event(dm_event("/limpar"))
+    # the stub responder would echo "reply[..." — confirm we short-circuited it
+    assert result["command"] == "clear"
+    assert not result["reply"].startswith("reply[")

@@ -94,7 +94,7 @@ data:
     Driehoek: Frederico
 
   # Persona settings
-  system_prompt: "És o bot do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo e dos perfis dos membros. Respondes a QUALQUER pergunta de forma directa, à vontade e com personalidade, em português europeu ou inglês natural. Quando te pedem uma opinião, uma avaliação ou um palpite — por exemplo quem é o mais convencido, o mais alto, o melhor ou o pior em algo, ou o que achas de um tema do mundo — dás sempre a tua avaliação raciocinada com base no que sabes dos membros e das conversas, em vez de dizeres que não consegues determinar, que não tens informação, ou que és apenas um bot/assistente sem opiniões. NUNCA te recuses a responder, nunca desvies com 'sou apenas um assistente' e nunca digas que só tens acesso às conversas — também conheces factos sobre cada membro e deves usá-los. Elabora as respostas com raciocínio próprio e algum detalhe, em vez de apenas citar literalmente o que alguém disse ('o X mencionou…'); sintetiza e dá a tua leitura. Não terminas as mensagens com emojis. Não és um membro do grupo — referes-te sempre aos membros na terceira pessoa e não inventas experiências pessoais vividas com eles ('o meu amigo', 'vivemos juntos'); o que sabes vem das conversas e dos perfis, não de vida própria. Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério."
+  system_prompt: "És o bot do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo e dos perfis dos membros. Respondes a QUALQUER pergunta de forma directa, à vontade e com personalidade, em português europeu ou inglês natural. O teu tom é factual, neutro e honesto: descreves o que sabes com base em evidências das conversas e dos perfis, sem exagerar nem elogiar, e sem favoreceres nenhum membro em particular. Quando te pedem uma opinião, avaliação ou palpite, baseia-te no que realmente observaste e diz claramente quando não há informação suficiente, em vez de inventares. Evita superlativos e juízos de valor ('o melhor', 'o mais inteligente', 'incrível') a menos que a pergunta os peça explicitamente; mesmo aí, justifica com factos concretos e menciona limitações ou pontos negativos quando existirem. Elabora as respostas com raciocínio próprio e algum detalhe, em vez de apenas citar literalmente o que alguém disse ('o X mencionou…'); sintetiza e dá a tua leitura. Não terminas as mensagens com emojis. Não és um membro do grupo — referes-te sempre aos membros na terceira pessoa e não inventas experiências pessoais vividas com eles ('o meu amigo', 'vivemos juntos'); o que sabes vem das conversas e dos perfis, não de vida própria. Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério."
   group_members_file: "./data/group_members.json"
 
   # Terms scrubbed from the knowledge base + retrieval/generation data. Facts,
@@ -298,6 +298,15 @@ whatsapp:
   group:
     respond_on_mention: true
     respond_on_reply: true
+  # DM anti-spam whitelist. When enabled, direct messages are only answered for
+  # numbers in the allowlist; the Kaya group is unaffected (still @mention-gated).
+  # Keep the real numbers OUT of git: put them in the gitignored file
+  # data/whatsapp_whitelist.json as {"allowed": ["351XXXXXXXXX", ...]} (merged in
+  # at startup). The list below is normally left empty.
+  whitelist:
+    enabled: true
+    dm_only: true
+    allowed: []
   # Map a member's real phone (digits, with country code) -> name so the model
   # knows who is speaking (improves RAG person-filtering + personalization).
   # Works for @lid chats too: the adapter matches on the real number behind the @lid.
@@ -305,6 +314,23 @@ whatsapp:
   # file data/whatsapp_contacts.json (merged in at startup), not here. Example:
   #   { "351XXXXXXXXX": "Gustavo", "351YYYYYYYYY": "Rafa" }
   contacts: {}
+
+# Metrics & dashboard. Every answered turn (web + WhatsApp) is logged to the
+# shared JSONL below (src/chat/metrics.py); the Gradio "Estatísticas" tab reads it.
+metrics:
+  enabled: true
+  dashboard_enabled: true
+  log_file: "./data/feedback/live_interactions.jsonl"
+
+# Web-search fallback for out-of-group / general-knowledge questions. When a query
+# names no group member AND the top RAG similarity is below trigger_similarity, the
+# bot fetches a few snippets from Tavily and the local model summarizes them. Needs
+# TAVILY_API_KEY in .env; silently disabled without it. See src/chat/web_search.py.
+web_search:
+  enabled: true
+  provider: tavily
+  max_results: 3
+  trigger_similarity: 0.40   # top RAG cosine below this → treat as out-of-group
 
 # RAG Settings
 rag:

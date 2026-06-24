@@ -97,11 +97,15 @@ def mine_questions(
 # never emits emojis — the two things the group complained about.
 GEN_INSTRUCTION = (
     "\n\nINSTRUÇÕES DE GERAÇÃO: Responde à pergunta com uma resposta sintetizada, "
-    "com raciocínio próprio e personalidade. NUNCA cites literalmente as mensagens "
+    "com raciocínio próprio. NUNCA cites literalmente as mensagens "
     "('o X disse:', 'o X mencionou:') — combina a informação e dá a tua leitura. "
-    "Quando te pedem um palpite, opinião ou avaliação (ex: quem é o mais X do "
-    "grupo), dá-o sempre com base no que sabes. Escreve em português europeu, ou "
-    "em inglês se a pergunta for em inglês. Não uses emojis. 2 a 5 frases."
+    "O tom é factual e neutro, NÃO entusiasmado nem elogioso, e não favorece nenhum "
+    "membro em particular. Para palpites, opiniões ou avaliações (ex: quem é o mais X "
+    "do grupo), baseia-te só no que observaste e diz claramente se não há evidência "
+    "suficiente — não inventes para agradar. Evita superlativos e elogios ('o melhor', "
+    "'incrível') a menos que a pergunta os peça; mesmo aí, justifica com factos e "
+    "menciona pontos negativos ou limitações quando existirem. Escreve em português "
+    "europeu, ou em inglês se a pergunta for em inglês. Não uses emojis. 2 a 5 frases."
 )
 
 

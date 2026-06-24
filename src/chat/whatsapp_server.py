@@ -29,6 +29,7 @@ from src.chat.engine import get_engine, build_system_prompt
 from src.chat.gpu_lock import GpuBusyError
 from src.chat.whatsapp_adapter import WhatsAppAdapter
 from src.chat.waha_client import WahaClient, MockWahaClient
+from src.chat import metrics
 
 _docker_cfg = "/app/config.yaml"
 _local_cfg = str(Path(__file__).parent.parent.parent / "config.yaml")
@@ -49,6 +50,24 @@ if _contacts_path.exists():
         print(f"✓ Loaded {len(_local_contacts)} WhatsApp contact name(s) from {_contacts_path.name}")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_contacts_path}: {exc}")
+
+# Merge the DM anti-spam whitelist from a gitignored local file (PII stays out of
+# git). Shape: {"allowed": ["351913227550", ...]}. Only used when
+# whatsapp.whitelist.enabled is true; see config.yaml whatsapp.whitelist.
+_whitelist_path = Path(config_path).parent / "data" / "whatsapp_whitelist.json"
+if _whitelist_path.exists():
+    import json as _json
+
+    try:
+        _wl = _json.loads(_whitelist_path.read_text(encoding="utf-8"))
+        _allowed = _wl.get("allowed", _wl) if isinstance(_wl, dict) else _wl
+        _wcfg.setdefault("whitelist", {})
+        merged = list({*(_wcfg["whitelist"].get("allowed") or []), *(_allowed or [])})
+        _wcfg["whitelist"]["allowed"] = merged
+        print(f"✓ Loaded {len(_allowed or [])} WhatsApp whitelist number(s) from {_whitelist_path.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not read {_whitelist_path}: {exc}")
+
 MOCK_MODE = os.environ.get("KAYA_WHATSAPP_MOCK", "").lower() in ("1", "true", "yes") or bool(
     _wcfg.get("mock_mode", False)
 )
@@ -96,8 +115,17 @@ def outbox():
 
 
 def _process(event: dict):
+    t0 = time.perf_counter()
     try:
-        adapter.handle_event(event, system_prompt=_system_prompt)
+        result = adapter.handle_event(event, system_prompt=_system_prompt)
+        if result and result.get("reply") and result.get("command") != "clear":
+            metrics.log_interaction(
+                source="whatsapp",
+                user_message=result.get("user_text", ""),
+                assistant_response=result["reply"],
+                latency_ms=(time.perf_counter() - t0) * 1000.0,
+                is_group=bool(result.get("is_group")),
+            )
     except GpuBusyError:
         print("⚠️  GPU busy — dropped a WhatsApp message rather than queueing it.")
     except Exception as exc:  # noqa: BLE001 — never crash the webhook worker
