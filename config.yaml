@@ -196,10 +196,10 @@ model:
 
 # Training Settings
 training:
-  output_dir: "./models/kaya_gemma4_synth_v14"
+  output_dir: "./models/kaya_gemma4_synth_v15"
   
-  # Training hyperparameters (v14: ~1489 on-prem synthesized examples, eff. batch 8)
-  max_steps: 930  # ~5 epochs over 1489 examples — small dataset, avoid overfit
+  # Training hyperparameters (v15: 549 on-prem synthesized examples, eff. batch 8)
+  max_steps: 300  # ~4-5 epochs over 549 examples (~69 steps/epoch) — avoid overfit
   per_device_train_batch_size: 1  # Reduced due to longer multi-turn conversations
   gradient_accumulation_steps: 8  # Effective batch size = 1 * 8 = 8
 
@@ -214,8 +214,8 @@ training:
   # Logging and checkpointing. save_steps == eval_steps so every eval has a
   # checkpoint and load_best_model_at_end can restore the lowest-val-loss one.
   logging_steps: 20
-  save_steps: 90   # ~every half-epoch (1489/8 ≈ 186 steps/epoch)
-  eval_steps: 90
+  save_steps: 75   # ~every epoch (549/8 ≈ 69 steps/epoch)
+  eval_steps: 75
   
   # Mixed precision
   fp16: false  # Will be auto-detected
@@ -441,7 +441,7 @@ model_profiles:
         - "up_proj"
         - "down_proj"
     training:
-      output_dir: "./models/kaya_gemma4_synth_v14"
+      output_dir: "./models/kaya_gemma4_synth_v15"
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
