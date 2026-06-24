@@ -59,7 +59,7 @@ def build_system_prompt(
             members_path = Path(config_path).parent / members_file
         if members_path.exists():
             members_data = json.loads(members_path.read_text(encoding="utf-8"))
-            system_prompt += build_member_prompt_suffix(members_data)
+            system_prompt += build_member_prompt_suffix(members_data, shuffle=True)
 
     system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
     return system_prompt
@@ -151,6 +151,15 @@ class KayaEngine:
         parts = []
         if context:
             parts.append(context)
+        # Out-of-group / general-knowledge questions: augment with live web results
+        # (no-op unless web_search is enabled + a key is set + the query is off-topic).
+        web_block = ""
+        if self.retriever:
+            from src.chat.web_search import maybe_web_search
+
+            web_block = maybe_web_search(message, self.retriever, self.config)
+            if web_block:
+                parts.append(web_block)
         if recent_lines:
             # Truncate prior turns to a gist so the model can't copy its own long
             # previous answers back verbatim (the repetition / "stuck" bug).

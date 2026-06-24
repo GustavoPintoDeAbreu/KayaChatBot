@@ -158,3 +158,4 @@ reports/benchmarks/benchmark_*.json
 data/waha/
 data/whatsapp_sessions/
 data/whatsapp_contacts.json
+data/whatsapp_whitelist.json
