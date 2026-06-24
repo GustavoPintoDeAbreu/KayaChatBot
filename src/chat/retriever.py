@@ -469,6 +469,37 @@ class ConversationRetriever:
 
         return "\n\n".join(context_parts)
 
+    def best_similarity(self, query: str, query_embedding=None) -> float:
+        """Top cosine similarity for ``query`` across both collections.
+
+        A cheap relevance probe used to decide whether a question is *about the
+        group* at all: a low best score means RAG has nothing close, i.e. it's a
+        general-knowledge / out-of-group question (the web-search trigger). Returns
+        the max top-1 similarity over the conversation + knowledge collections, or
+        0.0 if nothing is available. No person filter / no min_similarity floor —
+        we want the raw best match.
+        """
+        if not self.encoder:
+            return 0.0
+        if query_embedding is None:
+            query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+        best = 0.0
+        for collection in (self.collection, self.knowledge_collection):
+            if not collection:
+                continue
+            try:
+                if collection.count() == 0:
+                    continue
+                res = collection.query(
+                    query_embeddings=[query_embedding], n_results=1, include=['distances']
+                )
+                dists = (res.get('distances') or [[]])[0]
+                if dists:
+                    best = max(best, 1 - dists[0])  # cosine distance → similarity
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️  best_similarity probe failed: {exc}")
+        return best
+
     def get_stats(self) -> Dict[str, Any]:
         """Get retriever statistics."""
         if not self.collection:

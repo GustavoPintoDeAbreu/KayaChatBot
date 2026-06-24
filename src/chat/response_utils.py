@@ -4,6 +4,7 @@ Kept dependency-free so it can be imported and unit-tested without loading the
 model stack, and reused by every chat entry point (chat.py, web_app.py).
 """
 
+import random
 import re
 
 # Cues that a question is asking for an elaborate answer rather than a quick reply.
@@ -141,7 +142,7 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
     return "\n".join(kept_lines).strip()
 
 
-def build_member_prompt_suffix(members_data: dict) -> str:
+def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -151,9 +152,17 @@ def build_member_prompt_suffix(members_data: dict) -> str:
     actually has the member details at inference time — not just names. The phrasing
     is deliberately conversational (no "(também conhecido como: …)" template) so the
     model doesn't echo a typed-looking list back at the user.
+
+    ``shuffle`` randomizes the member order each call. The live inference path sets
+    this so no single member is always listed first (the early/first-mention slot
+    gets disproportionate model attention, which fed the "favours one member" bias);
+    deterministic callers (benchmark, training-data generation) leave it False.
     """
+    members = list(members_data.get("members", []))
+    if shuffle:
+        random.shuffle(members)
     lines = []
-    for member in members_data.get("members", []):
+    for member in members:
         name = member["name"]
         aliases = [a for a in member.get("aliases", []) if a.lower() != name.lower()]
         line = f"- {name}"
