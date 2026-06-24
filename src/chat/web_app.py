@@ -7,6 +7,7 @@ data/feedback/live_interactions.jsonl via the same logger used by chat.py.
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,8 @@ from src.chat.response_utils import clean_response, coerce_text as _coerce_text
 from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
 from src.chat.engine import get_engine, build_system_prompt
+from src.chat import metrics
+from src.chat.web_search import maybe_web_search
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _docker_cfg = "/app/config.yaml"
@@ -45,22 +48,9 @@ knowledge_approach = _engine.knowledge_approach
 # WhatsApp bridge builds its own prompt via build_system_prompt() at startup.
 system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
 
-# ── Interaction logger ────────────────────────────────────────────────────────
-_log_dir = Path(config_path).parent / "data" / "feedback"
-_log_dir.mkdir(parents=True, exist_ok=True)
-_log_file = _log_dir / "live_interactions.jsonl"
-
-
-def _log_interaction(user_message: str, assistant_response: str) -> None:
-    entry = {
-        "interaction_id": str(uuid.uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "user_message": user_message,
-        "assistant_response": assistant_response,
-    }
-    with open(_log_file, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
+# Interaction logging now lives in src/chat/metrics.py (shared with the WhatsApp
+# bridge), which writes the same data/feedback/live_interactions.jsonl plus
+# latency/length/source for the Estatísticas dashboard.
 
 # ── Inference ────────────────────────────────────────────────────────────────
 _inf = config.get("inference", {})
@@ -99,6 +89,14 @@ def _build_user_turn(message: str, history: list) -> tuple:
     parts = []
     if context:
         parts.append(context)
+    # Out-of-group / general-knowledge questions: augment with live web results
+    # (no-op unless web_search is enabled + a key is set + the query is off-topic).
+    web_used = False
+    if retriever:
+        web_block = maybe_web_search(message, retriever, config)
+        if web_block:
+            parts.append(web_block)
+            web_used = True
     if history:
         recent_lines = []
         for item in history[-4:]:
@@ -110,7 +108,7 @@ def _build_user_turn(message: str, history: list) -> tuple:
         if recent_lines:
             parts.append("Conversa recente:\n" + "\n".join(recent_lines))
     parts.append(f"User: {message}")
-    return "\n\n".join(parts), context
+    return "\n\n".join(parts), context, web_used
 
 
 def bot_stream(history: list):
@@ -120,6 +118,7 @@ def bot_stream(history: list):
     """
     message = _coerce_text(history[-1]["content"])
     prior = history[:-1]
+    _t0 = time.perf_counter()
 
     # Serialize all GPU work (RAG retrieval + streaming generation) behind the
     # shared lock so concurrent users don't race on CUDA. Held for the whole
@@ -127,7 +126,7 @@ def bot_stream(history: list):
     # past the timeout, degrade to a friendly busy message instead of hanging.
     try:
         with gpu_section(config):
-            user_message_full, context = _build_user_turn(message, prior)
+            user_message_full, context, web_used = _build_user_turn(message, prior)
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -164,7 +163,13 @@ def bot_stream(history: list):
             cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
             history[-1]["content"] = cleaned
             yield history, context
-        _log_interaction(message, cleaned)
+        metrics.log_interaction(
+            source="web",
+            user_message=message,
+            assistant_response=cleaned,
+            latency_ms=(time.perf_counter() - _t0) * 1000.0,
+            web_search_used=web_used,
+        )
     except GpuBusyError:
         history = history + [{"role": "assistant", "content": _BUSY_MESSAGE}]
         yield history, ""
@@ -213,6 +218,24 @@ _env_label = os.environ.get("KAYA_ENV", "")
 _version = os.environ.get("KAYA_VERSION", "unknown")
 _version_line = f"\n\n<sub>{_env_label + ' · ' if _env_label else ''}commit `{_version}`</sub>"
 
+def _load_stats():
+    """Build the dashboard markdown + per-day volume table from the metrics log."""
+    agg = metrics.aggregate()
+    by_src = ", ".join(f"{k}: {v}" for k, v in agg["by_source"].items()) or "—"
+    md = (
+        "### 📊 Estatísticas do Kaya Bot\n"
+        f"- **Total de interações:** {agg['total']}\n"
+        f"- **Por origem:** {by_src}\n"
+        f"- **Comprimento médio da resposta:** {agg['avg_response_words']} palavras "
+        f"({agg['avg_response_chars']} caracteres)\n"
+        f"- **Tempo médio de resposta:** {agg['avg_latency_ms']} ms\n"
+        f"- **Taxa de pesquisa web:** {agg['web_search_rate'] * 100:.1f}%\n"
+    )
+    per_day = agg["per_day"]
+    rows = [[day, count] for day, count in per_day.items()]
+    return md, rows
+
+
 with gr.Blocks(title="Kaya Bot 🤖") as demo:
     gr.Markdown(
         "# Kaya Bot 🤖\n"
@@ -221,49 +244,63 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
         + _version_line
     )
 
-    # Gradio 6.x uses the OpenAI-style messages format ({"role","content"}) by
-    # default and removed the `type` kwarg, which is the format this app produces.
-    chatbot = gr.Chatbot(height=480, label="Kaya Bot")
-    last_context = gr.State("")
+    with gr.Tabs():
+        with gr.Tab("Chat"):
+            # Gradio 6.x uses the OpenAI-style messages format ({"role","content"}) by
+            # default and removed the `type` kwarg, which is the format this app produces.
+            chatbot = gr.Chatbot(height=480, label="Kaya Bot")
+            last_context = gr.State("")
 
-    with gr.Row():
-        msg = gr.Textbox(
-            placeholder="Escreve a tua mensagem…",
-            scale=8,
-            show_label=False,
-            container=False,
-        )
-        send_btn = gr.Button("Enviar", variant="primary", scale=1)
+            with gr.Row():
+                msg = gr.Textbox(
+                    placeholder="Escreve a tua mensagem…",
+                    scale=8,
+                    show_label=False,
+                    container=False,
+                )
+                send_btn = gr.Button("Enviar", variant="primary", scale=1)
 
-    with gr.Row():
-        chip_buttons = [
-            gr.Button(visible=False, size="sm", variant="secondary")
-            for _ in range(SUGGESTION_COUNT)
-        ]
+            with gr.Row():
+                chip_buttons = [
+                    gr.Button(visible=False, size="sm", variant="secondary")
+                    for _ in range(SUGGESTION_COUNT)
+                ]
 
-    # Submit (textbox enter or send button): add user msg → hide chips →
-    # stream answer → regenerate chips.
-    for trigger in (msg.submit, send_btn.click):
-        trigger(add_user_message, [msg, chatbot], [msg, chatbot]).then(
-            _hide_chips, None, chip_buttons
-        ).then(
-            bot_stream, chatbot, [chatbot, last_context]
-        ).then(
-            make_suggestions, [chatbot, last_context], chip_buttons
-        )
+            # Submit (textbox enter or send button): add user msg → hide chips →
+            # stream answer → regenerate chips.
+            for trigger in (msg.submit, send_btn.click):
+                trigger(add_user_message, [msg, chatbot], [msg, chatbot]).then(
+                    _hide_chips, None, chip_buttons
+                ).then(
+                    bot_stream, chatbot, [chatbot, last_context]
+                ).then(
+                    make_suggestions, [chatbot, last_context], chip_buttons
+                )
 
-    # Clicking a chip submits its text as the next user message.
-    def _click_chip(chip_value: str, history: list):
-        return add_user_message(chip_value, history)[1]
+            # Clicking a chip submits its text as the next user message.
+            def _click_chip(chip_value: str, history: list):
+                return add_user_message(chip_value, history)[1]
 
-    for chip in chip_buttons:
-        chip.click(_click_chip, [chip, chatbot], chatbot).then(
-            _hide_chips, None, chip_buttons
-        ).then(
-            bot_stream, chatbot, [chatbot, last_context]
-        ).then(
-            make_suggestions, [chatbot, last_context], chip_buttons
-        )
+            for chip in chip_buttons:
+                chip.click(_click_chip, [chip, chatbot], chatbot).then(
+                    _hide_chips, None, chip_buttons
+                ).then(
+                    bot_stream, chatbot, [chatbot, last_context]
+                ).then(
+                    make_suggestions, [chatbot, last_context], chip_buttons
+                )
+
+        with gr.Tab("Estatísticas"):
+            stats_md = gr.Markdown("Carrega para ver as estatísticas.")
+            stats_table = gr.Dataframe(
+                headers=["dia", "interações"],
+                datatype=["str", "number"],
+                label="Volume por dia",
+                interactive=False,
+            )
+            refresh_btn = gr.Button("Atualizar", variant="secondary")
+            refresh_btn.click(_load_stats, None, [stats_md, stats_table])
+            demo.load(_load_stats, None, [stats_md, stats_table])
 
 if __name__ == "__main__":
     # Localhost-only by default: the bot serves private group memory, so it must
