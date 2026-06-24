@@ -30,6 +30,7 @@ from src.chat.gpu_lock import GpuBusyError
 from src.chat.whatsapp_adapter import WhatsAppAdapter
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
+from src.chat.web_search import CITATION_PREFIX
 
 _docker_cfg = "/app/config.yaml"
 _local_cfg = str(Path(__file__).parent.parent.parent / "config.yaml")
@@ -125,6 +126,7 @@ def _process(event: dict):
                 assistant_response=result["reply"],
                 latency_ms=(time.perf_counter() - t0) * 1000.0,
                 is_group=bool(result.get("is_group")),
+                web_search_used=CITATION_PREFIX in result["reply"],
             )
     except GpuBusyError:
         print("⚠️  GPU busy — dropped a WhatsApp message rather than queueing it.")
