@@ -17,10 +17,12 @@ Routing rules (matching the chosen behaviour):
 
 import logging
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from src.chat.memory import KeyedSessionMemory
+from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,63 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
     )
 
 
+# Thumbs reactions we treat as quality signal. Skin-tone modifiers and variation
+# selectors trail the base codepoint, so a substring test catches every variant.
+_THUMBS_UP = "\U0001F44D"  # 👍
+_THUMBS_DOWN = "\U0001F44E"  # 👎
+
+
+def reaction_rating(emoji: str) -> Optional[str]:
+    """Map a reaction emoji to ``up``/``down``; ``None`` for anything else.
+
+    An empty string means the reaction was *removed* (also ``None``).
+    """
+    if not emoji:
+        return None
+    if _THUMBS_UP in emoji:
+        return "up"
+    if _THUMBS_DOWN in emoji:
+        return "down"
+    return None
+
+
+def parse_waha_reaction(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse a WAHA ``message.reaction`` event into a normalized dict.
+
+    Returns ``None`` for non-reaction events. Like ``parse_waha_message`` this is
+    defensive because the payload shape varies across WAHA engines: the reaction body
+    may sit at ``payload.reaction`` (``{text, messageId}``) or be flattened onto the
+    payload, and the target id may be ``messageId``/``msgId``/``id``.
+    """
+    if event.get("event") not in ("message.reaction", "reaction"):
+        return None
+    payload = event.get("payload") or {}
+
+    chat_id = str(payload.get("from") or "")
+    reactor = _normalize_jid(payload.get("participant") or payload.get("author") or chat_id)
+
+    reaction = payload.get("reaction")
+    if not isinstance(reaction, dict):
+        reaction = payload
+    emoji = str(reaction.get("text") or reaction.get("emoji") or "")
+    target_msg_id = str(
+        reaction.get("messageId")
+        or reaction.get("msgId")
+        or reaction.get("id")
+        or payload.get("messageId")
+        or ""
+    )
+    if not target_msg_id:
+        return None
+    return {
+        "chat_id": chat_id,
+        "reactor": reactor,
+        "target_msg_id": target_msg_id,
+        "emoji": emoji,
+        "from_me": bool(payload.get("fromMe", False)),
+    }
+
+
 class WhatsAppAdapter:
     """Decides whether/how to reply and wires history + engine + WAHA together."""
 
@@ -184,6 +243,14 @@ class WhatsAppAdapter:
             base_dir=wcfg.get("sessions_dir", "data/whatsapp_sessions"),
             max_lines=max(2 * self.history_turns, 20),
         )
+        # Whether to attribute 👍/👎 emoji reactions on the bot's own replies as
+        # feedback. The actual logging happens in the server; the adapter only tracks
+        # which sent message ids are the bot's and resolves a reaction back to them.
+        self.feedback_enabled = bool((wcfg.get("feedback", {}) or {}).get("enabled", True))
+        # bot_message_id -> {chat_id, user_text, reply, is_group, speaker}. Bounded so a
+        # long-running process doesn't grow unbounded; oldest entries drop first.
+        self.sent_messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self.sent_messages_max = 500
 
     # ── decision ────────────────────────────────────────────────────────────
     def should_respond(self, msg: InboundMessage) -> bool:
@@ -306,7 +373,20 @@ class WhatsAppAdapter:
 
         # Quote the asker's message in groups so it's clear who the bot answers.
         reply_to = msg.message_id if msg.is_group else None
-        self.waha_client.send_text(msg.chat_id, reply, reply_to=reply_to)
+        sent = self.waha_client.send_text(msg.chat_id, reply, reply_to=reply_to)
+
+        # Remember this sent message so a later 👍/👎 reaction on it can be attributed.
+        if self.feedback_enabled:
+            self._remember_sent(
+                extract_sent_id(sent),
+                {
+                    "chat_id": msg.chat_id,
+                    "user_text": text,
+                    "reply": reply,
+                    "is_group": msg.is_group,
+                    "speaker": speaker,
+                },
+            )
 
         return {
             "chat_id": msg.chat_id,
@@ -314,4 +394,42 @@ class WhatsAppAdapter:
             "reply": reply,
             "user_text": text,
             "is_group": msg.is_group,
+        }
+
+    def _remember_sent(self, message_id: str, info: Dict[str, Any]) -> None:
+        """Track a bot-sent message id (bounded LRU) for reaction attribution."""
+        if not message_id:
+            return
+        self.sent_messages[message_id] = info
+        self.sent_messages.move_to_end(message_id)
+        while len(self.sent_messages) > self.sent_messages_max:
+            self.sent_messages.popitem(last=False)
+
+    def handle_reaction(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Resolve a 👍/👎 reaction on one of the bot's replies into a feedback dict.
+
+        Returns ``None`` when feedback is disabled, the event isn't a thumbs reaction,
+        the reaction was removed, the reactor is the bot itself, or the target isn't a
+        tracked bot message. The caller (server) does the actual feedback logging.
+        """
+        if not self.feedback_enabled:
+            return None
+        parsed = parse_waha_reaction(event)
+        if parsed is None:
+            return None
+        rating = reaction_rating(parsed["emoji"])
+        if rating is None:
+            return None
+        if parsed["from_me"] or (parsed["reactor"] and parsed["reactor"] in self.bot_jids):
+            return None
+        info = self.sent_messages.get(parsed["target_msg_id"])
+        if not info:
+            return None
+        return {
+            "chat_id": info.get("chat_id") or parsed["chat_id"],
+            "rating": rating,
+            "user_text": info.get("user_text", ""),
+            "reply": info.get("reply", ""),
+            "is_group": bool(info.get("is_group")),
+            "reactor": parsed["reactor"],
         }
