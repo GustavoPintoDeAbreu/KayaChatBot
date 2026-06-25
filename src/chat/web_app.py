@@ -24,6 +24,7 @@ from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
 from src.chat.engine import get_engine, build_system_prompt
 from src.chat import metrics
+from src.chat import feedback
 from src.chat.web_search import maybe_web_search, WebSearchResult
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -57,6 +58,10 @@ _inf = config.get("inference", {})
 _suggestions_cfg = config.get("chat", {}).get("suggestions", {})
 SUGGESTIONS_ENABLED = _suggestions_cfg.get("enabled", True)
 SUGGESTION_COUNT = int(_suggestions_cfg.get("count", 3))
+
+# User feedback (thumbs up/down + optional reason) and the bug-report channel.
+FEEDBACK_ENABLED = bool(config.get("chat", {}).get("feedback", {}).get("enabled", True))
+BUG_REPORT_ENABLED = bool(config.get("chat", {}).get("bug_report", {}).get("enabled", True))
 
 # Concurrency: the box has one GPU, so generation + RAG run one job at a time.
 # Gradio's queue (set up at launch) provides fairness/queue position; the GPU lock
@@ -113,7 +118,8 @@ def _build_user_turn(message: str, history: list) -> tuple:
 def bot_stream(history: list):
     """Stream the assistant reply for the last user message in ``history``.
 
-    Yields (history, context) so the suggestion step can reuse the RAG context.
+    Yields (history, context, interaction_id) so the suggestion step can reuse the
+    RAG context and a thumbs rating on this answer can reference the logged interaction.
     """
     message = _coerce_text(history[-1]["content"])
     prior = history[:-1]
@@ -157,24 +163,26 @@ def bot_stream(history: list):
             for token in streamer:
                 partial += token
                 history[-1]["content"] = partial
-                yield history, context
+                yield history, context, ""
 
             cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
             # Append a source line so the user can see the answer is web-grounded.
             if web_result.used and web_result.citation_line():
                 cleaned = f"{cleaned}\n\n{web_result.citation_line()}"
             history[-1]["content"] = cleaned
-            yield history, context
-        metrics.log_interaction(
+            yield history, context, ""
+        interaction_id = metrics.log_interaction(
             source="web",
             user_message=message,
             assistant_response=cleaned,
             latency_ms=(time.perf_counter() - _t0) * 1000.0,
             web_search_used=web_result.used,
         )
+        # Final yield carries the interaction_id so a 👍/👎 on this answer links to it.
+        yield history, context, interaction_id
     except GpuBusyError:
         history = history + [{"role": "assistant", "content": _BUSY_MESSAGE}]
-        yield history, ""
+        yield history, "", ""
 
 
 def make_suggestions(history: list, context: str):
@@ -238,6 +246,100 @@ def _load_stats():
     return md, rows
 
 
+# ── Feedback handlers (thumbs up/down, reason box, bug report) ────────────────
+def _resolve_rated_pair(history: list, index) -> tuple:
+    """Return (user_message, assistant_response) for the rated message ``index``."""
+    try:
+        idx = index[0] if isinstance(index, (tuple, list)) else int(index)
+    except (TypeError, ValueError):
+        return "", ""
+    if not (0 <= idx < len(history)):
+        return "", ""
+    item = history[idx]
+    assistant_text = _coerce_text(item.get("content")) if isinstance(item, dict) else ""
+    user_text = ""
+    for prior in reversed(history[:idx]):
+        if isinstance(prior, dict) and prior.get("role") == "user":
+            user_text = _coerce_text(prior.get("content"))
+            break
+    return user_text, assistant_text
+
+
+def on_like(data: gr.LikeData, history: list, last_iid: str):
+    """Log a 👍/👎 on an answer; on 👎 reveal the optional reason box.
+
+    Returns (reason_row update, last_feedback_id) — the id lets a follow-up reason
+    attach to this same rating.
+    """
+    if not FEEDBACK_ENABLED:
+        return gr.update(visible=False), ""
+    user_text, assistant_text = _resolve_rated_pair(history, data.index)
+    liked = data.liked if isinstance(data.liked, bool) else str(data.liked).lower() in ("true", "like", "liked")
+    rating = "up" if liked else "down"
+    # Only the most recent answer can be safely linked to its interaction_id.
+    is_last = isinstance(data.index, int) and data.index == len(history) - 1
+    feedback_id = feedback.log_rating(
+        source="web",
+        rating=rating,
+        user_message=user_text,
+        assistant_response=assistant_text,
+        interaction_id=last_iid if is_last else None,
+    )
+    if rating == "down":
+        return gr.update(visible=True), feedback_id
+    return gr.update(visible=False), ""
+
+
+def submit_reason(reason: str, feedback_id: str):
+    """Attach a written reason to the prior 👎, then clear + hide the box."""
+    feedback.log_comment(feedback_id=feedback_id, source="web", comment=reason or "")
+    return gr.update(visible=False), "", ""
+
+
+def submit_bug(description: str, contact: str, history: list):
+    """Record a web bug report (separate from disliking an answer)."""
+    if not (description or "").strip():
+        return "⚠️ Descreve o problema antes de enviar."
+    recent = []
+    for item in (history or [])[-4:]:
+        if isinstance(item, dict):
+            role = "User" if item.get("role") == "user" else "Kaya Bot"
+            content = _coerce_text(item.get("content"))
+            if content:
+                recent.append(f"{role}: {content}")
+    feedback.log_bug_report(
+        source="web",
+        description=description,
+        contact=contact,
+        env=_env_label,
+        version=_version,
+        recent_turns=recent,
+    )
+    return "✅ Bug reportado. Obrigado! / Bug reported, thanks!"
+
+
+def _load_feedback_stats():
+    """Build the Feedback tab: rating counts + recent 👎 reasons + recent bug reports."""
+    agg = feedback.aggregate_feedback()
+    by_src = ", ".join(f"{k}: {v}" for k, v in agg["by_source"].items()) or "—"
+    md = (
+        "### 👍👎 Feedback dos utilizadores\n"
+        f"- **Avaliações totais:** {agg['total_ratings']} "
+        f"(👍 {agg['up']} · 👎 {agg['down']})\n"
+        f"- **Por origem:** {by_src}\n"
+        f"- **Bugs reportados:** {agg['bug_total']}\n"
+    )
+    down_rows = [
+        [d["timestamp"][:19], d["source"], d["user_message"], d["reason"]]
+        for d in agg["recent_down"]
+    ]
+    bug_rows = [
+        [b["timestamp"][:19], b["description"], b["contact"], b["version"]]
+        for b in agg["recent_bugs"]
+    ]
+    return md, down_rows, bug_rows
+
+
 with gr.Blocks(title="Kaya Bot 🤖") as demo:
     gr.Markdown(
         "# Kaya Bot 🤖\n"
@@ -252,6 +354,11 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
             # default and removed the `type` kwarg, which is the format this app produces.
             chatbot = gr.Chatbot(height=480, label="Kaya Bot")
             last_context = gr.State("")
+            # Carries the interaction_id of the latest answer so a 👍/👎 on it links
+            # to the logged interaction; and the feedback_id of the latest 👎 so a
+            # written reason attaches to that rating.
+            last_interaction_id = gr.State("")
+            last_feedback_id = gr.State("")
 
             with gr.Row():
                 msg = gr.Textbox(
@@ -261,6 +368,16 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
                     container=False,
                 )
                 send_btn = gr.Button("Enviar", variant="primary", scale=1)
+
+            # Optional reason box, revealed only after a 👎 (thumbs-down).
+            with gr.Row(visible=False) as reason_row:
+                reason_box = gr.Textbox(
+                    placeholder="O que correu mal nesta resposta? (opcional) / What went wrong?",
+                    scale=8,
+                    show_label=False,
+                    container=False,
+                )
+                reason_btn = gr.Button("Enviar motivo", variant="secondary", scale=1)
 
             with gr.Row():
                 chip_buttons = [
@@ -274,7 +391,7 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
                 trigger(add_user_message, [msg, chatbot], [msg, chatbot]).then(
                     _hide_chips, None, chip_buttons
                 ).then(
-                    bot_stream, chatbot, [chatbot, last_context]
+                    bot_stream, chatbot, [chatbot, last_context, last_interaction_id]
                 ).then(
                     make_suggestions, [chatbot, last_context], chip_buttons
                 )
@@ -287,10 +404,39 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
                 chip.click(_click_chip, [chip, chatbot], chatbot).then(
                     _hide_chips, None, chip_buttons
                 ).then(
-                    bot_stream, chatbot, [chatbot, last_context]
+                    bot_stream, chatbot, [chatbot, last_context, last_interaction_id]
                 ).then(
                     make_suggestions, [chatbot, last_context], chip_buttons
                 )
+
+            # Thumbs up/down on a message: log the rating; a 👎 opens the reason box.
+            chatbot.like(on_like, [chatbot, last_interaction_id], [reason_row, last_feedback_id])
+            reason_btn.click(
+                submit_reason, [reason_box, last_feedback_id], [reason_row, reason_box, last_feedback_id]
+            )
+
+        if BUG_REPORT_ENABLED:
+            with gr.Tab("Reportar bug"):
+                gr.Markdown(
+                    "### 🐞 Reportar um bug\n"
+                    "Encontraste um problema na app (erro, página partida, algo que não "
+                    "funciona)? Descreve-o aqui. Isto é diferente de não gostares de uma "
+                    "resposta — para isso usa o 👍/👎 no chat."
+                )
+                bug_desc = gr.Textbox(
+                    label="Descrição do problema",
+                    placeholder="O que aconteceu? O que esperavas que acontecesse?",
+                    lines=4,
+                )
+                bug_contact = gr.Textbox(
+                    label="Contacto (opcional)",
+                    placeholder="Nome ou email, caso queiras seguimento",
+                )
+                bug_btn = gr.Button("Enviar relatório", variant="primary")
+                bug_status = gr.Markdown("")
+                bug_btn.click(
+                    submit_bug, [bug_desc, bug_contact, chatbot], bug_status
+                ).then(lambda: "", None, bug_desc)
 
         with gr.Tab("Estatísticas"):
             stats_md = gr.Markdown("Carrega para ver as estatísticas.")
@@ -303,6 +449,24 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
             refresh_btn = gr.Button("Atualizar", variant="secondary")
             refresh_btn.click(_load_stats, None, [stats_md, stats_table])
             demo.load(_load_stats, None, [stats_md, stats_table])
+
+        with gr.Tab("Feedback"):
+            fb_md = gr.Markdown("Carrega para ver o feedback.")
+            fb_down_table = gr.Dataframe(
+                headers=["quando", "origem", "pergunta", "motivo"],
+                datatype=["str", "str", "str", "str"],
+                label="👎 recentes (com motivo)",
+                interactive=False,
+            )
+            fb_bug_table = gr.Dataframe(
+                headers=["quando", "descrição", "contacto", "versão"],
+                datatype=["str", "str", "str", "str"],
+                label="🐞 bugs reportados",
+                interactive=False,
+            )
+            fb_refresh = gr.Button("Atualizar", variant="secondary")
+            fb_refresh.click(_load_feedback_stats, None, [fb_md, fb_down_table, fb_bug_table])
+            demo.load(_load_feedback_stats, None, [fb_md, fb_down_table, fb_bug_table])
 
 if __name__ == "__main__":
     # Localhost-only by default: the bot serves private group memory, so it must
