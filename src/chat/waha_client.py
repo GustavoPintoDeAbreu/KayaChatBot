@@ -18,6 +18,25 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def extract_sent_id(response: Any) -> str:
+    """Pull the message id out of a WAHA ``sendText`` response.
+
+    The shape varies by WAHA engine: a bare string, ``{"id": "..."}``, or a nested
+    ``{"id": {"_serialized": "...", "id": "..."}}`` (NOWEB/Baileys). Defensive so an
+    unexpected shape just yields ``""`` rather than raising.
+    """
+    if isinstance(response, str):
+        return response
+    if not isinstance(response, dict):
+        return ""
+    ident = response.get("id")
+    if isinstance(ident, str):
+        return ident
+    if isinstance(ident, dict):
+        return str(ident.get("_serialized") or ident.get("id") or "")
+    return ""
+
+
 class WahaClient:
     """Thin HTTP client for a running WAHA instance (lazy ``httpx`` import)."""
 
@@ -69,13 +88,16 @@ class MockWahaClient:
         self.sent: List[Dict[str, Any]] = []
         self.seen: List[str] = []
         self.echo = echo
+        self._counter = 0
 
     def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> Dict[str, Any]:
+        self._counter += 1
+        message_id = f"mock-{self._counter}"
         record = {"chat_id": chat_id, "text": text, "reply_to": reply_to}
         self.sent.append(record)
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] {text}\n")
-        return {"mocked": True, **record}
+        return {"mocked": True, "id": message_id, **record}
 
     def send_seen(self, chat_id: str) -> None:
         self.seen.append(chat_id)

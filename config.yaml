@@ -278,6 +278,20 @@ chat:
   web_server_port: 7860
   web_auth: null
 
+  # User feedback (src/chat/feedback.py). Thumbs up/down on each answer (web chips +
+  # WhatsApp 👍/👎 reactions); a 👎 in the web UI also opens an optional reason box.
+  # Ratings + reasons land in the JSONL below and surface in the "Feedback" tab.
+  feedback:
+    enabled: true
+    log_file: "./data/feedback/message_feedback.jsonl"
+
+  # Bug-report channel (web UI only) — for "the app is broken", distinct from
+  # disliking an answer. Reports are appended to the JSONL below (email delivery is
+  # deferred; see feedback._notify_bug_report) and shown in the "Feedback" tab.
+  bug_report:
+    enabled: true
+    log_file: "./data/feedback/bug_reports.jsonl"
+
 # WhatsApp bridge (src/chat/whatsapp_server.py + WAHA container).
 # Off by default. The bridge connects to a self-hosted WAHA instance over the
 # Docker network; WAHA links a DEDICATED number (never the personal one) via QR.
@@ -298,6 +312,11 @@ whatsapp:
   group:
     respond_on_mention: true
     respond_on_reply: true
+  # Attribute 👍/👎 emoji reactions on the bot's own replies as quality feedback
+  # (logged via src/chat/feedback.py). Requires WAHA to emit reaction events — see
+  # WHATSAPP_HOOK_EVENTS in docker-compose.yml (message,message.reaction).
+  feedback:
+    enabled: true
   # DM anti-spam whitelist. When enabled, direct messages are only answered for
   # numbers in the allowlist; the Kaya group is unaffected (still @mention-gated).
   # Keep the real numbers OUT of git: put them in the gitignored file

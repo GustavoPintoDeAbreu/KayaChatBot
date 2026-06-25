@@ -212,7 +212,8 @@ services:
       - WHATSAPP_START_SESSION=default
       # WAHA pushes inbound messages to the live bridge (kaya-prod) on the compose network.
       - WHATSAPP_HOOK_URL=http://kaya-prod:7860/whatsapp/webhook
-      - WHATSAPP_HOOK_EVENTS=message
+      # `message.reaction` lets users 👍/👎 a bot reply as feedback (src/chat/feedback.py).
+      - WHATSAPP_HOOK_EVENTS=message,message.reaction
       - WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       # Stable dashboard/swagger login (otherwise WAHA generates a random password
       # each boot). Reuses the web-app creds so the QR page at :3000 is easy to reach.
