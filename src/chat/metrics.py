@@ -39,18 +39,20 @@ def log_interaction(
     latency_ms: Optional[float] = None,
     path: Optional[Path] = None,
     **extra: Any,
-) -> None:
-    """Append one interaction record. Never raises.
+) -> str:
+    """Append one interaction record. Never raises. Returns the ``interaction_id``.
 
     ``source`` is the surface (``web`` / ``whatsapp`` / ``cli``). ``extra`` is
     merged verbatim, so callers can add ``rag_relevance``, ``web_search_used`` etc.
+    The returned id lets callers correlate later user feedback (see ``feedback.py``).
     """
+    interaction_id = str(uuid.uuid4())
     try:
         sink = Path(path) if path else _DEFAULT_LOG
         sink.parent.mkdir(parents=True, exist_ok=True)
         response = assistant_response or ""
         entry = {
-            "interaction_id": str(uuid.uuid4()),
+            "interaction_id": interaction_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "user_message": user_message or "",
@@ -64,6 +66,7 @@ def log_interaction(
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as exc:  # noqa: BLE001 — metrics must never break a reply
         print(f"⚠️  metrics log failed: {exc}")
+    return interaction_id
 
 
 def load_interactions(path: Optional[Path] = None) -> List[Dict[str, Any]]:

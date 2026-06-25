@@ -30,7 +30,11 @@ from src.chat.gpu_lock import GpuBusyError
 from src.chat.whatsapp_adapter import WhatsAppAdapter
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
+from src.chat import feedback
 from src.chat.web_search import CITATION_PREFIX
+
+# WAHA event names that carry an emoji reaction (engine-dependent spelling).
+_REACTION_EVENTS = ("message.reaction", "reaction")
 
 _docker_cfg = "/app/config.yaml"
 _local_cfg = str(Path(__file__).parent.parent.parent / "config.yaml")
@@ -115,7 +119,30 @@ def outbox():
     raise HTTPException(status_code=404, detail="outbox is only available in mock mode")
 
 
+def _log_reaction_feedback(fb: dict) -> None:
+    """Persist a 👍/👎 emoji reaction on a bot reply as user feedback."""
+    if not fb:
+        return
+    feedback.log_rating(
+        source="whatsapp",
+        rating=fb["rating"],
+        user_message=fb.get("user_text", ""),
+        assistant_response=fb.get("reply", ""),
+        is_group=bool(fb.get("is_group")),
+    )
+
+
+def _process_reaction(event: dict):
+    try:
+        _log_reaction_feedback(adapter.handle_reaction(event))
+    except Exception as exc:  # noqa: BLE001 — never crash the webhook worker
+        print(f"⚠️  WhatsApp reaction handler error: {exc}")
+
+
 def _process(event: dict):
+    if event.get("event") in _REACTION_EVENTS:
+        _process_reaction(event)
+        return
     t0 = time.perf_counter()
     try:
         result = adapter.handle_event(event, system_prompt=_system_prompt)
@@ -150,6 +177,10 @@ async def webhook(
     # reply, but in production we ack immediately and generate in the background so
     # WAHA's webhook doesn't time out and retry (which would duplicate replies).
     if MOCK_MODE:
+        if event.get("event") in _REACTION_EVENTS:
+            fb = await run_in_threadpool(adapter.handle_reaction, event)
+            _log_reaction_feedback(fb)
+            return {"handled": fb is not None, **(fb or {})}
         result = await run_in_threadpool(adapter.handle_event, event, _system_prompt)
         return {"handled": result is not None, **(result or {})}
     background_tasks.add_task(_process, event)
