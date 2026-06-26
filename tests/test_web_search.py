@@ -127,3 +127,75 @@ def test_citation_line_empty():
 def test_websearchresult_default_unused():
     res = web_search.WebSearchResult()
     assert res.used is False and res.citation_line() == ""
+
+
+# ── tightened current-events regex + group-history guard ───────────────────────
+def test_bare_aconteceu_no_longer_current_events():
+    assert web_search.is_current_events("qual foi a melhor cena que aconteceu") is False
+    assert web_search.is_current_events("o que aconteceu no mundo hoje") is True
+
+
+def test_group_history_guard_blocks_search(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    r = StubRetriever(persons=[], score=0.05)  # low RAG would otherwise fallback-search
+    assert web_search.should_search("conta-me a melhor cena que aconteceu no grupo", r, CFG) is False
+    assert web_search.should_search("o que se passou nas conversas do kaya?", r, CFG) is False
+
+
+def test_explicit_request_overrides_group_history(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    r = StubRetriever(persons=[], score=0.9)
+    # explicit "pesquisa" wins even though "do grupo" is present
+    assert web_search.should_search("pesquisa na net as notícias do grupo automóvel", r, CFG) is True
+
+
+# ── exclude_domains is forwarded to the Tavily request body ─────────────────────
+def test_exclude_domains_in_request_body(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"answer": "Resumo.", "results": []}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["body"] = json
+        return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = web_search.TavilyClient(api_key="k", exclude_domains=["youtube.com", "genius.com"])
+    client.search("preço do iphone")
+    assert captured["body"].get("exclude_domains") == ["youtube.com", "genius.com"]
+
+
+def test_no_exclude_domains_key_when_empty(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"answer": "x", "results": []}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["body"] = json
+        return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = web_search.TavilyClient(api_key="k")  # no exclude_domains
+    client.search("q")
+    assert "exclude_domains" not in captured["body"]
+
+
+def test_truncate_clean_no_midword_cut():
+    long_text = "Portugal " * 100
+    out = web_search._truncate_clean(long_text, 50)
+    assert out.endswith("…")
+    assert "Portuga…" not in out  # didn't cut mid-word

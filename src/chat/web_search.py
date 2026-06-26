@@ -50,10 +50,20 @@ _CURRENT_EVENTS_RE = re.compile(
     r"\bquem\s+ganhou\b|\bresultado\b|\b[úu]ltimo\s+jogo\b|\bplacar\b|\bmarcou\b"
     r"|\bpre[çc]o\b|\bquanto\s+custa\b|\bcusta\s+quanto\b"
     r"|\bdata\s+de\s+lan[çc]amento\b|\bquando\s+(?:sai|lan[çc]a|estreia)\b"
-    r"|\bnot[íi]cia\b|\baconteceu\b|\bo\s+que\s+se\s+passa\s+(?:no\s+mundo|com)\b"
+    r"|\bnot[íi]cia\b|\baconteceu\s+(?:no\s+mundo|hoje|ontem|recentemente|esta\s+semana)\b"
+    r"|\bo\s+que\s+se\s+passa\s+(?:no\s+mundo|com)\b"
     r"|\bhoje\b|\bontem\b|\besta\s+semana\b|\beste\s+ano\b|\bagora\b|\batual(?:mente)?\b"
     r"|\bneste\s+momento\b|\bprevis[ãa]o\s+do\s+tempo\b|\bcota[çc][ãa]o\b"
     r"|\bscore\b|\bwho\s+won\b|\bprice\b|\brelease\s+date\b|\bweather\b|\bnews\b|\blatest\b",
+    re.IGNORECASE,
+)
+
+# Questions explicitly about the group's own history/memory ("a melhor cena que aconteceu no
+# grupo", "o que se passou nas conversas"). These are answered from RAG, never the live web,
+# even when they carry an incidental recency cue like "aconteceu" — otherwise they false-trigger.
+_GROUP_HISTORY_RE = re.compile(
+    r"\b(?:n[oa]|d[oa]|neste|deste)\s+grupo\b|\bn[oa]\s+kaya\b|\bd[oa]\s+kaya\b"
+    r"|\bnas?\s+conversas?\b|\bno\s+chat\b",
     re.IGNORECASE,
 )
 
@@ -91,11 +101,13 @@ def citation_line(sources: List[str]) -> str:
 class TavilyClient:
     """Minimal Tavily search client (lazy ``httpx``), with simple backoff retry."""
 
-    def __init__(self, api_key: str, max_results: int = 3, search_depth: str = "advanced", timeout: float = 10.0):
+    def __init__(self, api_key: str, max_results: int = 3, search_depth: str = "advanced",
+                 timeout: float = 10.0, exclude_domains: Optional[List[str]] = None):
         self.api_key = api_key
         self.max_results = max_results
         self.search_depth = search_depth
         self.timeout = timeout
+        self.exclude_domains = [d for d in (exclude_domains or []) if d]
 
     def search(self, query: str) -> List[Dict[str, str]]:
         """Return a list of ``{title, url, content}`` results (or [] on failure)."""
@@ -108,6 +120,8 @@ class TavilyClient:
             "search_depth": self.search_depth,
             "include_answer": True,
         }
+        if self.exclude_domains:
+            body["exclude_domains"] = self.exclude_domains
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
@@ -132,6 +146,17 @@ class TavilyClient:
         return []
 
 
+def _truncate_clean(text: str, limit: int = 400) -> str:
+    """Trim ``text`` to ``limit`` chars at the last word boundary (no mid-word cuts)."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space > limit * 0.6:  # only back off to a space if it isn't pathologically early
+        cut = cut[:space]
+    return cut.rstrip() + "…"
+
+
 def _format_results(results: List[Dict[str, str]]) -> str:
     if not results:
         return ""
@@ -141,7 +166,7 @@ def _format_results(results: List[Dict[str, str]]) -> str:
         if not snippet:
             continue
         src = f" ({r['url']})" if r.get("url") else ""
-        lines.append(f"- {snippet[:400]}{src}")
+        lines.append(f"- {_truncate_clean(snippet, 400)}{src}")
     lines.append("=== Fim dos resultados web ===")
     return "\n".join(lines) if len(lines) > 2 else ""
 
@@ -161,6 +186,7 @@ def _get_client(config: Dict[str, Any]) -> Optional[TavilyClient]:
         api_key=api_key,
         max_results=int(ws_cfg.get("max_results", 3)),
         search_depth=str(ws_cfg.get("search_depth", "advanced")),
+        exclude_domains=list(ws_cfg.get("exclude_domains", []) or []),
     )
     return _client
 
@@ -189,6 +215,9 @@ def should_search(query: str, retriever, config: Dict[str, Any], query_embedding
     # Explicit user request always wins.
     if is_explicit_request(query):
         return True
+    # Group-history questions are about the group's own memory, not the live web.
+    if _GROUP_HISTORY_RE.search(query):
+        return False
     # Relevance probe (shared embedding when provided).
     try:
         score = retriever.best_similarity(query, query_embedding=query_embedding)

@@ -93,6 +93,87 @@ def coerce_text(content) -> str:
     return str(content)
 
 
+# European-Portuguese vs English detection markers. Deliberately curated to be
+# language-distinctive (ambiguous tokens like "a"/"do"/"me" are excluded) so a short
+# WhatsApp line still classifies. Any Portuguese diacritic short-circuits to "pt".
+_PT_WORDS = frozenset((
+    "que", "não", "nao", "é", "de", "da", "quem", "com", "para", "uma", "um", "no", "na",
+    "sou", "és", "tu", "você", "está", "muito", "obrigado", "olá", "ola", "porque", "como",
+    "onde", "quando", "sim", "isto", "isso", "ele", "ela", "meu", "minha", "tens", "tem", "épá",
+))
+_EN_WORDS = frozenset((
+    "the", "is", "are", "you", "what", "who", "can", "does", "and", "of", "tell", "about",
+    "your", "hey", "how", "where", "when", "why", "please", "thanks", "thank", "my", "we",
+    "they", "he", "she", "it", "this", "that", "hello", "there", "only", "speak", "english",
+))
+
+
+def detect_language(text: str) -> str:
+    """Best-effort language of an incoming message: ``"en"`` or ``"pt"`` (default).
+
+    Lightweight + dependency-free: any Portuguese diacritic ⇒ "pt"; otherwise a
+    distinctive-stopword count decides, defaulting to Portuguese on a tie/empty.
+    Used to steer the reply language so an English message isn't answered in PT.
+    """
+    if not text:
+        return "pt"
+    lowered = text.lower()
+    if any(ch in lowered for ch in "ãõçáéíóúâêà"):
+        return "pt"
+    tokens = re.findall(r"[a-zà-ÿ']+", lowered)
+    pt = sum(tok in _PT_WORDS for tok in tokens)
+    en = sum(tok in _EN_WORDS for tok in tokens)
+    return "en" if en > pt and en > 0 else "pt"
+
+
+# Meta-narration / 4th-wall leaks the model occasionally emits as a leading sentence
+# (e.g. "A Sofia está confusa porque o bot…", "previsão de IA", "o assistente mencionou
+# erroneamente…"). Targeted narrowly at the observed phrasings to avoid eating real facts.
+_META_SELF_RE = re.compile(
+    r"\bo bot\b"
+    r"|previs[ãa]o de ia\b"
+    r"|\bmodelo de (?:linguagem|ia)\b"
+    r"|\bo assistente\b.{0,40}\b(?:mencion|comet|disse|err|baralh)"
+    r"|\benquanto (?:ia|assistente)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_meta_narration(text: str, user_name: str) -> str:
+    """Drop a *leading* meta-narration sentence (bot self-reference, or third-person
+    narration of the asker like "A <user> está a tentar…"), keeping the rest of the
+    reply verbatim (newlines intact). Conservative: only the first sentence, only when
+    real content follows it — never blanks a reply, never reflows the text.
+    """
+    if not text:
+        return text
+    asker = (user_name or "").strip()
+    # Only conversation-meta verbs (insiste/está confusa/está a tentar…), NOT factual ones
+    # like "está a trabalhar" — so "O Gustavo está a trabalhar" isn't stripped when the asker
+    # happens to be Gustavo.
+    asker_re = (
+        re.compile(
+            rf"^[AO]\s+{re.escape(asker)}\b.*\b(?:insiste|pergunta|baralh\w*|quer\s+saber"
+            rf"|est[áa]\s+(?:confus\w*|a\s+tentar|a\s+perguntar))",
+            re.IGNORECASE,
+        )
+        if asker
+        else None
+    )
+    body = text.lstrip()
+    # First-sentence boundary: the earlier of the first sentence terminator or a newline.
+    terminator = re.search(r"[.!?](?=\s|$)", body)
+    end = terminator.end() if terminator else len(body)
+    newline = body.find("\n")
+    if newline != -1 and newline < end:
+        end = newline
+    first, rest = body[:end].strip(), body[end:].lstrip()
+    is_leak = bool(_META_SELF_RE.search(first)) or (
+        asker_re is not None and asker_re.search(first) is not None
+    )
+    return rest if (is_leak and rest) else text
+
+
 def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str:
     """Clean a raw generated response.
 
@@ -129,6 +210,9 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
         cleaned,
         flags=re.IGNORECASE,
     )
+
+    # 1c. Drop a leading meta-narration leak ("A <user> está a tentar…", "o bot…").
+    cleaned = _strip_meta_narration(cleaned, user_name)
 
     # 2. Cut at the first hallucinated user turn, keeping all prior lines.
     user_turn_labels = [f"{user_name}:", "User:", "Utilizador:"]
