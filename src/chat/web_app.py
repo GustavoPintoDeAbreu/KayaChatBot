@@ -19,7 +19,7 @@ from transformers import TextIteratorStreamer
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config_loader import load_config
-from src.chat.response_utils import clean_response, coerce_text as _coerce_text
+from src.chat.response_utils import clean_response, coerce_text as _coerce_text, detect_language
 from src.chat.suggestions import generate_suggestions
 from src.chat.gpu_lock import gpu_section, GpuBusyError
 from src.chat.engine import get_engine, build_system_prompt
@@ -112,6 +112,11 @@ def _build_user_turn(message: str, history: list) -> tuple:
         if recent_lines:
             parts.append("Conversa recente:\n" + "\n".join(recent_lines))
     parts.append(f"User: {message}")
+    # Steer the reply language (English message → English answer; else reinforce EU-PT).
+    if detect_language(message) == "en":
+        parts.append("(Reply in English.)")
+    else:
+        parts.append("(Responde em português europeu.)")
     return "\n\n".join(parts), context, web_result
 
 
@@ -142,14 +147,21 @@ def bot_stream(history: list):
 
             # timeout=60s prevents the iterator from hanging if the generation thread crashes
             streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0)
+            # Web-grounded turns garble numbers/dates at high temperature → sample them
+            # more conservatively (lower temp + tighter top_k) when a search ran.
+            gen_temperature = _inf.get("temperature", 1.0)
+            gen_top_k = _inf.get("top_k", 64)
+            if web_result.used:
+                gen_temperature = _inf.get("web_search_temperature", 0.3)
+                gen_top_k = _inf.get("web_search_top_k", gen_top_k)
             gen_kwargs = dict(
                 **inputs,
                 streamer=streamer,
                 max_new_tokens=_inf.get("max_new_tokens", 512),
-                temperature=_inf.get("temperature", 1.0),
+                temperature=gen_temperature,
                 do_sample=True,
                 top_p=_inf.get("top_p", 0.95),
-                top_k=_inf.get("top_k", 64),
+                top_k=gen_top_k,
                 repetition_penalty=_inf.get("repetition_penalty", 1.0),
                 no_repeat_ngram_size=_inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,
