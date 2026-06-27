@@ -24,6 +24,7 @@ from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
     clean_response,
+    detect_language,
     truncate_history_line,
     wants_long_answer,
 )
@@ -204,6 +205,12 @@ class KayaEngine:
             brevity_hint = self._inf.get("brevity_hint", "")
             if brevity_hint and not wants_long:
                 user_turn += f"\n\n({brevity_hint})"
+            # Steer the reply language so an English message isn't answered in Portuguese
+            # (and reinforce European-PT otherwise, against Brazilian-PT drift).
+            if detect_language(message) == "en":
+                user_turn += "\n\n(Reply in English.)"
+            else:
+                user_turn += "\n\n(Responde em português europeu.)"
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_turn},
@@ -212,13 +219,20 @@ class KayaEngine:
                 messages, tokenize=False, add_generation_prompt=True
             )
             inputs = self.tokenizer(text=[prompt], return_tensors="pt").to("cuda")
+            # Web-grounded turns garble numbers/dates at high temperature → sample them
+            # much more conservatively (lower temp + tighter top_k) when a search ran.
+            gen_temperature = self._inf.get("temperature", 1.0)
+            gen_top_k = self._inf.get("top_k", 64)
+            if web_result.used:
+                gen_temperature = self._inf.get("web_search_temperature", 0.3)
+                gen_top_k = self._inf.get("web_search_top_k", gen_top_k)
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                temperature=self._inf.get("temperature", 1.0),
+                temperature=gen_temperature,
                 do_sample=True,
                 top_p=self._inf.get("top_p", 0.95),
-                top_k=self._inf.get("top_k", 64),
+                top_k=gen_top_k,
                 repetition_penalty=self._inf.get("repetition_penalty", 1.0),
                 no_repeat_ngram_size=self._inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,

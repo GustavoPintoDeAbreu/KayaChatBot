@@ -139,6 +139,19 @@ def _process_reaction(event: dict):
         print(f"⚠️  WhatsApp reaction handler error: {exc}")
 
 
+def _log_interaction_metrics(result: dict, t0: float) -> None:
+    """Log one answered message to the metrics sink (shared by the live + mock paths)."""
+    if result and result.get("reply") and result.get("command") != "clear":
+        metrics.log_interaction(
+            source="whatsapp",
+            user_message=result.get("user_text", ""),
+            assistant_response=result["reply"],
+            latency_ms=(time.perf_counter() - t0) * 1000.0,
+            is_group=bool(result.get("is_group")),
+            web_search_used=CITATION_PREFIX in result["reply"],
+        )
+
+
 def _process(event: dict):
     if event.get("event") in _REACTION_EVENTS:
         _process_reaction(event)
@@ -146,15 +159,7 @@ def _process(event: dict):
     t0 = time.perf_counter()
     try:
         result = adapter.handle_event(event, system_prompt=_system_prompt)
-        if result and result.get("reply") and result.get("command") != "clear":
-            metrics.log_interaction(
-                source="whatsapp",
-                user_message=result.get("user_text", ""),
-                assistant_response=result["reply"],
-                latency_ms=(time.perf_counter() - t0) * 1000.0,
-                is_group=bool(result.get("is_group")),
-                web_search_used=CITATION_PREFIX in result["reply"],
-            )
+        _log_interaction_metrics(result, t0)
     except GpuBusyError:
         print("⚠️  GPU busy — dropped a WhatsApp message rather than queueing it.")
     except Exception as exc:  # noqa: BLE001 — never crash the webhook worker
@@ -181,7 +186,9 @@ async def webhook(
             fb = await run_in_threadpool(adapter.handle_reaction, event)
             _log_reaction_feedback(fb)
             return {"handled": fb is not None, **(fb or {})}
+        t0 = time.perf_counter()
         result = await run_in_threadpool(adapter.handle_event, event, _system_prompt)
+        _log_interaction_metrics(result, t0)
         return {"handled": result is not None, **(result or {})}
     background_tasks.add_task(_process, event)
     return {"handled": True}
