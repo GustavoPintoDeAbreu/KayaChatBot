@@ -135,14 +135,13 @@ class KayaEngine:
     def build_user_turn(
         self, message: str, recent_lines: Optional[List[str]] = None, speaker_label: str = "User"
     ) -> tuple:
-        """Return ``(user_message_full, context, web_result)`` for one turn.
+        """Return ``(user_message_full, context)`` for one local-model turn.
 
         ``recent_lines`` is a list of already-formatted ``"<who>: <text>"`` lines.
-        The RAG context is retrieved fresh for every turn (RAG is always-on).
-        ``web_result`` is a ``WebSearchResult`` (``used=False`` when no web search ran).
+        The RAG context is retrieved fresh for every turn (RAG is always-on). Web
+        search is handled separately in ``generate_reply`` (it answers directly via
+        Grok and bypasses the local model), so it is not injected here.
         """
-        from src.chat.web_search import maybe_web_search, WebSearchResult
-
         context = ""
         if self.rag_enabled and self.retriever:
             try:
@@ -155,20 +154,13 @@ class KayaEngine:
         parts = []
         if context:
             parts.append(context)
-        # Out-of-group / general-knowledge questions: augment with live web results
-        # (no-op unless web_search is enabled + a key is set + the query is off-topic).
-        web_result = WebSearchResult()
-        if self.retriever:
-            web_result = maybe_web_search(message, self.retriever, self.config)
-            if web_result.used:
-                parts.append(web_result.context)
         if recent_lines:
             # Truncate prior turns to a gist so the model can't copy its own long
             # previous answers back verbatim (the repetition / "stuck" bug).
             trimmed = [truncate_history_line(line) for line in recent_lines]
             parts.append("Conversa recente:\n" + "\n".join(trimmed))
         parts.append(f"{speaker_label}: {message}")
-        return "\n\n".join(parts), context, web_result
+        return "\n\n".join(parts), context
 
     def generate_reply(
         self,
@@ -187,6 +179,17 @@ class KayaEngine:
         # Dynamic length: short & chatty by default, raised to the elaboration
         # ceiling only when the question actually asks for detail. An explicit
         # caller-supplied cap always wins.
+        # Off-topic / current-events questions are answered directly by Grok's web
+        # search (factually grounded, EU-PT) and bypass the local model entirely —
+        # the local model garbles facts. Runs before the GPU lock; never raises.
+        if self.retriever:
+            from src.chat.web_search import maybe_web_search
+
+            web_result = maybe_web_search(message, self.retriever, self.config)
+            if web_result.used and web_result.answer:
+                citation = web_result.citation_line()
+                return f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
+
         wants_long = wants_long_answer(message)
         if max_new_tokens is None:
             if wants_long:
@@ -197,7 +200,7 @@ class KayaEngine:
                 )
 
         with gpu_section(self.config):
-            user_turn, _context, web_result = self.build_user_turn(
+            user_turn, _context = self.build_user_turn(
                 message, recent_lines, speaker_label=speaker
             )
             # A token cap alone won't make replies feel chatty — the model writes full
@@ -219,20 +222,13 @@ class KayaEngine:
                 messages, tokenize=False, add_generation_prompt=True
             )
             inputs = self.tokenizer(text=[prompt], return_tensors="pt").to("cuda")
-            # Web-grounded turns garble numbers/dates at high temperature → sample them
-            # much more conservatively (lower temp + tighter top_k) when a search ran.
-            gen_temperature = self._inf.get("temperature", 1.0)
-            gen_top_k = self._inf.get("top_k", 64)
-            if web_result.used:
-                gen_temperature = self._inf.get("web_search_temperature", 0.3)
-                gen_top_k = self._inf.get("web_search_top_k", gen_top_k)
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                temperature=gen_temperature,
+                temperature=self._inf.get("temperature", 1.0),
                 do_sample=True,
                 top_p=self._inf.get("top_p", 0.95),
-                top_k=gen_top_k,
+                top_k=self._inf.get("top_k", 64),
                 repetition_penalty=self._inf.get("repetition_penalty", 1.0),
                 no_repeat_ngram_size=self._inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,
@@ -240,13 +236,7 @@ class KayaEngine:
             generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
             raw = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-        reply = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
-        # Append a source line so the user can see the answer is web-grounded.
-        if web_result.used:
-            citation = web_result.citation_line()
-            if citation:
-                reply = f"{reply}\n\n{citation}"
-        return reply
+        return clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
 
 
 _engine_instance: Optional[KayaEngine] = None
