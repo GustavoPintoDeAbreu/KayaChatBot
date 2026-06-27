@@ -79,10 +79,11 @@ _BUSY_MESSAGE = (
 
 
 def _build_user_turn(message: str, history: list) -> tuple:
-    """Return (user_message_full, context, web_result) for a turn.
+    """Return (user_message_full, context) for one local-model turn.
 
     ``history`` is the prior chat (list of {"role","content"} dicts) excluding the
-    current message. ``web_result`` is a ``WebSearchResult`` (used=False when none ran).
+    current message. Web search is handled separately in ``bot_stream`` (it answers
+    directly via Grok and bypasses the local model), so it is not injected here.
     """
     context = ""
     if rag_enabled and retriever:
@@ -94,13 +95,6 @@ def _build_user_turn(message: str, history: list) -> tuple:
     parts = []
     if context:
         parts.append(context)
-    # Out-of-group / general-knowledge questions: augment with live web results
-    # (no-op unless web_search is enabled + a key is set + the query is off-topic).
-    web_result = WebSearchResult()
-    if retriever:
-        web_result = maybe_web_search(message, retriever, config)
-        if web_result.used:
-            parts.append(web_result.context)
     if history:
         recent_lines = []
         for item in history[-4:]:
@@ -117,7 +111,7 @@ def _build_user_turn(message: str, history: list) -> tuple:
         parts.append("(Reply in English.)")
     else:
         parts.append("(Responde em português europeu.)")
-    return "\n\n".join(parts), context, web_result
+    return "\n\n".join(parts), context
 
 
 def bot_stream(history: list):
@@ -130,13 +124,32 @@ def bot_stream(history: list):
     prior = history[:-1]
     _t0 = time.perf_counter()
 
+    # Off-topic / current-events questions are answered directly by Grok's web search
+    # (factually grounded, EU-PT) and bypass the local model + the GPU lock entirely.
+    web_result = WebSearchResult()
+    if retriever:
+        web_result = maybe_web_search(message, retriever, config)
+    if web_result.used and web_result.answer:
+        cleaned = web_result.answer
+        citation = web_result.citation_line()
+        if citation:
+            cleaned = f"{cleaned}\n\n{citation}"
+        history = history + [{"role": "assistant", "content": cleaned}]
+        yield history, "", ""
+        interaction_id = metrics.log_interaction(
+            source="web", user_message=message, assistant_response=cleaned,
+            latency_ms=(time.perf_counter() - _t0) * 1000.0, web_search_used=True,
+        )
+        yield history, "", interaction_id
+        return
+
     # Serialize all GPU work (RAG retrieval + streaming generation) behind the
     # shared lock so concurrent users don't race on CUDA. Held for the whole
     # stream; released when this generator is exhausted. If the GPU stays busy
     # past the timeout, degrade to a friendly busy message instead of hanging.
     try:
         with gpu_section(config):
-            user_message_full, context, web_result = _build_user_turn(message, prior)
+            user_message_full, context = _build_user_turn(message, prior)
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -147,21 +160,14 @@ def bot_stream(history: list):
 
             # timeout=60s prevents the iterator from hanging if the generation thread crashes
             streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0)
-            # Web-grounded turns garble numbers/dates at high temperature → sample them
-            # more conservatively (lower temp + tighter top_k) when a search ran.
-            gen_temperature = _inf.get("temperature", 1.0)
-            gen_top_k = _inf.get("top_k", 64)
-            if web_result.used:
-                gen_temperature = _inf.get("web_search_temperature", 0.3)
-                gen_top_k = _inf.get("web_search_top_k", gen_top_k)
             gen_kwargs = dict(
                 **inputs,
                 streamer=streamer,
                 max_new_tokens=_inf.get("max_new_tokens", 512),
-                temperature=gen_temperature,
+                temperature=_inf.get("temperature", 1.0),
                 do_sample=True,
                 top_p=_inf.get("top_p", 0.95),
-                top_k=gen_top_k,
+                top_k=_inf.get("top_k", 64),
                 repetition_penalty=_inf.get("repetition_penalty", 1.0),
                 no_repeat_ngram_size=_inf.get("no_repeat_ngram_size", 0),
                 use_cache=True,
@@ -178,9 +184,6 @@ def bot_stream(history: list):
                 yield history, context, ""
 
             cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
-            # Append a source line so the user can see the answer is web-grounded.
-            if web_result.used and web_result.citation_line():
-                cleaned = f"{cleaned}\n\n{web_result.citation_line()}"
             history[-1]["content"] = cleaned
             yield history, context, ""
         interaction_id = metrics.log_interaction(
@@ -188,7 +191,7 @@ def bot_stream(history: list):
             user_message=message,
             assistant_response=cleaned,
             latency_ms=(time.perf_counter() - _t0) * 1000.0,
-            web_search_used=web_result.used,
+            web_search_used=False,
         )
         # Final yield carries the interaction_id so a 👍/👎 on this answer links to it.
         yield history, context, interaction_id
