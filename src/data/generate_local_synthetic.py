@@ -107,8 +107,12 @@ GEN_INSTRUCTION = (
     "menciona pontos negativos ou limitações quando existirem. Nunca te descrevas como "
     "um modelo de linguagem sem acesso a informação, nem fales de um 'limite de "
     "conhecimento'; se não souberes, diz de forma simples e directa. Se houver uma "
-    "correção, reconhece o erro com naturalidade sem culpar ninguém. Escreve em português "
-    "europeu, ou em inglês se a pergunta for em inglês. Não uses emojis. 2 a 5 frases."
+    "correção, reconhece o erro com naturalidade sem culpar ninguém. NÃO inventes detalhes "
+    "específicos (nomes, datas, locais, números, empresas, animais) que não estejam no contexto "
+    "ou nos perfis — se não souberes um detalhe, diz que não sabes em vez de adivinhar. Escreve "
+    "sempre em português europeu (ex.: 'estou a fazer', não 'estou fazendo'; evita 'você', "
+    "'a gente', 'cachorro', 'legal', 'celular'), ou em inglês se a pergunta for em inglês. "
+    "Não uses emojis. 2 a 5 frases."
 )
 
 

@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.chat.response_utils import (
     clean_response,
     coerce_text,
+    detect_language,
     truncate_history_line,
     wants_long_answer,
 )
@@ -117,6 +118,51 @@ class TestTruncateHistoryLine:
         text = "First sentence.\nSecond sentence."
         result = clean_response(text, user_name="Gustavo")
         assert "Second sentence." in result
+
+
+class TestDetectLanguage:
+    def test_portuguese_diacritics(self):
+        assert detect_language("Olá, tudo bem com a malta?") == "pt"
+
+    def test_portuguese_no_diacritics(self):
+        assert detect_language("ola tudo bem quem tem caes no grupo") == "pt"
+
+    def test_english(self):
+        assert detect_language("Hey, can you tell me who is in the group?") == "en"
+        assert detect_language("Sorry, I only speak English please") == "en"
+
+    def test_empty_defaults_pt(self):
+        assert detect_language("") == "pt"
+
+    def test_ambiguous_defaults_pt(self):
+        # no distinctive markers either way → default Portuguese
+        assert detect_language("GTA 6 2026") == "pt"
+
+
+class TestMetaNarrationStrip:
+    def test_leading_asker_narration_stripped(self):
+        text = ("A Sofia está confusa porque não há registo claro. "
+                "O Gil tem dois cães, a Carlota e a Luna.")
+        result = clean_response(text, user_name="Sofia")
+        assert result.startswith("O Gil tem dois cães")
+        assert "está confusa" not in result
+
+    def test_leading_bot_selfref_stripped(self):
+        text = "O bot cometeu um erro ao misturar nomes. O Peter tem o cão Kobe."
+        result = clean_response(text, user_name="Sofia")
+        assert result == "O Peter tem o cão Kobe."
+
+    def test_member_fact_not_stripped_even_if_named_like_asker(self):
+        # asker is Gustavo and the answer talks about Gustavo factually → must NOT be stripped
+        text = "O Gustavo está a trabalhar em inteligência artificial e software."
+        result = clean_response(text, user_name="Gustavo")
+        assert result == text
+
+    def test_non_leading_selfref_not_stripped(self):
+        # the strip only targets a LEADING leak; later sentences are left intact
+        text = "O Peter tem o cão Kobe. O bot acha que é giro."
+        result = clean_response(text, user_name="Sofia")
+        assert result.startswith("O Peter tem o cão Kobe.")
 
 
 class TestCoerceText:
