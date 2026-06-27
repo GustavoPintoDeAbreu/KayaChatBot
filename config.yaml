@@ -196,7 +196,7 @@ model:
 
 # Training Settings
 training:
-  output_dir: "./models/kaya_gemma4_synth_v15"
+  output_dir: "./models/kaya_gemma4_synth_v16"
   
   # Training hyperparameters (v15: 549 on-prem synthesized examples, eff. batch 8)
   max_steps: 300  # ~4-5 epochs over 549 examples (~69 steps/epoch) — avoid overfit
@@ -510,7 +510,7 @@ model_profiles:
         - "up_proj"
         - "down_proj"
     training:
-      output_dir: "./models/kaya_gemma4_synth_v15"
+      output_dir: "./models/kaya_gemma4_synth_v16"
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
