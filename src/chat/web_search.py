@@ -1,35 +1,44 @@
-"""Optional web-search fallback for out-of-group / general-knowledge questions.
+"""Web-search answers for out-of-group / current-events questions.
 
-The local model has no live internet and the LLM providers expose no tool-use, so
-for questions that aren't about the Kaya group we fetch a few web snippets from an
-external search API (Tavily) and inject them as extra context. The already-loaded
-Gemma then summarizes them in its normal generation pass — no second model, no extra
-VRAM.
+The local fine-tuned model has no live internet and garbles factual data when it
+tries to summarize raw web snippets (corrupted scores, dates, prices). So for
+questions that aren't about the Kaya group we ask **xAI Grok with its web_search
+Agent Tool**, which performs a server-side live search and returns a finished,
+factually-grounded answer in European Portuguese with citations. That answer is
+used *directly* — the local model never re-synthesizes it — which is what fixed
+the previous garbling (a spike scored Grok 5/5 vs the local path 0/3).
 
 Trigger (the query must name no group member, then any of):
-  * **explicit request** — the user asks the bot to search ("procura na net", "search
-    the web", "google it", …) → always search;
+  * **explicit request** — "procura na net", "search the web", "google it", … → always;
   * **current-events / recency intent** — scores, prices, release dates, news, "hoje",
-    "último jogo", … → search when RAG isn't strongly anchored to the group;
+    "último jogo", … → when RAG isn't strongly anchored to the group;
   * **low RAG relevance** — ``best_similarity < trigger_similarity`` (nothing close).
 
-Web-grounded answers carry a ``CITATION_PREFIX`` line ("🌐 Fontes: …") so the user can
-see it searched and verify the source. Everything degrades to an unused result on any
-failure, so a search outage never breaks a reply.
+Web-grounded answers carry a ``CITATION_PREFIX`` line ("🌐 Fontes: …"). Everything
+degrades to an unused result on any failure, so a search outage never breaks a reply.
+
+Privacy: only the user's (off-topic, no-member-named) question goes to Grok — never
+the group's private RAG context.
 """
 
 import os
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-_TAVILY_ENDPOINT = "https://api.tavily.com/search"
-
 # Visible marker prepended to the sources line of a web-grounded reply. Also used by
 # the WhatsApp server to detect web usage for metrics (stateless, no signature change).
 CITATION_PREFIX = "🌐 Fontes:"
+
+# Instruction given to Grok for web-grounded answers: factual, current, European-PT,
+# short. The group's private memory is never included here.
+_GROK_SYSTEM = (
+    "És o assistente do grupo de amigos 'Kaya'. Respondes a esta pergunta com base em "
+    "informação atual e verdadeira da web, em português europeu, de forma directa e "
+    "factual, em 1 a 3 frases. Não inventes números, datas ou nomes; se a informação não "
+    "for clara, di-lo. Não uses emojis."
+)
 
 # The user explicitly asks the bot to look something up online → always search.
 _EXPLICIT_SEARCH_RE = re.compile(
@@ -70,11 +79,16 @@ _GROUP_HISTORY_RE = re.compile(
 
 @dataclass
 class WebSearchResult:
-    """Outcome of a (possibly skipped) web search."""
+    """Outcome of a (possibly skipped) web search.
+
+    For the Grok path ``answer`` holds the finished reply to send to the user
+    directly. ``context`` is retained for backward compatibility (always "" now).
+    """
 
     used: bool = False
-    context: str = ""           # formatted block to inject into the prompt
-    sources: List[str] = field(default_factory=list)  # result URLs
+    answer: str = ""            # finished web-grounded reply (Grok), used as-is
+    context: str = ""           # legacy: prompt-injection block (unused with Grok)
+    sources: List[str] = field(default_factory=list)  # citation URLs
 
     def citation_line(self) -> str:
         """A compact '🌐 Fontes: domain1, domain2' line for the reply, or ""."""
@@ -98,95 +112,53 @@ def citation_line(sources: List[str]) -> str:
     return f"{CITATION_PREFIX} {', '.join(domains)}" if domains else ""
 
 
-class TavilyClient:
-    """Minimal Tavily search client (lazy ``httpx``), with simple backoff retry."""
+class GrokSearchClient:
+    """Thin wrapper over the xAI SDK using the server-side web_search Agent Tool."""
 
-    def __init__(self, api_key: str, max_results: int = 3, search_depth: str = "advanced",
-                 timeout: float = 10.0, exclude_domains: Optional[List[str]] = None):
+    def __init__(self, api_key: str, model: str, excluded_domains: Optional[List[str]] = None):
         self.api_key = api_key
-        self.max_results = max_results
-        self.search_depth = search_depth
-        self.timeout = timeout
-        self.exclude_domains = [d for d in (exclude_domains or []) if d]
+        self.model = model
+        # xAI's web_search tool allows at most 5 excluded domains.
+        self.excluded_domains = [d for d in (excluded_domains or []) if d][:5]
 
-    def search(self, query: str) -> List[Dict[str, str]]:
-        """Return a list of ``{title, url, content}`` results (or [] on failure)."""
-        import httpx
+    def search(self, query: str) -> tuple:
+        """Return ``(answer_text, [citation_urls])`` for ``query`` (or ("", []) on failure)."""
+        from xai_sdk import Client
+        from xai_sdk.chat import system, user
+        from xai_sdk.tools import web_search
 
-        body = {
-            "api_key": self.api_key,
-            "query": query,
-            "max_results": self.max_results,
-            "search_depth": self.search_depth,
-            "include_answer": True,
-        }
-        if self.exclude_domains:
-            body["exclude_domains"] = self.exclude_domains
-        last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                resp = httpx.post(_TAVILY_ENDPOINT, json=body, timeout=self.timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                results: List[Dict[str, str]] = []
-                answer = data.get("answer")
-                if answer:
-                    results.append({"title": "Resumo", "url": "", "content": answer})
-                for item in data.get("results", []):
-                    results.append({
-                        "title": item.get("title", ""),
-                        "url": item.get("url", ""),
-                        "content": item.get("content", ""),
-                    })
-                return results[: self.max_results + 1]
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                time.sleep(0.5 * (2 ** attempt))
-        print(f"⚠️  Tavily search failed: {last_exc}")
-        return []
+        client = Client(api_key=self.api_key)
+        chat = client.chat.create(
+            model=self.model,
+            messages=[system(_GROK_SYSTEM), user(query)],
+            tools=[web_search(excluded_domains=self.excluded_domains or None)],
+        )
+        resp = chat.sample()
+        text = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+        try:
+            cites = list(resp.citations)
+        except Exception:  # noqa: BLE001
+            cites = []
+        return text, cites
 
 
-def _truncate_clean(text: str, limit: int = 400) -> str:
-    """Trim ``text`` to ``limit`` chars at the last word boundary (no mid-word cuts)."""
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    space = cut.rfind(" ")
-    if space > limit * 0.6:  # only back off to a space if it isn't pathologically early
-        cut = cut[:space]
-    return cut.rstrip() + "…"
+_client: Optional[GrokSearchClient] = None
 
 
-def _format_results(results: List[Dict[str, str]]) -> str:
-    if not results:
-        return ""
-    lines = ["=== Resultados de pesquisa web (informação externa e atual) ==="]
-    for r in results:
-        snippet = (r.get("content") or "").strip().replace("\n", " ")
-        if not snippet:
-            continue
-        src = f" ({r['url']})" if r.get("url") else ""
-        lines.append(f"- {_truncate_clean(snippet, 400)}{src}")
-    lines.append("=== Fim dos resultados web ===")
-    return "\n".join(lines) if len(lines) > 2 else ""
-
-
-_client: Optional[TavilyClient] = None
-
-
-def _get_client(config: Dict[str, Any]) -> Optional[TavilyClient]:
+def _get_client(config: Dict[str, Any]) -> Optional[GrokSearchClient]:
     global _client
     if _client is not None:
         return _client
-    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    api_key = os.environ.get("XAI_API_KEY", "").strip()
     if not api_key:
         return None
     ws_cfg = config.get("web_search", {}) or {}
-    _client = TavilyClient(
-        api_key=api_key,
-        max_results=int(ws_cfg.get("max_results", 3)),
-        search_depth=str(ws_cfg.get("search_depth", "advanced")),
-        exclude_domains=list(ws_cfg.get("exclude_domains", []) or []),
+    model = ws_cfg.get("model") or config.get("generation", {}).get("xai", {}).get(
+        "model", "grok-4-1-fast-reasoning"
+    )
+    _client = GrokSearchClient(
+        api_key=api_key, model=str(model),
+        excluded_domains=list(ws_cfg.get("exclude_domains", []) or []),
     )
     return _client
 
@@ -204,7 +176,7 @@ def should_search(query: str, retriever, config: Dict[str, Any], query_embedding
     ws_cfg = config.get("web_search", {}) or {}
     if not ws_cfg.get("enabled", False) or retriever is None:
         return False
-    if not os.environ.get("TAVILY_API_KEY", "").strip():
+    if not os.environ.get("XAI_API_KEY", "").strip():
         return False
     # A named group member ⇒ group question ⇒ never search.
     try:
@@ -232,19 +204,17 @@ def should_search(query: str, retriever, config: Dict[str, Any], query_embedding
 
 
 def maybe_web_search(query: str, retriever, config: Dict[str, Any], query_embedding=None) -> WebSearchResult:
-    """Return a ``WebSearchResult`` (``used``/``context``/``sources``); never raises."""
+    """Return a ``WebSearchResult`` with a finished ``answer``; never raises."""
     try:
         if not should_search(query, retriever, config, query_embedding=query_embedding):
             return WebSearchResult()
         client = _get_client(config)
         if client is None:
             return WebSearchResult()
-        results = client.search(query)
-        context = _format_results(results)
-        if not context:
+        answer, sources = client.search(query)
+        if not answer:
             return WebSearchResult()
-        sources = [r["url"] for r in results if r.get("url")]
-        return WebSearchResult(used=True, context=context, sources=sources)
+        return WebSearchResult(used=True, answer=answer, sources=sources)
     except Exception as exc:  # noqa: BLE001 — never break a reply on search
         print(f"⚠️  web search failed: {exc}")
         return WebSearchResult()
