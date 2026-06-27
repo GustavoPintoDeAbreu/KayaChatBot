@@ -240,11 +240,6 @@ inference:
   top_k: 64
   repetition_penalty: 1.2      # >1 discourages verbatim regurgitation of prior turns
   no_repeat_ngram_size: 3      # Hard-block any repeated 3-gram (kills copy-the-last-answer loops)
-  # Web-grounded turns are more prone to garbling numbers/dates at high temperature, so we
-  # sample them much more conservatively (lower temp + tighter top_k). Applied only when a
-  # web search actually ran (web_result.used) in engine.generate_reply / web_app.bot_stream.
-  web_search_temperature: 0.2  # chosen by temperature_sweep.py (best web plausibility/coherence)
-  web_search_top_k: 40
   # Steers default replies short & chatty (WhatsApp). Dropped automatically when the
   # question asks for detail (see response_utils.wants_long_answer). Set "" to disable.
   brevity_hint: "Responde de forma breve, direta e natural, em 1 a 3 frases, como numa conversa de WhatsApp. Só te alongas se te pedirem explicitamente."
@@ -346,31 +341,25 @@ metrics:
   dashboard_enabled: true
   log_file: "./data/feedback/live_interactions.jsonl"
 
-# Web-search fallback for out-of-group / general-knowledge questions. When a query
-# names no group member AND the top RAG similarity is below trigger_similarity, the
-# bot fetches a few snippets from Tavily and the local model summarizes them. Needs
-# TAVILY_API_KEY in .env; silently disabled without it. See src/chat/web_search.py.
+# Web-search for out-of-group / current-events questions. When a query names no group
+# member and looks like a current-events / off-topic question, the bot asks xAI Grok
+# with its server-side web_search Agent Tool and returns Grok's finished, factually-
+# grounded European-Portuguese answer DIRECTLY (the local model garbled facts; a spike
+# scored Grok 5/5 vs the local path 0/3). Needs XAI_API_KEY in .env; silently disabled
+# without it. See src/chat/web_search.py. (Tavily was removed — Grok wins on currency.)
 web_search:
   enabled: true
-  provider: tavily
-  search_depth: advanced       # "basic" | "advanced" — advanced is better for current events
-  max_results: 3
+  provider: grok
+  # model: ""                  # defaults to generation.xai.model (grok-4-1-fast-reasoning)
   trigger_similarity: 0.40     # top RAG cosine below this → treat as out-of-group (low-RAG fallback)
   current_events_max: 0.60     # current-events cue searches unless RAG score is above this
-  # Low-signal domains dropped from Tavily results (lyrics/video/social) — they fed the model
-  # junk snippets ("como se vê nos vídeos…", lyrics sites) that garbled current-events answers.
+  # Low-signal domains dropped from Grok's web search (xAI allows at most 5 exclusions).
   exclude_domains:
     - youtube.com
-    - m.youtube.com
-    - music.youtube.com
-    - vagalume.com.br
-    - genius.com
-    - azlyrics.com
-    - letras.mus.br
-    - pinterest.com
     - tiktok.com
     - facebook.com
     - instagram.com
+    - pinterest.com
   # Triggers: explicit user request ("procura na net") OR current-events/recency cue
   # (scores, prices, releases, "hoje"…) under current_events_max OR low RAG relevance.
   # A named group member always keeps the question group-answered (no search).
