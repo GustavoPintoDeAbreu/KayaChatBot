@@ -61,6 +61,12 @@ def main():
         help="Override output directory for saving the fine-tuned model.",
     )
     parser.add_argument(
+        "--model-id",
+        type=str,
+        default=None,
+        help="Override the base model id (e.g. a heretic HF repo). Profile still supplies the chat template/LoRA settings.",
+    )
+    parser.add_argument(
         "--test",
         action="store_true",
         help="Force test mode: applies test_mode.training overrides from config.yaml.",
@@ -91,6 +97,10 @@ def main():
     config = load_config(config_path, profile_override=args.profile)
 
     model_id = config['model']['model_id']
+    # CLI override lets a sweep vary only the base model while the profile keeps
+    # supplying the chat template, response-masking markers, and LoRA settings.
+    if args.model_id:
+        model_id = args.model_id
     max_seq_length = config['model']['max_seq_length']
     lora_r = config['model']['lora_r']
     lora_alpha = config['model']['lora_alpha']

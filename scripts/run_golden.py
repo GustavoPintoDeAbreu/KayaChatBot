@@ -31,10 +31,14 @@ def main() -> None:
     ap.add_argument("--judge", default=None, help="Judge provider (default: benchmark.judge_provider in config).")
     ap.add_argument("--golden-tests", default=None, help="Override golden tests file path.")
     ap.add_argument("--speaker", default="Gustavo", help="Speaker label for the model turn.")
+    ap.add_argument("--model-dir", default=None, help="Override the model/adapter directory to evaluate.")
     args = ap.parse_args()
 
     config_path = str(Path(__file__).parent.parent / "config.yaml")
     config = load_config(config_path)
+
+    if args.model_dir:
+        config["training"]["output_dir"] = args.model_dir
 
     judge_name = args.judge or config.get("benchmark", {}).get("judge_provider", "xai")
     golden_file = args.golden_tests or config.get("benchmark", {}).get("golden_tests_file")
