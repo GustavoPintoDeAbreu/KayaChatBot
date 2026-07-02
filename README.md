@@ -1,6 +1,6 @@
 # KayaChatBot
 
-An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using LoRA fine-tuning. Supports multiple model profiles including Qwen3-14B and Gemma 4 E4B (8B).
+An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp conversations using LoRA fine-tuning. Supports multiple model profiles including Qwen3-14B and Gemma 4 E4B (8B). All of the app runs using a rtx3090 GPU.
 
 ## 🎯 Overview
 
