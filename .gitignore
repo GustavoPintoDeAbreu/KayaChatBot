@@ -36,6 +36,7 @@ data/rag_db/
 !data/group_members.example.json
 !data/group_knowledge.example.json
 !data/golden_test_conversations.example.json
+!data/golden_retrieval.example.json
 *.txt
 
 # ChromaDB files
