@@ -102,9 +102,16 @@ class ConversationRetriever:
                 members_data = json.load(f)
             self._members_data = members_data.get('members', [])
             self.group_members = set()
+            # Map every alias to its canonical member name so person-filtering can
+            # compare *identities* rather than raw strings. Raw chat sender strings
+            # ("Gil João", "fredericop167") never equal an alias ("gil", "frederico"),
+            # so the old exact-match filter silently dropped those members' chunks.
+            self._alias_to_member: Dict[str, str] = {}
             for m in self._members_data:
+                name = m.get('name', '')
                 for alias in m.get('aliases', []):
                     self.group_members.add(alias.lower())
+                    self._alias_to_member[alias.lower()] = name
         else:
             # Fallback if JSON not available — log a warning
             import logging as _logging
@@ -117,6 +124,21 @@ class ConversationRetriever:
                 'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
                 'mateus', 'rafa', 'bernardo', 'chamusca', 'gilao', 'pedro'
             }
+            self._alias_to_member = {a: a for a in self.group_members}
+
+        # Longest aliases first so multi-word aliases ("benny pereira") win over
+        # their substrings ("benny") when normalising a raw sender string.
+        self._aliases_by_len = sorted(self._alias_to_member, key=len, reverse=True)
+
+        # Explicit sender-string → member overrides for WhatsApp display names that
+        # collide with another member's alias. "Gil João" / "João Gil" are both Gil,
+        # but contain "joão", which is also an alias of Murgeiro — so a plain alias
+        # scan would wrongly tag Gil's messages as Murgeiro's. Resolve them first.
+        self._sender_overrides = {
+            alias.lower(): m.get('name', '')
+            for m in self._members_data
+            for alias in m.get('sender_aliases', [])
+        }
 
     def initialize(self):
         """Initialize the retriever with vector database and embedding model."""
@@ -168,6 +190,49 @@ class ConversationRetriever:
 
         return mentioned
 
+    def _canonical_members(self, token: str) -> set:
+        """Map a raw participant/mentioned token to canonical member name(s).
+
+        Chat sender strings ("Gil João", "fredericop167", "João Gil") never
+        equal an alias, so identity comparison must normalise them: a member is
+        present when one of its aliases appears as a whole word in the token, or
+        (for glued handles like "fredericop167") as a substring. Longest aliases
+        are tried first so "benny pereira" wins over "benny".
+        """
+        if not token:
+            return set()
+        tl = token.lower().strip()
+        # Explicit override wins (resolves cross-member sender-name collisions).
+        if tl in self._sender_overrides:
+            return {self._sender_overrides[tl]}
+        # Whole-word alias match first (precise); fall back to substring only for
+        # glued handles ("fredericop167") when the whole-word pass found nothing.
+        matched = {
+            self._alias_to_member[a]
+            for a in self._aliases_by_len
+            if re.search(rf"\b{re.escape(a)}\b", tl)
+        }
+        if not matched:
+            matched = {
+                self._alias_to_member[a] for a in self._aliases_by_len if a in tl
+            }
+        return matched
+
+    def _person_in_chunk(self, query_members: set, metadata: Dict[str, Any]) -> bool:
+        """True if any queried member authored or is mentioned in the chunk.
+
+        Compares canonical member identities on both sides so raw sender-string
+        variants (the dominant form for several members) are matched correctly.
+        """
+        chunk_members = set()
+        for field in ('participants', 'mentioned'):
+            raw = metadata.get(field, '')
+            if not raw:
+                continue
+            for tok in raw.split(','):
+                chunk_members |= self._canonical_members(tok)
+        return bool(query_members & chunk_members)
+
     def retrieve(self, query: str, top_k: Optional[int] = None,
                  query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
         """
@@ -195,8 +260,12 @@ class ConversationRetriever:
         # least-irrelevant chunks for off-topic queries. 0.0 disables filtering.
         min_similarity = self.rag_config.get('min_similarity', 0.0)
 
-        # Extract mentioned persons for filtering
+        # Extract mentioned persons for filtering, normalised to canonical
+        # member identities so they compare against sender-string variants.
         query_persons = self.extract_query_persons(query) if FILTER_BY_PERSON else []
+        query_members = {
+            self._alias_to_member.get(p, p) for p in query_persons
+        }
 
         # Generate query embedding (normalized to match the stored vectors),
         # unless the caller already computed it.
@@ -225,18 +294,11 @@ class ConversationRetriever:
             if similarity < min_similarity:
                 continue  # Below relevance floor — skip
 
-            # Post-query filtering by person if needed
-            if query_persons:
-                participants_list = [p.lower() for p in metadata.get('participants', '').split(',')] if metadata.get('participants') else []
-                mentioned_list = [m.lower() for m in metadata.get('mentioned', '').split(',')] if metadata.get('mentioned') else []
-
-                # Check if any query person is in participants or mentioned (case-insensitive)
-                person_found = any(
-                    person in participants_list or person in mentioned_list
-                    for person in query_persons
-                )
-
-                if not person_found:
+            # Post-query filtering by person if needed. Compares canonical member
+            # identities (not raw strings) so sender variants like "Gil João" or
+            # "fredericop167" still match a query about Gil / Frederico.
+            if query_members:
+                if not self._person_in_chunk(query_members, metadata):
                     continue  # Skip this chunk
 
             retrieved_chunks.append({
