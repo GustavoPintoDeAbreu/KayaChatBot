@@ -25,6 +25,34 @@
       "reference": "Bob works as a software engineer.",
       "forbidden_patterns": [],
       "min_score": 3.0
+    },
+    {
+      "id": "attribution_001",
+      "category": "attribution",
+      "description": "Cross-member attribution: a fact about Alice must not be assigned to Bob (or vice-versa).",
+      "question": "Quem tem o cão chamado <pet>, o Bob ou a Alice?",
+      "reference": "The pet belongs to Alice. Bob has a different pet. The bot must attribute it to the correct member and not swap them.",
+      "forbidden_patterns": [
+        "<pet>.{0,30}bob",
+        "meu amigo",
+        "\\bmy friend\\b"
+      ],
+      "min_score": 3.5
+    },
+    {
+      "id": "current_events_001",
+      "category": "current_events",
+      "description": "Live/current query must route to web search, never an 'I'm just an AI without internet' disclaimer.",
+      "question": "Como está o tempo em Lisboa hoje?",
+      "reference": "",
+      "forbidden_patterns": [
+        "não tenho acesso",
+        "modelo de linguagem",
+        "knowledge cutoff",
+        "não posso navegar",
+        "tempo real"
+      ],
+      "min_score": 3.0
     }
   ]
 }
