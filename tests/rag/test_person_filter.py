@@ -13,17 +13,22 @@ def retriever(tmp_path):
     members = {
         "group_name": "Test",
         "members": [
-            {"name": "Gil", "aliases": ["gil", "gilão"],
-             "sender_aliases": ["Gil João", "João Gil"]},
-            {"name": "Frederico", "aliases": ["frederico", "fred"],
-             "sender_aliases": ["fredericop167"]},
+            {"name": "Gil", "aliases": ["gil", "gilão"]},
+            {"name": "Frederico", "aliases": ["frederico", "fred"]},
             {"name": "Murgeiro", "aliases": ["murgeiro", "joão", "jao"]},
             {"name": "Bernardo", "aliases": ["bernardo", "benny", "benny pereira"]},
         ],
     }
     path = tmp_path / "members.json"
     path.write_text(json.dumps(members), encoding="utf-8")
-    return ConversationRetriever({"data": {"group_members_file": str(path)}, "rag": {}})
+    config = {
+        "data": {
+            "group_members_file": str(path),
+            "sender_aliases": {"Gil João": "Gil", "João Gil": "Gil", "fredericop167": "Frederico"},
+        },
+        "rag": {},
+    }
+    return ConversationRetriever(config)
 
 
 def test_sender_variants_resolve_to_member(retriever):

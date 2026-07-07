@@ -150,14 +150,14 @@ class ConversationRetriever:
         # their substrings ("benny") when normalising a raw sender string.
         self._aliases_by_len = sorted(self._alias_to_member, key=len, reverse=True)
 
-        # Explicit sender-string → member overrides for WhatsApp display names that
-        # collide with another member's alias. "Gil João" / "João Gil" are both Gil,
-        # but contain "joão", which is also an alias of Murgeiro — so a plain alias
-        # scan would wrongly tag Gil's messages as Murgeiro's. Resolve them first.
+        # Explicit sender-string → member overrides for display names that collide
+        # with another member's alias ("Gil João" contains "joão", also a Murgeiro
+        # alias) or have no matchable token ("fredericop167"). Sourced from the same
+        # config.data.sender_aliases map the extraction SenderResolver uses, so both
+        # paths agree on identity. Checked before the alias scan.
         self._sender_overrides = {
-            alias.lower(): m.get('name', '')
-            for m in self._members_data
-            for alias in m.get('sender_aliases', [])
+            str(k).lower(): v
+            for k, v in (config.get('data', {}).get('sender_aliases', {}) or {}).items()
         }
 
     def initialize(self):

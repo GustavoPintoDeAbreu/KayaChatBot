@@ -8,11 +8,6 @@
         "alice",
         "ali"
       ],
-      "sender_aliases": [
-        "Alice Smith",
-        "alice_s_123"
-      ],
-      "_sender_aliases_doc": "Optional. Raw chat sender-display strings that don't equal an alias (name-order variants, glued handles). Used by the RAG person-filter to map a chunk's authors to this member. Add entries here when a member's WhatsApp display name would otherwise be missed or collide with another member's alias.",
       "notes": "",
       "recent_summary": "",
       "key_facts": [
