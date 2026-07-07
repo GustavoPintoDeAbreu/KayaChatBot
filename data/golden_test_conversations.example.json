@@ -53,6 +53,19 @@
         "tempo real"
       ],
       "min_score": 3.0
+    },
+    {
+      "id": "multithread_001",
+      "category": "multithread",
+      "description": "Optional 'history' field supplies prior turns so a pronoun/referent must resolve across the conversation. GoldenTestRunner passes it to the response function as recent context.",
+      "history": [
+        "Alice: We were talking about Bob's pet.",
+        "Kaya Bot: Yes, Bob has a pet."
+      ],
+      "question": "And what is it called?",
+      "reference": "'it' refers to Bob's pet named <pet>. The bot should answer using the prior turns and not confuse members.",
+      "forbidden_patterns": [],
+      "min_score": 3.0
     }
   ]
 }

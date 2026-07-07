@@ -752,9 +752,22 @@ class GoldenTestRunner:
             data = json.load(fh)
         return data.get("tests", data) if isinstance(data, dict) else data
 
-    def _get_model_response(self, question: str) -> str:
-        """Get response from local model (or mock)."""
+    def _get_model_response(self, question: str, history: Optional[List[str]] = None) -> str:
+        """Get response from local model (or mock).
+
+        ``history`` is an optional list of prior ``"<who>: <text>"`` turns, used by
+        multi-thread / pronoun-referent test cases. It is passed to ``response_fn``
+        only when that function accepts a second argument, so single-argument
+        response functions keep working unchanged.
+        """
         if self._response_fn is not None:
+            import inspect
+            try:
+                takes_history = len(inspect.signature(self._response_fn).parameters) >= 2
+            except (TypeError, ValueError):
+                takes_history = False
+            if takes_history:
+                return self._response_fn(question, history or [])
             return self._response_fn(question)
         if self.local_model is not None and self.local_model.available:
             return self.local_model.generate(question)
@@ -857,7 +870,7 @@ class GoldenTestRunner:
             if verbose:
                 print(f"  [{test_id}] {category}: {question[:60]}...")
 
-            response = self._get_model_response(question)
+            response = self._get_model_response(question, tc.get("history"))
             leaked = check_identity_leaks(response)
             if forbidden_patterns:
                 for pat in forbidden_patterns:

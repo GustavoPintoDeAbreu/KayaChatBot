@@ -49,8 +49,12 @@ def main() -> None:
         config, config_path, include_uncensored=config.get("chat", {}).get("uncensored_mode", False)
     )
 
-    def response_fn(question: str) -> str:
-        return engine.generate_reply(question, speaker=args.speaker, recent_lines=[], system_prompt=system_prompt)
+    def response_fn(question: str, history=None) -> str:
+        # ``history`` (optional, from multi-thread test cases) is a list of prior
+        # "<who>: <text>" turns fed as recent conversation context.
+        return engine.generate_reply(
+            question, speaker=args.speaker, recent_lines=history or [], system_prompt=system_prompt
+        )
 
     print(f"Loading judge provider '{judge_name}' …")
     provider = load_provider(judge_name, config)
