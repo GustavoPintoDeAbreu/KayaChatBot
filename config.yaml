@@ -375,6 +375,20 @@ rag:
   top_k: 5
   filter_by_person: true
 
+  # Hybrid retrieval: re-rank the dense candidate pool by fusing the bge-m3
+  # cosine ranking with a lexical (exact-term) ranking via Reciprocal Rank
+  # Fusion. Targets code-switched proper nouns / rare tokens (nicknames, project
+  # names, brands) where dense-only recall drops. Set enabled:false for pure
+  # dense. candidate_pool = how many dense hits to re-rank before taking top_k.
+  hybrid:
+    enabled: true
+    candidate_pool: 40
+    rrf_k: 60
+    # Weight of the lexical ranking in RRF (dense is 1.0). Below 1.0 lets the
+    # lexical channel pull in rare exact-term chunks without letting common-word
+    # overlap displace strong dense matches on person-scoped queries.
+    lexical_weight: 0.5
+
   # Minimum cosine similarity for a retrieved conversation chunk to be injected.
   # With normalized bge-m3 embeddings + cosine space, similarity is in [-1, 1];
   # relevant chunks usually score > 0.4. Raise to drop more off-topic context;

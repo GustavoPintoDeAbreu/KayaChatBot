@@ -53,3 +53,31 @@ def test_person_in_chunk_matches_via_participants(retriever):
     assert retriever._person_in_chunk(query_members, meta)
     # A chunk with neither Gil as sender nor mention is excluded.
     assert not retriever._person_in_chunk(query_members, {"participants": "Rafa", "mentioned": "bernardo"})
+
+
+def _chunk(text, sim):
+    return {"text": text, "similarity_score": sim}
+
+
+def test_rrf_boosts_rare_term_chunk(retriever):
+    # A rare proper noun (high idf) should be pulled up past a higher-cosine
+    # chunk that shares no query term.
+    retriever._lex_idf = {"fiveguys": 6.0, "cheese": 2.0, "gil": 1.0}
+    candidates = [
+        _chunk("gil disse qualquer coisa no chat", 0.55),  # higher cosine, no query term
+        _chunk("fiveguys extra cheese", 0.40),             # lower cosine, rare term
+    ]
+    ranked = retriever._rrf_rerank("fiveguys cheese", candidates, rrf_k=60, lexical_weight=0.5)
+    assert ranked[0]["text"] == "fiveguys extra cheese"
+
+
+def test_rrf_lexical_weight_keeps_dense_winner(retriever):
+    # With a low lexical weight, a strong dense match is not displaced by a
+    # common-word lexical overlap.
+    retriever._lex_idf = {"cao": 0.2, "gil": 0.2}
+    candidates = [
+        _chunk("gil adotou a cuca no canil", 0.62),  # the relevant dense winner
+        _chunk("alguem tem um cao? o gil?", 0.30),   # common-word overlap only
+    ]
+    ranked = retriever._rrf_rerank("o cao do gil", candidates, rrf_k=60, lexical_weight=0.5)
+    assert ranked[0]["text"] == "gil adotou a cuca no canil"
