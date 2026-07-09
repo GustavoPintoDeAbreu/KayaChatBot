@@ -38,7 +38,8 @@ def _anonymize_transcript(transcript: list) -> list:
     try:
         import json as _json
         members_file = Path(__file__).parent.parent / "data" / "group_members.json"
-        data = _json.loads(members_file.read_text(encoding="utf-8"))
+        raw = _json.loads(members_file.read_text(encoding="utf-8"))
+        data = raw.get("members", raw) if isinstance(raw, dict) else raw
         labels = [chr(65 + i) for i in range(len(data))]
         mapping = {m["name"]: f"Member {labels[i]}" for i, m in enumerate(data)}
         result = []

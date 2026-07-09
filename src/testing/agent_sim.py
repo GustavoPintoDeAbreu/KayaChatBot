@@ -101,9 +101,10 @@ Score each response using the standard 6-dimension rubric.
 
 def _build_member_personas(members_file: str, num_agents: int) -> List[Dict[str, Any]]:
     """Load member profiles and build agent persona dicts."""
-    data = json.loads(Path(members_file).read_text(encoding="utf-8"))
+    raw = json.loads(Path(members_file).read_text(encoding="utf-8"))
+    members = raw.get("members", raw) if isinstance(raw, dict) else raw
     personas = []
-    for member in data[:num_agents]:
+    for member in members[:num_agents]:
         name = member.get("name", "Membro")
         key_facts = member.get("key_facts", [])
         if isinstance(key_facts, list):
