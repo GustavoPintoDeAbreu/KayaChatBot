@@ -390,7 +390,10 @@ rag:
   knowledge_approach: "json_only"
 
   # Token budget for total injected context (whitespace-based approximation: words / 0.60)
-  max_context_tokens: 3000
+  # Set to 1200 based on needle-in-haystack recall sweep (2026-07-09): reliable recall
+  # holds at ~2360 total tokens; above ~4800 tokens recall fails at ALL depths regardless
+  # of max_seq_length. Targeting system(~700)+RAG(1200)+history(~300)+msg(~100) ≈ 2300.
+  max_context_tokens: 1200
 
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true
