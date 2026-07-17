@@ -506,3 +506,32 @@ model_profiles:
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
+
+  # Experimental variant: same heretic base, trained at 4096 with long-context data.
+  # Active only via --profile gemma4-e4b-seq4096. Serving config (active_model_profile)
+  # is untouched until the keep/revert evaluation is complete.
+  gemma4-e4b-seq4096:
+    model:
+      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 32
+      lora_dropout: 0.0
+      chat_template: "gemma-4"
+      instruction_part: "<|turn>user\n"
+      response_part: "<|turn>model\n"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_heretic_seq4096"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.00005
+      max_steps: 450

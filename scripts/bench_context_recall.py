@@ -255,10 +255,14 @@ def main() -> None:
     ap.add_argument("--seq-lengths", type=int, nargs="+", default=SEQ_LENGTHS)
     ap.add_argument("--depths", type=float, nargs="+", default=DEPTHS)
     ap.add_argument("--fracs", type=float, nargs="+", default=TARGET_PROMPT_FRACTIONS)
+    ap.add_argument("--model-dir", type=str, default=None,
+                    help="Override the adapter directory to benchmark (default: from config).")
     args = ap.parse_args()
 
     config_path = str(Path(__file__).parent.parent / "config.yaml")
     config = load_config(config_path)
+    if args.model_dir:
+        config["training"]["output_dir"] = args.model_dir
     system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
 
     all_rows: List[dict] = []

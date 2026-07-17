@@ -477,6 +477,7 @@ class SyntheticDatasetMerger:
         chat_template: str = "gemma-4",
         kaya_system_prompt: Optional[str] = None,
         blocked_terms: Optional[List[str]] = None,
+        extra_files: Optional[List[str]] = None,
     ):
         _data = Path(__file__).parent.parent.parent / "data"
         self.kaya_file = Path(kaya_file) if kaya_file else _data / "synthetic_kaya.jsonl"
@@ -496,6 +497,7 @@ class SyntheticDatasetMerger:
         self.blocklist_patterns = compile_blocklist(blocked_terms or [])
         self.dropped_blocked = 0
         self.stripped_emoji = 0
+        self.extra_files = [Path(f) for f in (extra_files or [])]
 
         if model_id:
             try:
@@ -588,7 +590,7 @@ class SyntheticDatasetMerger:
 
         # Get system prompt for the conversation
         source = conversation.get('source', '')
-        if source in ('synthetic_kaya', 'synthetic_targeted', 'synthetic_local'):
+        if source in ('synthetic_kaya', 'synthetic_targeted', 'synthetic_local', 'needle_synthetic'):
             # Inject the persona used at inference time. Sourced from config.yaml
             # data.system_prompt (passed in by merge_datasets) so training and
             # inference can't drift; the inline string is only a legacy fallback.
@@ -687,6 +689,14 @@ class SyntheticDatasetMerger:
         print(f"\n📂 Loading Kaya-specific data from {self.kaya_file.name}...")
         kaya_conversations = self.load_conversations(self.kaya_file)
         print(f"✅ Loaded {len(kaya_conversations)} Kaya conversations")
+
+        # Load extra source files (e.g. long-context QA, needle-recall examples)
+        for extra_path in self.extra_files:
+            extra_convs = self.load_conversations(extra_path)
+            print(f"📎 Extra source {extra_path.name}: {len(extra_convs)} conversations")
+            kaya_conversations.extend(extra_convs)
+        if self.extra_files:
+            print(f"📊 Total after extra sources: {len(kaya_conversations)}")
 
         # Load general Portuguese data (if provided)
         portuguese_conversations = []
