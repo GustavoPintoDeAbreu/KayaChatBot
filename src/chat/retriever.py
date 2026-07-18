@@ -7,6 +7,7 @@ import os
 import re
 import json
 import threading
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -35,6 +36,25 @@ def _has_temporal_intent(query: str) -> bool:
     if not query:
         return False
     return bool(_TEMPORAL_INTENT_RE.search(query))
+
+
+# Function words dropped from the lexical (exact-term) signal so hybrid fusion
+# keys on content tokens — proper nouns, nicknames, brands — not "o que é que".
+_LEXICAL_STOPWORDS = {
+    "que", "qual", "quais", "quem", "onde", "quando", "como", "porque", "para",
+    "com", "sem", "dos", "das", "num", "numa", "the", "what", "who", "where",
+    "when", "how", "why", "does", "did", "was", "were", "and", "for", "with",
+    "about", "tem", "está", "esta", "sao", "são", "uma", "uns", "umas", "seu",
+    "sua", "dele", "dela", "isto", "isso", "aqui", "meu", "minha", "nao", "não",
+}
+
+
+def _lexical_tokens(text: str) -> List[str]:
+    """Content tokens (accent-stripped, ≥3 chars, non-stopword) for lexical match."""
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return [t for t in tokens if len(t) >= 3 and t not in _LEXICAL_STOPWORDS]
 
 
 def _relative_age(iso_date: Optional[str], today: Optional[datetime] = None) -> str:
@@ -102,9 +122,16 @@ class ConversationRetriever:
                 members_data = json.load(f)
             self._members_data = members_data.get('members', [])
             self.group_members = set()
+            # Map every alias to its canonical member name so person-filtering can
+            # compare *identities* rather than raw strings. Raw chat sender strings
+            # ("Gil João", "fredericop167") never equal an alias ("gil", "frederico"),
+            # so the old exact-match filter silently dropped those members' chunks.
+            self._alias_to_member: Dict[str, str] = {}
             for m in self._members_data:
+                name = m.get('name', '')
                 for alias in m.get('aliases', []):
                     self.group_members.add(alias.lower())
+                    self._alias_to_member[alias.lower()] = name
         else:
             # Fallback if JSON not available — log a warning
             import logging as _logging
@@ -117,6 +144,21 @@ class ConversationRetriever:
                 'peter', 'gil', 'gustavo', 'david', 'manuel', 'carnall', 'frederico',
                 'mateus', 'rafa', 'bernardo', 'chamusca', 'gilao', 'pedro'
             }
+            self._alias_to_member = {a: a for a in self.group_members}
+
+        # Longest aliases first so multi-word aliases ("benny pereira") win over
+        # their substrings ("benny") when normalising a raw sender string.
+        self._aliases_by_len = sorted(self._alias_to_member, key=len, reverse=True)
+
+        # Explicit sender-string → member overrides for display names that collide
+        # with another member's alias ("Gil João" contains "joão", also a Murgeiro
+        # alias) or have no matchable token ("fredericop167"). Sourced from the same
+        # config.data.sender_aliases map the extraction SenderResolver uses, so both
+        # paths agree on identity. Checked before the alias scan.
+        self._sender_overrides = {
+            str(k).lower(): v
+            for k, v in (config.get('data', {}).get('sender_aliases', {}) or {}).items()
+        }
 
     def initialize(self):
         """Initialize the retriever with vector database and embedding model."""
@@ -155,6 +197,37 @@ class ConversationRetriever:
             )
         print(f"✅ RAG Retriever initialized with {conv_count} conversation chunks")
 
+        if self.rag_config.get('hybrid', {}).get('enabled', False):
+            self._build_lexical_index()
+
+    def _build_lexical_index(self) -> None:
+        """Build an in-memory idf-weighted inverted index over chunk texts.
+
+        The dense channel misses rare exact terms (a project name in 1 message,
+        a beach in a dozen) because their chunks fall outside the dense top-k.
+        This lexical channel retrieves by content token so those chunks can enter
+        the candidate pool and be fused in. Cheap: ~2.4k short chunks in memory.
+        """
+        from collections import defaultdict
+        import math
+        data = self.collection.get(include=['documents', 'metadatas'])
+        ids = data.get('ids', []) or []
+        docs = data.get('documents', []) or []
+        metas = data.get('metadatas', []) or []
+        self._lex_ids = ids
+        self._lex_docs = docs
+        self._lex_metas = metas
+        self._lex_postings: Dict[str, set] = defaultdict(set)
+        for idx, text in enumerate(docs):
+            for tok in set(_lexical_tokens(text)):
+                self._lex_postings[tok].add(idx)
+        n = max(len(docs), 1)
+        self._lex_idf = {
+            tok: math.log(1.0 + n / len(postings))
+            for tok, postings in self._lex_postings.items()
+        }
+        print(f"✅ Lexical index built ({len(self._lex_postings)} terms over {len(docs)} chunks)")
+
     def extract_query_persons(self, query: str) -> List[str]:
         """Extract person names mentioned in the query."""
         query_lower = query.lower()
@@ -167,6 +240,49 @@ class ConversationRetriever:
                 mentioned.append(member)
 
         return mentioned
+
+    def _canonical_members(self, token: str) -> set:
+        """Map a raw participant/mentioned token to canonical member name(s).
+
+        Chat sender strings ("Gil João", "fredericop167", "João Gil") never
+        equal an alias, so identity comparison must normalise them: a member is
+        present when one of its aliases appears as a whole word in the token, or
+        (for glued handles like "fredericop167") as a substring. Longest aliases
+        are tried first so "benny pereira" wins over "benny".
+        """
+        if not token:
+            return set()
+        tl = token.lower().strip()
+        # Explicit override wins (resolves cross-member sender-name collisions).
+        if tl in self._sender_overrides:
+            return {self._sender_overrides[tl]}
+        # Whole-word alias match first (precise); fall back to substring only for
+        # glued handles ("fredericop167") when the whole-word pass found nothing.
+        matched = {
+            self._alias_to_member[a]
+            for a in self._aliases_by_len
+            if re.search(rf"\b{re.escape(a)}\b", tl)
+        }
+        if not matched:
+            matched = {
+                self._alias_to_member[a] for a in self._aliases_by_len if a in tl
+            }
+        return matched
+
+    def _person_in_chunk(self, query_members: set, metadata: Dict[str, Any]) -> bool:
+        """True if any queried member authored or is mentioned in the chunk.
+
+        Compares canonical member identities on both sides so raw sender-string
+        variants (the dominant form for several members) are matched correctly.
+        """
+        chunk_members = set()
+        for field in ('participants', 'mentioned'):
+            raw = metadata.get(field, '')
+            if not raw:
+                continue
+            for tok in raw.split(','):
+                chunk_members |= self._canonical_members(tok)
+        return bool(query_members & chunk_members)
 
     def retrieve(self, query: str, top_k: Optional[int] = None,
                  query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
@@ -195,69 +311,174 @@ class ConversationRetriever:
         # least-irrelevant chunks for off-topic queries. 0.0 disables filtering.
         min_similarity = self.rag_config.get('min_similarity', 0.0)
 
-        # Extract mentioned persons for filtering
+        # Extract mentioned persons for filtering, normalised to canonical
+        # member identities so they compare against sender-string variants.
         query_persons = self.extract_query_persons(query) if FILTER_BY_PERSON else []
+        query_members = {
+            self._alias_to_member.get(p, p) for p in query_persons
+        }
 
         # Generate query embedding (normalized to match the stored vectors),
         # unless the caller already computed it.
         if query_embedding is None:
             query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
-        # NOTE: ChromaDB doesn't support $contains, so we retrieve more results and filter post-query
-        # Retrieve extra results to account for filtering
-        n_results_to_fetch = top_k * 3 if query_persons else top_k
+        # Over-fetch a candidate pool, then filter (min_similarity + person) and
+        # re-rank. Hybrid fusion re-ranks a larger pool; the person filter also
+        # needs headroom because ChromaDB can't filter by participant server-side.
+        hybrid_cfg = self.rag_config.get('hybrid', {})
+        hybrid_enabled = hybrid_cfg.get('enabled', False)
+        pool = hybrid_cfg.get('candidate_pool', 40) if hybrid_enabled else 0
+        n_results_to_fetch = max(pool, top_k * 3 if query_persons else top_k)
 
-        # Query the vector database without where clause
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=min(n_results_to_fetch, self.collection.count()),  # Don't exceed collection size
             include=['documents', 'metadatas', 'distances']
         )
 
-        # Format results
-        retrieved_chunks = []
-        for i, (doc, metadata, distance) in enumerate(zip(
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
-        )):
+        # Collect every eligible dense candidate (cosine order preserved), keyed
+        # by chunk id so the lexical channel can union without duplicates.
+        docs0 = results['documents'][0]
+        metas0 = results['metadatas'][0]
+        dists0 = results['distances'][0]
+        dense_ids = (results.get('ids') or [[]])[0]
+        if len(dense_ids) != len(docs0):  # e.g. mocked query() without ids
+            dense_ids = [f"_pos_{i}" for i in range(len(docs0))]
+        candidates: List[Dict[str, Any]] = []
+        seen_ids = set()
+        for cid, doc, metadata, distance in zip(
+            dense_ids, docs0, metas0, dists0
+        ):
             similarity = 1 - distance  # cosine distance → cosine similarity
             if similarity < min_similarity:
                 continue  # Below relevance floor — skip
+            if query_members and not self._person_in_chunk(query_members, metadata):
+                continue
+            seen_ids.add(cid)
+            candidates.append(self._make_chunk(doc, metadata, similarity))
 
-            # Post-query filtering by person if needed
-            if query_persons:
-                participants_list = [p.lower() for p in metadata.get('participants', '').split(',')] if metadata.get('participants') else []
-                mentioned_list = [m.lower() for m in metadata.get('mentioned', '').split(',')] if metadata.get('mentioned') else []
+        # Lexical channel: pull chunks that contain rare query terms but fell
+        # outside the dense pool, so exact proper-noun / rare-term matches can be
+        # fused in rather than being unreachable (dense-only never fetched them).
+        if hybrid_enabled and getattr(self, '_lex_postings', None):
+            for extra in self._lexical_candidates(
+                query, query_embedding, min_similarity, query_members, exclude=seen_ids
+            ):
+                candidates.append(extra)
 
-                # Check if any query person is in participants or mentioned (case-insensitive)
-                person_found = any(
-                    person in participants_list or person in mentioned_list
-                    for person in query_persons
-                )
+        # Rank: dense-only keeps cosine order; hybrid fuses cosine with an
+        # idf-weighted lexical ranking via Reciprocal Rank Fusion.
+        if hybrid_enabled and candidates:
+            candidates = self._rrf_rerank(
+                query, candidates,
+                hybrid_cfg.get('rrf_k', 60),
+                hybrid_cfg.get('lexical_weight', 0.5),
+            )
 
-                if not person_found:
-                    continue  # Skip this chunk
-
-            retrieved_chunks.append({
-                'rank': len(retrieved_chunks) + 1,
-                'text': doc,
-                'metadata': metadata,
-                'similarity_score': similarity,
-                'distance': distance,
-                'participants': metadata.get('participants', '').split(',') if metadata.get('participants') else [],
-                'mentioned': metadata.get('mentioned', '').split(',') if metadata.get('mentioned') else [],
-                'message_count': metadata.get('message_count', 0),
-                'token_count': metadata.get('token_count', 0),
-                'timestamp_start': metadata.get('timestamp_start'),
-                'timestamp_end': metadata.get('timestamp_end')
-            })
-            
-            # Stop when we have enough results after filtering
-            if len(retrieved_chunks) >= top_k:
-                break
-
+        retrieved_chunks = candidates[:top_k]
+        for i, chunk in enumerate(retrieved_chunks, 1):
+            chunk['rank'] = i
         return retrieved_chunks
+
+    def _make_chunk(self, doc: str, metadata: Dict[str, Any],
+                    similarity: float) -> Dict[str, Any]:
+        """Build the standard retrieved-chunk dict from a document + metadata."""
+        return {
+            'text': doc,
+            'metadata': metadata,
+            'similarity_score': similarity,
+            'distance': 1 - similarity,
+            'participants': metadata.get('participants', '').split(',') if metadata.get('participants') else [],
+            'mentioned': metadata.get('mentioned', '').split(',') if metadata.get('mentioned') else [],
+            'message_count': metadata.get('message_count', 0),
+            'token_count': metadata.get('token_count', 0),
+            'timestamp_start': metadata.get('timestamp_start'),
+            'timestamp_end': metadata.get('timestamp_end'),
+        }
+
+    def _lexical_query_scores(self, query: str) -> Dict[int, float]:
+        """idf-weighted lexical score per indexed chunk for the query terms."""
+        scores: Dict[int, float] = {}
+        for term in set(_lexical_tokens(query)):
+            postings = self._lex_postings.get(term)
+            if not postings:
+                continue
+            weight = self._lex_idf.get(term, 0.0)
+            for idx in postings:
+                scores[idx] = scores.get(idx, 0.0) + weight
+        return scores
+
+    def _lexical_candidates(self, query: str, query_embedding: Any,
+                            min_similarity: float, query_members: set,
+                            exclude: set, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return eligible chunks that match query terms but weren't dense-fetched.
+
+        Rarer terms (higher idf) dominate the ranking so a project name in one
+        message beats a chunk that merely shares common words. Cosine is computed
+        from the stored embedding so these candidates still respect the relevance
+        floor and carry a real similarity_score.
+        """
+        scores = self._lexical_query_scores(query)
+        if not scores:
+            return []
+        import numpy as np
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        want_idx = [idx for idx, _ in ranked[: limit * 3]
+                    if self._lex_ids[idx] not in exclude]
+        if not want_idx:
+            return []
+        want_ids = [self._lex_ids[idx] for idx in want_idx]
+        fetched = self.collection.get(ids=want_ids, include=['documents', 'metadatas', 'embeddings'])
+        emb_by_id = dict(zip(fetched['ids'], fetched['embeddings']))
+        meta_by_id = dict(zip(fetched['ids'], fetched['metadatas']))
+        doc_by_id = dict(zip(fetched['ids'], fetched['documents']))
+        q = np.asarray(query_embedding, dtype=float)
+        out = []
+        for cid in want_ids:
+            emb = emb_by_id.get(cid)
+            if emb is None:
+                continue
+            similarity = float(np.dot(q, np.asarray(emb, dtype=float)))
+            if similarity < min_similarity:
+                continue
+            metadata = meta_by_id.get(cid, {})
+            if query_members and not self._person_in_chunk(query_members, metadata):
+                continue
+            out.append(self._make_chunk(doc_by_id.get(cid, ''), metadata, similarity))
+            if len(out) >= limit:
+                break
+        return out
+
+    def _rrf_rerank(self, query: str, candidates: List[Dict[str, Any]],
+                    rrf_k: int, lexical_weight: float = 0.5) -> List[Dict[str, Any]]:
+        """Fuse a cosine ranking with an idf-weighted lexical ranking via RRF.
+
+        Reciprocal Rank Fusion is score-scale-free: each list contributes
+        ``1 / (rrf_k + rank)``. The dense list ranks all candidates by cosine; the
+        lexical list ranks them by idf-weighted query-term overlap, so exact
+        proper-noun / nickname matches surface even when their dense score is
+        mid-pack (or when they entered only through the lexical channel).
+        ``lexical_weight`` (<1) keeps the lexical channel additive — it pulls rare
+        exact-term chunks up without letting common-word overlap displace strong
+        dense matches on person-scoped queries.
+        """
+        # Dense list: rank every candidate by cosine (candidates may include
+        # lexical-channel entries, so re-sort rather than trust arrival order).
+        by_cosine = sorted(candidates, key=lambda c: c['similarity_score'], reverse=True)
+        rrf = {id(c): 1.0 / (rrf_k + rank) for rank, c in enumerate(by_cosine, 1)}
+
+        query_terms = set(_lexical_tokens(query))
+        if query_terms:
+            def lex_weight(chunk):
+                terms = set(_lexical_tokens(chunk['text']))
+                return sum(self._lex_idf.get(t, 0.0) for t in (query_terms & terms))
+            lexical = sorted(candidates, key=lex_weight, reverse=True)
+            for rank, chunk in enumerate(lexical, 1):
+                if lex_weight(chunk) > 0:
+                    rrf[id(chunk)] += lexical_weight / (rrf_k + rank)
+
+        return sorted(candidates, key=lambda c: rrf[id(c)], reverse=True)
 
     def format_context(self, retrieved_chunks: List[Dict[str, Any]],
                        show_dates: bool = False) -> str:

@@ -1,0 +1,48 @@
+{
+  "description": "SANITIZED TEMPLATE for data/golden_retrieval.json (which is git-ignored — it holds real member data). Consumed by src/testing/retrieval_eval.py. Each query carries `gold`: a list of specs, where a spec is a list of substrings that must ALL co-occur in a single retrieved chunk (accent/case-insensitive). Multiple specs = multiple relevant chunks (recall@k = fraction covered). Fill the real file with anchors verified present in data/all_messages_cleaned.jsonl.",
+  "version": "1.0.0",
+  "queries": [
+    {
+      "id": "single_memberA_pet",
+      "category": "single_member",
+      "query": "Como se chama o animal do <Member A>?",
+      "gold": [["<pet-name>"]],
+      "note": "Single distinctive anchor that identifies the relevant chunk."
+    },
+    {
+      "id": "attr_pet_not_wrong",
+      "category": "attribution",
+      "query": "O animal do <Member A> chama-se <Member B's pet>?",
+      "gold": [["<Member A's pet>"]],
+      "note": "Attribution trap: the correct chunk must surface A's fact, not B's."
+    },
+    {
+      "id": "recency_topic",
+      "category": "recency",
+      "query": "Quando foi a última vez que falaram de <topic>?",
+      "gold": [["<topic-anchor>"]],
+      "note": "Temporal-intent query; the latest matching chunk should rank."
+    },
+    {
+      "id": "codeswitch_en_query",
+      "category": "codeswitch",
+      "query": "Where does <Member A> work now?",
+      "gold": [["<employer-anchor>"]],
+      "note": "English query against code-switched PT/EN logs — multilingual dense recall."
+    },
+    {
+      "id": "propernoun_exact",
+      "category": "propernoun",
+      "query": "<exact-proper-noun-or-domain>",
+      "gold": [["<proper-noun>"]],
+      "note": "Rare exact term/domain — dense-only weak spot, lexical strong spot."
+    },
+    {
+      "id": "personfilter_memberA",
+      "category": "person_filter",
+      "query": "Fala-me do <Member A>.",
+      "gold": [["<Member A anchor>"]],
+      "note": "Query names a member → person-filter active. Members whose sender string differs from their alias (e.g. 'First Last' vs alias 'first') are missed by the exact-match participant filter."
+    }
+  ]
+}
