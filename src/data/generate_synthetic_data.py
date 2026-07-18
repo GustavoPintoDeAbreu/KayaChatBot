@@ -6,15 +6,11 @@ Supports batch, single, count, and targeted generation modes.
 
 import argparse
 import json
-import os
 import random
+import sys
 from pathlib import Path
 from typing import List, Dict
 from tqdm import tqdm
-import yaml
-
-import sys
-from pathlib import Path
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))

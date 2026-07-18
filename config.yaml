@@ -66,8 +66,6 @@ generation:
     delay_seconds: 30
 
 # Data Processing Settings
-
-# Data Processing Settings
 data:
   # New synthetic data pipeline
   train_file: "./data/train_synthetic.jsonl"
@@ -77,11 +75,7 @@ data:
   input_file: "./data/wpp/WhatsApp Chat with Kaya 👀.txt"
   output_file: "./data/processed_chat.jsonl"
   
-  # Token-based chunking settings
-  max_tokens_per_chunk: 2048  # Keep chunks smaller than max_seq_length for safety
-  overlap_tokens: 256  # Overlap between chunks for continuity
-  
-  # Data split
+  # Data split (consumed by merge_datasets.py)
   train_test_split: 0.9  # 90% train, 10% validation
   
   # Manual sender-name overrides for Instagram usernames that cannot be

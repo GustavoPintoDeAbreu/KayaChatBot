@@ -4,18 +4,18 @@ Minimal RAG test - just validates core logic without external downloads.
 
 import os
 import sys
-import yaml
 from pathlib import Path
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.config_loader import load_config
+
 # Load configuration
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(Path(__file__).parent.parent.parent / "config.yaml")))
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+config = load_config(str(CONFIG_PATH))
 
-def test_rag_logic():
+def run_rag_logic():
     """Test core RAG logic without external dependencies."""
     print("=" * 60)
     print("🧪 MINIMAL RAG LOGIC TEST")
@@ -97,7 +97,7 @@ def test_rag_logic():
 
         context = retriever.format_context(mock_results)
         print(f"   Context formatted: {len(context)} characters")
-        assert "[Relevant past conversations:]" in context
+        assert "=== Conversas relevantes do grupo ===" in context
         print("✅ Context formatting works")
 
     except Exception as e:
@@ -120,6 +120,10 @@ def test_rag_logic():
 
     return True
 
+def test_rag_logic():
+    assert run_rag_logic()
+
+
 if __name__ == "__main__":
-    success = test_rag_logic()
+    success = run_rag_logic()
     sys.exit(0 if success else 1)

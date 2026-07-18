@@ -6,14 +6,14 @@ import json
 import os
 from pathlib import Path
 from typing import List, Dict
-import yaml
+
+from src.config_loader import load_config as _load_config
 
 
 def load_config() -> Dict:
-    """Load configuration from config.yaml."""
+    """Load configuration via the single entry point (src.config_loader)."""
     config_path = Path(__file__).parent.parent.parent / "config.yaml"
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    return _load_config(str(config_path))
 
 
 def get_base_dir() -> Path:

@@ -80,7 +80,7 @@ def main():
         portuguese_file=None,  # Removed: not RAG-aware, would confuse the model
         output_train=output_train,
         output_val=output_val,
-        train_split=0.9,
+        train_split=config.get("data", {}).get("train_test_split", 0.9),
         kaya_ratio=1.0,  # 100% RAG-aware Kaya Q&A data
         model_id=model_id,
         chat_template=config.get("model", {}).get("chat_template", "gemma-4"),

@@ -82,7 +82,7 @@ def analyze_filler_words(filepath, description):
                         if total_filler_count > 1:
                             responses_with_multiple_fillers += 1
                             
-            except Exception as e:
+            except Exception:
                 continue
     
     # Print statistics

@@ -21,7 +21,7 @@ import re
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 # ---------------------------------------------------------------------------
 # Paths

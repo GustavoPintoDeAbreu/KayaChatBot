@@ -7,7 +7,6 @@ the generation-time scrub can't drift.
 """
 
 import re
-from typing import List, Pattern
 
 # Emoji ranges (incl. the trailing-😊 habit), variation selectors and ZWJ.
 # Deliberately excludes the general-punctuation block so em-dashes, curly quotes

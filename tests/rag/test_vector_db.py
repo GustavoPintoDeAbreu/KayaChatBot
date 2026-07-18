@@ -9,12 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Load config
-import yaml
+from src.config_loader import load_config
 CONFIG_PATH = Path("/app/config.yaml")
 if not CONFIG_PATH.exists():
-    CONFIG_PATH = Path("config.yaml")
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+    CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+config = load_config(str(CONFIG_PATH))
 
 def test_retrieval():
     print("Testing RAG retrieval...")

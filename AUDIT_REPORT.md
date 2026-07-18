@@ -357,3 +357,28 @@ Each finding is tagged with the relevant audit category: `[SECURITY]` `[QUALITY]
 ---
 
 *End of report. No source files were modified during this audit; only `AUDIT_REPORT.md` was created.*
+
+---
+
+## 6. Remediation Status (updated 2026-07-18)
+
+| Finding | Status | Notes |
+|---|---|---|
+| P0-1 Docker deps contradict requirements.txt | ✅ Fixed | Dockerfile now installs from `requirements.txt` (single source of truth); torch/CUDA wheels kept separate. |
+| P0-2 PII committed to git | 🟠 Partial | Real `group_members.json` / `group_knowledge.json` / `golden_test_conversations.json` untracked; only `.example` templates tracked. **Git-history purge (filter-repo/BFG) still REQUIRED — pending owner approval.** |
+| P1-3 Wrong distance metric | ✅ Fixed | Collections rebuilt with `hnsw:space=cosine`; embeddings normalized. |
+| P1-4 Single-line response truncation | ✅ Fixed | `response_utils` keeps multi-line answers; old `split("\n")[0]` removed. |
+| P1-5 Multi-profile config non-functional for Qwen3 | ✅ Fixed | Profiles carry `chat_template`/`instruction_part`/`response_part`; train + merge read them. |
+| P1-6 Uncensored bot on 0.0.0.0 without auth | ✅ Fixed | Localhost-default bind; prod behind Cloudflare Access + Gradio auth (`KAYA_WEB_USER`/`KAYA_WEB_PASS`). |
+| P2-7 Naive substring member matching | ✅ Fixed | Word-boundary regex in `build_vector_db.py` and retriever person extraction. |
+| P2-8 Train/serve RAG format skew | ✅ Fixed | `format_direct_training.py` emits the same `=== Conversas relevantes do grupo ===` block as inference. |
+| P2-9 `config.docker.yaml` drifted duplicate | ✅ Fixed | File deleted; single `config.yaml` used everywhere (stale references cleaned from tests/README 2026-07-18). |
+| P2-10 Dead code / competing token heuristics | ✅ Fixed | Dead `to_instruction_chunks`, unused imports and dead config keys removed (2026-07-18 sweep). |
+| P2-11 Import-time side effects + unsafe singleton | ✅ Fixed | `get_retriever()` is a double-checked-locking singleton. |
+| P2-12 `UnboundLocalError` in providers | ✅ Fixed | Providers guard missing conversation keys. |
+| P3-13 Bare `except:` blocks | ✅ Fixed | No bare `except:` remains in `src/`. |
+| P3-14 Redundant embedding/DB calls | ✅ Fixed | Query embedded once and reused across conversation + KB search. |
+| P3-17 Config read without `load_config()` | ✅ Fixed | All remaining raw `yaml.safe_load` call sites migrated to `src.config_loader.load_config` (2026-07-18). |
+| P3-19 Two virtualenv conventions | ✅ Fixed | Stray bare `.venv/` removed (2026-07-18); `kaya_chatbot_env/` is the single venv. |
+
+Open items: **P0-2 history purge** (destructive — owner must approve), P3-15/P3-16/P3-18 (low-priority ergonomics, unverified).

@@ -6,44 +6,25 @@ Tests the WhatsAppReader and InstagramReader with LLM cleaning enabled.
 
 import sys
 import os
-import yaml
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, '/app/src')
+# Add repo root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.config_loader import load_config as _load_config
 from src.data.readers import WhatsAppReader, InstagramReader
 
 
 def load_config():
-    """Load configuration."""
-    # In Docker, use config.docker.yaml, otherwise use config.yaml
-    config_paths = ["/app/config.docker.yaml", "/app/config.yaml", "config.docker.yaml", "config.yaml"]
-    config = None
-    
+    """Load configuration via the single entry point (src.config_loader)."""
+    config_paths = ["/app/config.yaml", str(Path(__file__).parent.parent.parent / "config.yaml")]
     for path in config_paths:
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-                print(f"✅ Loaded config from {path}")
-                break
-        except FileNotFoundError:
-            continue
-    
-    if config is None:
-        raise FileNotFoundError("Could not find config file")
-    
-    # Debug: print config structure
-    print(f"DEBUG: Config keys: {list(config.keys())}")
-    if 'data' in config:
-        print(f"DEBUG: Data keys: {list(config['data'].keys())}")
-        if 'cleaning' in config['data']:
-            print(f"DEBUG: Cleaning config: {config['data']['cleaning']}")
-    
-    return config
+        if os.path.exists(path):
+            return _load_config(path)
+    raise FileNotFoundError("Could not find config file")
 
 
-def test_whatsapp_cleaning():
+def run_whatsapp_cleaning():
     """Test WhatsApp reader with LLM cleaning."""
     print("\n" + "="*60)
     print("🧪 TESTING WHATSAPP LLM CLEANING")
@@ -102,7 +83,7 @@ def test_whatsapp_cleaning():
             temp_file.unlink()
 
 
-def test_instagram_cleaning():
+def run_instagram_cleaning():
     """Test Instagram reader with LLM cleaning."""
     print("\n" + "="*60)
     print("🧪 TESTING INSTAGRAM LLM CLEANING")
@@ -188,8 +169,8 @@ def main():
     print(f"✅ Using LLM provider: {config['generation']['provider']}")
 
     # Run tests
-    whatsapp_ok = test_whatsapp_cleaning()
-    instagram_ok = test_instagram_cleaning()
+    whatsapp_ok = run_whatsapp_cleaning()
+    instagram_ok = run_instagram_cleaning()
 
     if whatsapp_ok and instagram_ok:
         print("\n" + "="*60)
@@ -203,6 +184,14 @@ def main():
         print("Check the errors above and fix the implementation.")
         print("="*60)
         return False
+
+
+def test_whatsapp_cleaning():
+    assert run_whatsapp_cleaning()
+
+
+def test_instagram_cleaning():
+    assert run_instagram_cleaning()
 
 
 if __name__ == "__main__":

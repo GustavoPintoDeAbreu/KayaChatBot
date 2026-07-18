@@ -4,17 +4,24 @@ Converts to ShareGPT format for mixing with Kaya-specific data.
 """
 
 import json
-import yaml
+import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict
 from datasets import load_dataset
 from tqdm import tqdm
 import random
 
-# Load configuration
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+# Make src/ importable when run from any CWD
+_REPO_ROOT = Path(__file__).parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.config_loader import load_config
+
+# Load configuration via the single entry point (load_config — never read
+# config.yaml directly), so profile resolution + validation are applied.
+CONFIG_PATH = _REPO_ROOT / "config.yaml"
+config = load_config(str(CONFIG_PATH))
 
 # Configuration
 TEST_MODE = config['test_mode']['enabled']
@@ -109,23 +116,6 @@ def convert_to_sharegpt(example: Dict) -> Dict:
         "source": "alpaca-portuguese",
         "system": PORTUGUESE_SYSTEM_PROMPT
     }
-
-
-def adapt_to_european_portuguese(text: str) -> str:
-    """Basic adaptations from Brazilian to European Portuguese."""
-    
-    # Common Brazilian → European Portuguese replacements
-    replacements = {
-        'você': 'tu',
-        'vocês': 'vocês',  # Same in both
-        'está': 'está',     # Same in both
-        'estão': 'estão',   # Same in both
-    }
-    
-    # Note: Full adaptation would require more sophisticated NLP
-    # For now, we keep it simple and rely on the mix with Kaya data
-    
-    return text
 
 
 def main():

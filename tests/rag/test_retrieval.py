@@ -9,15 +9,14 @@ from pathlib import Path
 # Add src to sys.path for Docker compatibility
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import yaml
+from src.config_loader import load_config
 
 # Load config
-config_path = Path("config.yaml")
+config_path = Path(__file__).parent.parent.parent / "config.yaml"
 if not config_path.exists():
     config_path = Path("/app/config.yaml")
 
-with open(config_path, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+config = load_config(str(config_path))
 
 print("=" * 60)
 print("🧪 QUICK RAG TEST")

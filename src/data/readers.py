@@ -3,7 +3,7 @@ import os
 import json
 import random
 import hashlib
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 from datetime import datetime
@@ -285,9 +285,6 @@ class InstagramReader:
 
         messages = []
 
-        # Extract participants (for reference, though we'll use sender_name from messages)
-        participants = data.get('participants', [])
-
         # Process messages
         for msg in data.get('messages', []):
             # Skip messages without content
@@ -348,95 +345,6 @@ class ConversationFormatter:
         else:
             # Rough approximation: 1 token ≈ 4 characters for English/Portuguese
             return len(text) // 4
-
-    def to_instruction_chunks(
-        self, system_prompt: str, max_tokens: int = 2048, overlap_tokens: int = 256
-    ) -> List[Dict]:
-        """
-        Creates instruction-formatted chunks based on token count.
-        Format: System prompt + chat history chunk.
-        Now merges consecutive messages from the same sender.
-
-        Args:
-            system_prompt: The system instruction for the model.
-            max_tokens: Maximum tokens per training example.
-            overlap_tokens: Overlap between chunks for continuity.
-        """
-        dataset = []
-
-        # Merge consecutive messages from same sender
-        merged_messages = []
-        if self.messages:
-            current_sender = self.messages[0].sender
-            current_content = [self.messages[0].content]
-            current_date = self.messages[0].date
-
-            for msg in self.messages[1:]:
-                if msg.sender == current_sender:
-                    # Same sender, merge
-                    current_content.append(msg.content)
-                else:
-                    # Different sender, save and start new
-                    merged_text = " ".join(current_content)
-                    merged_messages.append(ChatMessage(current_date, current_sender, merged_text))
-                    current_sender = msg.sender
-                    current_content = [msg.content]
-                    current_date = msg.date
-
-            # Add last message
-            merged_text = " ".join(current_content)
-            merged_messages.append(ChatMessage(current_date, current_sender, merged_text))
-
-        # Build the full conversation text from merged messages
-        full_conversation = ""
-        for msg in merged_messages:
-            full_conversation += f"{msg.sender}: {msg.content}\n"
-
-        # Calculate token budget (reserve space for system prompt and formatting)
-        system_tokens = self._count_tokens(system_prompt)
-        # Reserve ~200 tokens for chat template formatting (<|begin_of_text|>, etc.)
-        available_tokens = max_tokens - system_tokens - 200
-
-        if available_tokens <= 0:
-            raise ValueError(f"System prompt too long! Uses {system_tokens} tokens.")
-
-        # Split messages into token-based chunks
-        current_chunk = []
-        current_tokens = 0
-
-        for msg in merged_messages:
-            msg_text = f"{msg.sender}: {msg.content}\n"
-            msg_tokens = self._count_tokens(msg_text)
-
-            if current_tokens + msg_tokens > available_tokens and current_chunk:
-                # Save current chunk and start new one with overlap
-                chunk_text = "".join(current_chunk)
-                dataset.append({"text": chunk_text, "system": system_prompt})
-
-                # Keep last few messages for overlap
-                overlap_chunk = []
-                overlap_count = 0
-                for i in range(len(current_chunk) - 1, -1, -1):
-                    overlap_count += self._count_tokens(current_chunk[i])
-                    if overlap_count >= overlap_tokens:
-                        break
-                    overlap_chunk.insert(0, current_chunk[i])
-
-                current_chunk = overlap_chunk
-                current_tokens = overlap_count
-
-            current_chunk.append(msg_text)
-            current_tokens += msg_tokens
-
-        # Add final chunk
-        if current_chunk:
-            chunk_text = "".join(current_chunk)
-            dataset.append({"text": chunk_text, "system": system_prompt})
-
-        print(
-            f"Created {len(dataset)} token-based chunks from {len(self.messages)} messages."
-        )
-        return dataset
 
     def format_for_chat(self, data_entry: Dict) -> str:
         """
@@ -724,7 +632,6 @@ class SyntheticDatasetMerger:
 
                 # Sample Portuguese data to match ratio
                 if portuguese_needed < len(portuguese_conversations):
-                    import random
                     random.seed(3407)
                     portuguese_conversations = random.sample(portuguese_conversations, portuguese_needed)
                     print(f"   🎲 Sampled {portuguese_needed} Portuguese examples (from {len(self.load_conversations(self.portuguese_file))} available)")

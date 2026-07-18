@@ -23,7 +23,7 @@ def run_script(script_path: Path, description: str):
     print("=" * 60)
     
     try:
-        result = subprocess.run(
+        subprocess.run(
             [PYTHON, str(script_path)],
             cwd=str(BASE_DIR),
             check=True
