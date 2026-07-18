@@ -30,6 +30,14 @@ def main():
         choices=["a", "b"],
         help="Dataset variant label (a or b). Appended to output filenames for A/B comparison.",
     )
+    parser.add_argument(
+        "--extra-source",
+        action="append",
+        dest="extra_sources",
+        default=[],
+        metavar="PATH",
+        help="Additional JSONL source file(s) to include. May be repeated.",
+    )
     args = parser.parse_args()
 
     # Detect if running in Docker
@@ -58,6 +66,13 @@ def main():
     _src_path = _src if os.path.isabs(_src) else f"{data_dir}/{Path(_src).name}"
     print(f"📄 Synthetic source: {_src_path}")
 
+    extra_sources = [
+        (s if os.path.isabs(s) else str(Path(data_dir) / Path(s).name))
+        for s in args.extra_sources
+    ]
+    if extra_sources:
+        print(f"📎 Extra sources: {extra_sources}")
+
     # Only use RAG-aware Kaya data (no general Portuguese alpaca data)
     # The model should learn from RAG examples only
     merger = SyntheticDatasetMerger(
@@ -73,6 +88,7 @@ def main():
         # the term blocklist so blocked content never enters the fine-tune.
         kaya_system_prompt=config.get("data", {}).get("system_prompt"),
         blocked_terms=config.get("data", {}).get("blocked_terms", []),
+        extra_files=extra_sources,
     )
     
     train_count, val_count = merger.merge_and_split()
