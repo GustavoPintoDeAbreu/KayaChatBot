@@ -33,15 +33,11 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import yaml
-from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -122,9 +118,9 @@ Rules:
 
 
 def load_config() -> Dict[str, Any]:
-    """Load configuration from config.yaml."""
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    """Load configuration via the single entry point (src.config_loader)."""
+    from src.config_loader import load_config as _load_config
+    return _load_config(str(CONFIG_FILE))
 
 
 def get_profile_fields(config: Dict[str, Any]) -> List[str]:

@@ -9,7 +9,6 @@ import re
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
-from collections import defaultdict
 import chromadb
 from sentence_transformers import SentenceTransformer
 import tiktoken
@@ -33,7 +32,7 @@ EMBEDDING_MODEL = RAG_CONFIG['embedding_model']
 
 # Term blocklist: messages/facts mentioning these are dropped before embedding so
 # blocked terms (e.g. "Dolby Atmos") never surface in retrieval.
-from src.data.term_blocklist import compile_blocklist, filter_messages, redact_sentences, is_blocked
+from src.data.term_blocklist import compile_blocklist, filter_messages, redact_sentences
 BLOCKLIST_PATTERNS = compile_blocklist(config.get('data', {}).get('blocked_terms', []))
 
 # Detect if running in Docker

@@ -22,10 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import yaml
-
 # Ensure repo root is on sys.path so sibling packages can be imported
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from src.config_loader import load_config
 
 
 # ---------------------------------------------------------------------------
@@ -971,8 +971,7 @@ def main() -> None:
     config_path = args.config or str(
         Path(__file__).parent.parent.parent / "config.yaml"
     )
-    with open(config_path, "r", encoding="utf-8") as fh:
-        config = yaml.safe_load(fh)
+    config = load_config(config_path)
 
     random.seed(args.seed)
 

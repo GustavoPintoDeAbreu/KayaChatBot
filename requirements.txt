@@ -60,6 +60,7 @@ uvicorn==0.42.0
 httpx==0.28.1
 
 # --- Utilities ---
+psutil==7.2.2           # train.py memory reporting
 tqdm==4.67.1
 python-dotenv==1.0.1
 colorama==0.4.6

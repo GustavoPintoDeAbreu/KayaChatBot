@@ -16,10 +16,10 @@ import itertools
 import json
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 # Ensure project root is importable when running as a script
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -27,10 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.testing.conversation_tester import (
     ConversationTester,
     ScenarioResult,
-    LLMJudgeTester,
     GoldenTestRunner,
     load_provider,
-    LocalModel,
 )
 
 

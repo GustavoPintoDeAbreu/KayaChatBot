@@ -210,11 +210,6 @@ class TestMergedTrainingData:
             f"{len(missing)} training records have no system prompt: first 5 → {missing[:5]}"
         )
 
-    @pytest.mark.xfail(
-        reason="Existing train_synthetic.jsonl was generated before identity-leak filter; "
-               "will pass after pipeline re-run with updated prompts",
-        strict=False,
-    )
     def test_no_identity_leaks_in_train_assistant_turns(self, train_records):
         """Merged training data must not have identity leaks in assistant turns."""
         texts = _get_assistant_texts(train_records)

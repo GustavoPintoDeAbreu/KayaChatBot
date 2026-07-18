@@ -27,11 +27,13 @@ if [[ ! -f .env ]]; then
 fi
 
 OTHER_ENV=$([[ "$ENV_NAME" == "dev" ]] && echo "prod" || echo "dev")
-if docker ps --format '{{.Names}}' | grep -qx "kaya-${OTHER_ENV}"; then
-  echo "❌ kaya-${OTHER_ENV} is already running and shares the single GPU." >&2
-  echo "   Stop it first: scripts/app_down.sh ${OTHER_ENV}" >&2
-  exit 1
-fi
+for BUSY in "kaya-${OTHER_ENV}" "kaya-whatsapp"; do
+  if docker ps --format '{{.Names}}' | grep -qx "$BUSY"; then
+    echo "❌ $BUSY is already running and shares the single GPU." >&2
+    echo "   Stop it first (scripts/app_down.sh ${OTHER_ENV} or: docker rm -f $BUSY)" >&2
+    exit 1
+  fi
+done
 
 PORT=$([[ "$ENV_NAME" == "dev" ]] && echo 7861 || echo 7860)
 

@@ -5,22 +5,20 @@ Tests chunking, vector database, and retrieval functionality.
 
 import os
 import sys
-import yaml
 from pathlib import Path
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.config_loader import load_config
+
 # Load configuration
 CONFIG_PATH = Path("/app/config.yaml")
 if not CONFIG_PATH.exists():
-    CONFIG_PATH = Path("config.yaml")
-print(f"Loading config from: {CONFIG_PATH}")
-print(f"Config exists: {CONFIG_PATH.exists()}")
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+    CONFIG_PATH = Path(__file__).parent.parent.parent / "config.yaml"
+config = load_config(str(CONFIG_PATH))
 
-def test_rag_components():
+def run_rag_components():
     """Test all RAG components end-to-end."""
     print("=" * 60)
     print("🧪 RAG COMPONENTS TEST")
@@ -64,12 +62,12 @@ def test_rag_components():
     try:
         # Test ChromaDB operations without SentenceTransformer
         import chromadb
+        import shutil
+        import tempfile
 
-        # Create a test database
-        test_db_path = Path("data/test_rag_db")
-        if test_db_path.exists():
-            import shutil
-            shutil.rmtree(test_db_path)
+        # Create a test database in an isolated temp dir (a shared repo path
+        # breaks when a Docker run leaves root-owned files behind)
+        test_db_path = Path(tempfile.mkdtemp(prefix="kaya_test_rag_db_"))
 
         # Create ChromaDB collection
         client = chromadb.PersistentClient(path=str(test_db_path))
@@ -124,7 +122,8 @@ def test_rag_components():
         from src.chat.retriever import ConversationRetriever
 
         # Create test collection
-        test_db_path = Path("data/test_rag_db")
+        import tempfile
+        test_db_path = Path(tempfile.mkdtemp(prefix="kaya_test_rag_db_"))
         client = chromadb.PersistentClient(path=str(test_db_path))
         collection = client.create_collection(name="kaya_conversations")
         
@@ -144,7 +143,7 @@ def test_rag_components():
         
         # Mock encoder
         class MockEncoder:
-            def encode(self, queries):
+            def encode(self, queries, **kwargs):
                 return mock_encode(queries)
         retriever.encoder = MockEncoder()
 
@@ -203,6 +202,10 @@ def test_rag_components():
 
     return True
 
+def test_rag_components():
+    assert run_rag_components()
+
+
 if __name__ == "__main__":
-    success = test_rag_components()
+    success = run_rag_components()
     sys.exit(0 if success else 1)

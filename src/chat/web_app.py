@@ -4,12 +4,9 @@ Loads the fine-tuned model + RAG retriever once at startup and serves a
 streaming chat interface. Every turn is logged to
 data/feedback/live_interactions.jsonl via the same logger used by chat.py.
 """
-import json
 import os
 import sys
 import time
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 

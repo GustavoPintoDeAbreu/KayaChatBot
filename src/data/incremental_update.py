@@ -30,8 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-import yaml
-
 # ---------------------------------------------------------------------------
 # Repo root — resolved relative to this file so the script works from any CWD
 # ---------------------------------------------------------------------------

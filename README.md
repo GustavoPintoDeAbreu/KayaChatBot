@@ -1,6 +1,6 @@
 # KayaChatBot
 
-An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using LoRA fine-tuning. Supports multiple model profiles including Qwen3-14B and Gemma 4 E4B (8B).
+An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using LoRA fine-tuning. Supports multiple model profiles; production currently runs Gemma 4 E4B (heretic base) trained at 4096 context, with Qwen3-14B available as an alternative profile.
 
 ## 🎯 Overview
 
@@ -13,8 +13,8 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
 - **Automated knowledge generation**: Uses Azure GPT-4.1-mini to extract biographical facts from chat history
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
-- Fine-tunes Qwen3-14B using LoRA (Low-Rank Adaptation) with 4-bit quantization
-- Efficient training on consumer GPUs (requires ~16GB VRAM)
+- Fine-tunes the active model profile (Gemma 4 E4B by default) using LoRA with 4-bit quantization
+- Efficient training on consumer GPUs (RTX 3090 24 GB; ~11 GB VRAM for gemma4-e4b, ~15 GB for qwen3-14b)
 
 ## 🤖 RAG & Knowledge System
 
@@ -33,10 +33,10 @@ Control which knowledge sources are active in `config.yaml`:
 
 ```yaml
 rag:
-  knowledge_approach: "both"   # best coverage
+  knowledge_approach: "json_only"   # best benchmark score
   # Options:
-  #   "both"          — JSON members in system prompt AND ChromaDB KB retrieval
-  #   "json_only"     — JSON injection only, no KB retrieval
+  #   "both"          — JSON members in system prompt AND ChromaDB KB retrieval (can overflow the token budget)
+  #   "json_only"     — JSON injection only, no KB retrieval (best benchmark score)
   #   "chromadb_only" — ChromaDB KB only, no JSON injection
   #   "none"          — Baseline: conversation RAG + fine-tune only
 ```
@@ -73,10 +73,12 @@ KayaChatBot/
 │   │   ├── format_direct_training.py
 │   │   └── readers.py
 │   ├── finetuning/                   # Model training
-│   │   ├── train.py
-│   │   └── trainer.py
+│   │   └── train.py
 │   ├── chat/                         # Inference & interaction
 │   │   ├── chat.py                   # Interactive chat loop (always-on RAG)
+│   │   ├── web_app.py                # Gradio web UI (suggestions, feedback, metrics)
+│   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
+│   │   ├── engine.py                 # Shared generation engine (web + WhatsApp)
 │   │   ├── inference.py
 │   │   └── retriever.py              # RAG retrieval (conversations + KB)
 │   ├── llm_providers/                # LLM provider abstractions
@@ -92,7 +94,6 @@ KayaChatBot/
 │   └── wpp/                          # Raw WhatsApp exports
 ├── models/                           # Trained LoRA adapters (gitignored)
 ├── config.yaml                       # Central configuration
-├── config.docker.yaml                # Docker-specific config overrides
 ├── run_full_pipeline.py              # Pipeline orchestrator
 ├── Dockerfile
 ├── docker-compose.yml
@@ -229,17 +230,17 @@ The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
 **Output:** `data/rag_db/` (ChromaDB)
 
 ### 4. **Dataset Merging** (`merge_datasets.py`)
-- Combines datasets and applies Qwen3 ChatML template
-- 90/10 train/val split
+- Combines datasets and applies the active profile's chat template (gemma-4 or ChatML)
+- 90/10 train/val split (`data.train_test_split`)
 
 **Output:** `data/train_synthetic.jsonl`, `data/val_synthetic.jsonl`
 
 ### 5. **Fine-Tuning** (`train.py`)
-- Loads Qwen3-14B with 4-bit quantization (unsloth)
-- LoRA adapters: rank=32, alpha=32
-- 1500 steps with linear learning rate schedule
+- Loads the active profile's model with 4-bit quantization (Unsloth)
+- LoRA adapters per profile (gemma4: r=16/alpha=32; qwen3: r=32/alpha=32)
+- Steps/LR set by the active profile in `config.yaml`
 
-**Output:** `models/kaya_v2_synthetic/`
+**Output:** the profile's `training.output_dir` (currently `models/kaya_gemma4_heretic_seq4096/`)
 
 ## ⚙️ Configuration
 
@@ -273,17 +274,22 @@ test_mode:
 
 ### Model & Training
 
-```yaml
-model:
-  model_id: "unsloth/Qwen3-14B-bnb-4bit"
-  max_seq_length: 4096
+Model and training settings come from the **active model profile** (`active_model_profile` in `config.yaml`, currently `gemma4-e4b-seq4096`), deep-merged over the top-level `model:`/`training:` sections by `src/config_loader.py`:
 
-training:
-  output_dir: "./models/kaya_v2_synthetic"
-  max_steps: 1500
-  lora_r: 32
-  lora_alpha: 32
-  learning_rate: 0.0001
+```yaml
+active_model_profile: "gemma4-e4b-seq4096"
+
+model_profiles:
+  gemma4-e4b-seq4096:
+    model:
+      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+      max_seq_length: 4096
+      lora_r: 16
+      lora_alpha: 32
+    training:
+      output_dir: "./models/kaya_gemma4_heretic_seq4096"
+      learning_rate: 0.00005
+      max_steps: 450
 ```
 
 ## 🧪 Testing
@@ -310,12 +316,17 @@ kaya_chatbot_env/bin/python run_full_pipeline.py
 
 ### Validate Pipeline Outputs
 ```bash
-kaya_chatbot_env/bin/python tests/pipeline/validate_pipeline.py
+kaya_chatbot_env/bin/python scripts/validate_pipeline.py
+```
+
+### Run the Test Suite
+```bash
+kaya_chatbot_env/bin/python -m pytest tests/ -v
 ```
 
 ### Test Azure Connection
 ```bash
-kaya_chatbot_env/bin/python src/testing/test_azure.py
+kaya_chatbot_env/bin/python tests/test_azure.py
 ```
 
 ## 💡 Tips & Best Practices
@@ -357,10 +368,12 @@ The codebase uses Pydantic models for type safety (see [src/models.py](src/model
 
 ## 🐳 Docker Support
 
-Docker configuration is available (`Dockerfile`, `docker-compose.yml`). See `config.docker.yaml` for Docker-specific settings.
+Docker configuration is available (`Dockerfile`, `docker-compose.yml`) with profiles for prod, dev, test, and the Cloudflare Tunnel. See `DEPLOYMENT.md` for the full runbook and `WHATSAPP.md` for the WhatsApp bridge.
 
 ```bash
-docker-compose up --build
+docker-compose up --build                          # prod web app
+docker compose --profile dev up -d kaya-dev        # dev UI on :7861
+docker compose --profile test run --rm kaya-test   # test suite in-container
 ```
 
 ## 🔒 Security

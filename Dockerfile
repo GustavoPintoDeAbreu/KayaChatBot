@@ -84,6 +84,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Copy project files
 COPY src/ /app/src/
 COPY tests/ /app/tests/
+COPY conftest.py /app/conftest.py
 COPY config.yaml /app/config.yaml
 COPY run_full_pipeline.py /app/
 
