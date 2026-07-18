@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data.generate_needle_training import (
     _count_tokens,
     _fill_template,
+    _sample_slots,
     _FACT_TEMPLATES,
     build_filler_blocks,
     build_example,
@@ -46,7 +47,8 @@ def test_fill_template_replaces_all():
     import random
     tmpl = _FACT_TEMPLATES[0]
     rng = random.Random(42)
-    fact = _fill_template(tmpl["fact"], tmpl["slots"], "TestName", rng)
+    sampled = _sample_slots(tmpl["slots"], rng)
+    fact = _fill_template(tmpl["fact"], sampled, "TestName")
     assert "TestName" in fact
     assert "{name}" not in fact
     for key in tmpl["slots"]:

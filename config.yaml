@@ -372,7 +372,7 @@ rag:
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
-  top_k: 5
+  top_k: 10
   filter_by_person: true
 
   # Minimum cosine similarity for a retrieved conversation chunk to be injected.
@@ -390,10 +390,10 @@ rag:
   knowledge_approach: "json_only"
 
   # Token budget for total injected context (whitespace-based approximation: words / 0.60)
-  # Set to 1200 based on needle-in-haystack recall sweep (2026-07-09): reliable recall
-  # holds at ~2360 total tokens; above ~4800 tokens recall fails at ALL depths regardless
-  # of max_seq_length. Targeting system(~700)+RAG(1200)+history(~300)+msg(~100) ≈ 2300.
-  max_context_tokens: 1200
+  # Raised to 2500 based on needle-in-haystack sweep (2026-07-17, context_recall_20260717T235539Z.json):
+  # seq4096 adapter passes 100% recall at all depths up to ~4785 total tokens at load=4096.
+  # Targeting system(~700)+RAG(2500)+history(~300)+msg(~100) ≈ 3600 total (well inside window).
+  max_context_tokens: 2500
 
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true
@@ -449,7 +449,7 @@ benchmark:
 # Active model profile — overrides model: and training: sections when set.
 # Set to null to use top-level values as-is (backward compatible).
 # Switch by changing this value or passing --profile <name> on the CLI.
-active_model_profile: "gemma4-e4b"
+active_model_profile: "gemma4-e4b-seq4096"
 
 # Model profiles — each profile overrides specific model: and training: keys.
 # Deep-merged into the top-level sections by src/config_loader.py.
@@ -507,9 +507,9 @@ model_profiles:
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
 
-  # Experimental variant: same heretic base, trained at 4096 with long-context data.
-  # Active only via --profile gemma4-e4b-seq4096. Serving config (active_model_profile)
-  # is untouched until the keep/revert evaluation is complete.
+  # Production variant: same heretic base, trained at 4096 with long-context data.
+  # Promoted to active_model_profile after passing G1/G2/G3 gates (2026-07-18).
+  # Rollback: set active_model_profile back to "gemma4-e4b" (pew profile still intact).
   gemma4-e4b-seq4096:
     model:
       model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
