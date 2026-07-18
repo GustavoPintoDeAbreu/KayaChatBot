@@ -182,8 +182,43 @@ class TeacherModel:
         return self.tokenizer.decode(gen, skip_special_tokens=True).strip()
 
 
+def shuffle_context_blocks(context: str, rng: random.Random) -> str:
+    """Shuffle the conversation blocks inside a retrieved context string.
+
+    Splits on ``--- Conversa N ---`` boundaries, shuffles the blocks, renumbers
+    them, and reassembles with the original header/footer intact.  Returns the
+    context unchanged if it has fewer than 2 blocks.
+    """
+    import re
+    header_match = re.search(r"^(=== Conversas relevantes do grupo ===)", context, re.MULTILINE)
+    footer_match = re.search(r"(\n=== Fim das conversas ===)", context)
+    if not header_match or not footer_match:
+        return context
+
+    body = context[header_match.end():footer_match.start()]
+    # Split on block boundaries, keeping the delimiter as part of each block
+    parts = re.split(r"(?=\n--- Conversa \d+)", body)
+    parts = [p for p in parts if p.strip()]
+    if len(parts) < 2:
+        return context
+
+    rng.shuffle(parts)
+    # Renumber
+    renumbered = []
+    for i, block in enumerate(parts, 1):
+        block = re.sub(r"--- Conversa \d+", f"--- Conversa {i}", block, count=1)
+        renumbered.append(block)
+
+    return (
+        "=== Conversas relevantes do grupo ===\n"
+        + "".join(renumbered)
+        + "\n=== Fim das conversas ==="
+    )
+
+
 def build_user_turn(
-    question: str, retriever: Any, knowledge_approach: str
+    question: str, retriever: Any, knowledge_approach: str,
+    shuffle: bool = False, rng: Optional[random.Random] = None,
 ) -> Tuple[str, str]:
     """Return (user_turn, context). user_turn = RAG context + question, matching
     the inference-time format. retriever may be None (no context)."""
@@ -194,6 +229,8 @@ def build_user_turn(
         except Exception as exc:  # noqa: BLE001 — generation is best-effort per item
             print(f"⚠️  Retrieval failed for {question!r}: {exc}")
             context = ""
+    if shuffle and context and rng is not None:
+        context = shuffle_context_blocks(context, rng)
     user_turn = f"{context}\n\n{question}" if context else question
     return user_turn, context
 
@@ -208,6 +245,8 @@ def generate_dataset(
     min_words: int = 6,
     limit: Optional[int] = None,
     on_example: Optional[Callable[[Dict], None]] = None,
+    shuffle_context: bool = False,
+    shuffle_seed: int = 3407,
 ) -> Dict[str, Any]:
     """Generate (and optionally stream out) synthetic examples.
 
@@ -220,10 +259,14 @@ def generate_dataset(
     if limit:
         questions = questions[:limit]
 
+    _rng = random.Random(shuffle_seed) if shuffle_context else None
     stats = {"asked": 0, "accepted": 0, "rejected": 0, "examples": []}
     for question in questions:
         stats["asked"] += 1
-        user_turn, context = build_user_turn(question, retriever, knowledge_approach)
+        user_turn, context = build_user_turn(
+            question, retriever, knowledge_approach,
+            shuffle=shuffle_context, rng=_rng,
+        )
         try:
             raw = teacher.generate(gen_system_prompt, user_turn)
         except Exception as exc:  # noqa: BLE001
@@ -264,9 +307,19 @@ def main() -> None:
     parser.add_argument("--mine", type=int, default=None,
                         help="Mine N conversational questions from chat chunks (overrides config).")
     parser.add_argument("--no-mine", action="store_true", help="Disable question mining.")
+    parser.add_argument("--context-tokens", type=int, default=None,
+                        help="Override rag.max_context_tokens for this run (long-context generation).")
+    parser.add_argument("--context-top-k", type=int, default=None,
+                        help="Override rag.top_k for this run (fetch more chunks to fill a larger budget).")
+    parser.add_argument("--shuffle-context", action="store_true",
+                        help="Shuffle retrieved context blocks (breaks answer-at-top bias).")
     args = parser.parse_args()
 
     config = load_config(str(_REPO_ROOT / "config.yaml"))
+    if args.context_tokens is not None:
+        config.setdefault("rag", {})["max_context_tokens"] = args.context_tokens
+    if args.context_top_k is not None:
+        config.setdefault("rag", {})["top_k"] = args.context_top_k
     sg = config.get("synthetic_generation", {})
     data_cfg = config.get("data", {})
     teacher_id = args.teacher_model or sg.get("teacher_model_id")
@@ -315,6 +368,7 @@ def main() -> None:
         stats = generate_dataset(
             questions, retriever, teacher, base_system_prompt, member_suffix,
             knowledge_approach=knowledge_approach, min_words=min_words, limit=args.smoke,
+            shuffle_context=args.shuffle_context,
         )
         print("\n" + "=" * 70)
         for ex in stats["examples"]:
@@ -337,6 +391,7 @@ def main() -> None:
             questions, retriever, teacher, base_system_prompt, member_suffix,
             knowledge_approach=knowledge_approach, min_words=min_words,
             limit=args.limit, on_example=_write,
+            shuffle_context=args.shuffle_context,
         )
     print(f"\n✅ Wrote {written['n']} examples to {out_path}")
     print(f"   asked={stats['asked']} accepted={stats['accepted']} rejected={stats['rejected']}")
