@@ -236,10 +236,15 @@ def _format_blocks_as_context(blocks: List[List[Dict]]) -> str:
     return "\n".join(parts)
 
 
-def _fill_template(tmpl: str, slots: Dict[str, Any], name: str, rng: random.Random) -> str:
+def _sample_slots(slots: Dict[str, Any], rng: random.Random) -> Dict[str, str]:
+    """Pre-sample one value per slot key so fact/question/answer use identical values."""
+    return {key: rng.choice(options) for key, options in slots.items()}
+
+
+def _fill_template(tmpl: str, sampled: Dict[str, str], name: str) -> str:
     result = tmpl.replace("{name}", name)
-    for key, options in slots.items():
-        result = result.replace("{" + key + "}", rng.choice(options))
+    for key, value in sampled.items():
+        result = result.replace("{" + key + "}", value)
     return result
 
 
@@ -270,10 +275,11 @@ def build_example(
     """Build one needle-recall training example."""
     name = rng.choice(member_names)
     slots = template.get("slots", {})
+    sampled = _sample_slots(slots, rng)
 
-    fact = _fill_template(template["fact"], slots, name, rng)
-    question = _fill_template(template["question"], slots, name, rng)
-    answer = _fill_template(template["answer"], slots, name, rng)
+    fact = _fill_template(template["fact"], sampled, name)
+    question = _fill_template(template["question"], sampled, name)
+    answer = _fill_template(template["answer"], sampled, name)
 
     # Build filler sized so that filler + needle ≈ target_tokens
     needle_tokens = _count_tokens(fact)
