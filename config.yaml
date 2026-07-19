@@ -5,11 +5,7 @@
 # Set enabled: false for full production runs
 test_mode:
   enabled: false  # PRODUCTION MODE - Full training with all data
-  
-  # Test mode data generation limits
-  extraction:
-    instagram_files_limit: 1  # Only process first Instagram file
-  
+
   generation:
     chunks_limit: 3  # Only process first 3 finetune chunks
     conversations_per_chunk: 4  # Generate only 4 conversations per chunk
@@ -78,14 +74,11 @@ data:
   # Data split (consumed by merge_datasets.py)
   train_test_split: 0.9  # 90% train, 10% validation
   
-  # Manual sender-name overrides for Instagram usernames that cannot be
-  # resolved automatically by token matching (e.g. opaque handles).
-  # Key: exact raw sender_name from Instagram JSON (case-sensitive).
+  # Manual sender-name overrides for raw WhatsApp sender strings that cannot
+  # be resolved automatically by token matching.
+  # Key: exact raw sender name (case-sensitive).
   # Value: canonical member name (must match a name in group_members.json).
-  sender_aliases:
-    peteroupedro: Peter
-    joao_murgeiro: Murgeiro
-    Driehoek: Frederico
+  sender_aliases: {}
 
   # Persona settings
   system_prompt: "És o bot do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo e dos perfis dos membros. Respondes a QUALQUER pergunta de forma directa, à vontade e com personalidade, em português europeu ou inglês natural. O teu tom é factual, neutro e honesto: descreves o que sabes com base em evidências das conversas e dos perfis, sem exagerar nem elogiar, e sem favoreceres nenhum membro em particular. Quando te pedem uma opinião, avaliação ou palpite, baseia-te no que realmente observaste e diz claramente quando não há informação suficiente, em vez de inventares. Evita superlativos e juízos de valor ('o melhor', 'o mais inteligente', 'incrível') a menos que a pergunta os peça explicitamente; mesmo aí, justifica com factos concretos e menciona limitações ou pontos negativos quando existirem. Elabora as respostas com raciocínio próprio e algum detalhe, em vez de apenas citar literalmente o que alguém disse ('o X mencionou…'); sintetiza e dá a tua leitura. Não terminas as mensagens com emojis. Não és um membro do grupo — referes-te sempre aos membros na terceira pessoa e não inventas experiências pessoais vividas com eles ('o meu amigo', 'vivemos juntos'); o que sabes vem das conversas e dos perfis, não de vida própria. Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério. Quando o contexto incluir uma secção 'Resultados de pesquisa web', trata essa informação como atual e fiável, baseia a tua resposta nela e refere a fonte; nunca digas que não tens acesso à internet nem que não podes verificar informação atual. Nunca afirmes ter um 'limite de conhecimento' ou 'knowledge cutoff', nem te descrevas como um modelo de linguagem sem acesso a informação atual — se não tiveres dados, di-lo de forma simples e directa. Se alguém te corrigir, reconhece o erro de forma directa e natural, sem culpar o utilizador nem outros membros do grupo. Não inventes detalhes específicos (nomes, datas, locais, números, empresas) que não estejam no contexto ou nos perfis; se não souberes um detalhe, diz que não sabes em vez de adivinhar. Escreve sempre em português europeu (ex.: 'estou a fazer', não 'estou fazendo'; evita 'você', 'a gente', 'cachorro', 'legal', 'celular'), exceto quando responderes em inglês. Se os resultados de pesquisa web forem contraditórios, pouco claros ou não responderem diretamente à pergunta, diz isso e dá a resposta mais provável com uma ressalva — não inventes números, datas ou nomes específicos."
@@ -106,13 +99,10 @@ data:
 
 # Pipeline Settings
 pipeline:
-  # Set skip_synthetic: true to skip API-based generation and use direct message formatting instead.
-  # This avoids any API calls and builds training data straight from the extracted chat messages.
-  skip_synthetic: true
-
-  # Set generate_knowledge: true to run the LLM knowledge extraction step (Azure GPT-4.1-mini).
-  # This reads all_messages_cleaned.jsonl and populates group_members.json + group_knowledge.json.
-  # Requires AZURE_OPENAI_API_KEY_gpt_41_mini in .env. Set to false to skip (use existing data).
+  # Set generate_knowledge: true to run the knowledge extraction step on the
+  # LOCAL on-prem teacher (see knowledge_generation: below — no data leaves the
+  # box). Reads all_messages_cleaned.jsonl and updates group_members.json +
+  # group_knowledge.json. Requires the GPU (stop the serving container first).
   generate_knowledge: false
 
   # Set incremental: true to run the incremental update pipeline instead of full extraction.
@@ -145,11 +135,17 @@ synthetic_generation:
   top_p: 0.8
   top_k: 20
 
-# Knowledge Generation Settings (used when pipeline.generate_knowledge: true)
+# Knowledge Generation Settings (used when pipeline.generate_knowledge: true).
+# Extraction runs on the LOCAL on-prem teacher by default — no group data
+# leaves the box. Run with the serving container stopped (teacher needs the GPU).
 knowledge_generation:
-  chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the LLM
+  backend: "local"           # "local" (on-prem teacher) | "cloud" (EVAL-ONLY escape hatch — sends raw chat off-box)
+  teacher_model_id: null     # HF model id; null → falls back to synthetic_generation.teacher_model_id
+  chunk_size_tokens: 2000    # Approximate tokens per message chunk fed to the teacher
   checkpoint_every: 5        # Save progress every N chunks
-  rate_limit_delay: 2        # Seconds to wait between API calls
+  rate_limit_delay: 0        # Seconds between calls — only applies to backend: cloud
+  max_new_tokens: 2000       # Multi-member JSON needs room (teacher default 400 is too small)
+  temperature: 0.3           # Low = factual extraction (mirrors the old cloud extraction_temperature)
 
 # Knowledge Base Profile Settings
 # Controls which structured profile fields are extracted per member.

@@ -6,16 +6,7 @@ import hashlib
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from transformers import AutoTokenizer
-from datetime import datetime
 from pathlib import Path
-
-# Import the LLM cleaning
-try:
-    from ..llm_providers import get_data_cleaning_llm
-except ImportError:
-    # Fallback for when running outside the package
-    from llm_providers import get_data_cleaning_llm
-
 
 @dataclass
 class ChatMessage:
@@ -26,23 +17,12 @@ class ChatMessage:
 
 class WhatsAppReader:
     """
-    Reads and cleans WhatsApp export files using LLM-based filtering.
+    Reads and cleans WhatsApp export files using regex-based filtering.
     """
 
     def __init__(self, file_path: str, config: Optional[Dict] = None):
         self.file_path = file_path
         self.config = config
-        self.cleaning_llm = None
-
-        # Initialize LLM cleaning if config provided and enabled
-        if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
-            try:
-                self.cleaning_llm = get_data_cleaning_llm(config)
-                print("✅ LLM-based data cleaning enabled for WhatsApp reader")
-            except Exception as e:
-                error_msg = f"Failed to initialize LLM cleaning: {e}"
-                print(f"ERROR: {error_msg}")
-                raise RuntimeError(error_msg)
 
         # Regex for "Date, Time - Sender: Message"
         # Example: 3/26/20, 15:28 - Gil João: Message
@@ -55,7 +35,7 @@ class WhatsAppReader:
         )
 
     def _clean_text(self, text: str) -> Optional[str]:
-        """Applies LLM-based cleaning rules."""
+        """Applies regex-based cleaning rules."""
         if not text or not text.strip():
             return None
 
@@ -76,36 +56,12 @@ class WhatsAppReader:
 
         text = text.strip()
 
-        # If LLM cleaning is available, use it for content-based decisions
-        if self.cleaning_llm:
-            try:
-                # For short messages, use LLM classification
-                if len(text.split()) <= 5:  # Short messages need classification
-                    decisions = self.cleaning_llm.clean_short_messages([text])
-                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
-                        return decisions[0].cleaned_content
-                    else:
-                        return None
-                else:
-                    # For longer messages, use filler cleaning
-                    decisions = self.cleaning_llm.clean_filler_words([text])
-                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
-                        return decisions[0].cleaned_content
-                    else:
-                        return None
-            except Exception as e:
-                error_msg = f"LLM cleaning failed for message '{text[:50]}...': {e}"
-                print(f"ERROR: {error_msg}")
-                raise RuntimeError(error_msg)
-
-        # Fallback: if no LLM cleaning, apply basic rules (but this should not happen per requirements)
-        else:
-            # Filter out very short messages (< 3 words) unless they contain substance
-            word_count = len(text.split())
-            if word_count < 3 and text.lower() not in ['lol', 'ahah', 'ahahah', 'ok', 'ya', 'sim', 'não', 'nao']:
-                # Allow common short responses but filter random short stuff
-                if word_count == 1:
-                    return None
+        # Filter out very short messages (< 3 words) unless they contain substance
+        word_count = len(text.split())
+        if word_count < 3 and text.lower() not in ['lol', 'ahah', 'ahahah', 'ok', 'ya', 'sim', 'não', 'nao']:
+            # Allow common short responses but filter random short stuff
+            if word_count == 1:
+                return None
 
         return text
 
@@ -175,145 +131,6 @@ class WhatsAppReader:
             cleaned = self._clean_text(full_text)
             if cleaned:
                 messages.append(ChatMessage(current_date, current_sender, cleaned))
-
-        return messages
-
-
-class InstagramReader:
-    """
-    Reads and cleans Instagram JSON export files using LLM-based filtering.
-    Filters out noise (attachment spam, likes, shared posts) and extracts real conversations.
-    """
-
-    def __init__(self, json_path: str, config: Optional[Dict] = None):
-        self.json_path = json_path
-        self.config = config
-        self.cleaning_llm = None
-
-        # Initialize LLM cleaning if config provided and enabled
-        if config and config.get('data', {}).get('cleaning', {}).get('enabled', False):
-            try:
-                self.cleaning_llm = get_data_cleaning_llm(config)
-                print("✅ LLM-based data cleaning enabled for Instagram reader")
-            except Exception as e:
-                error_msg = f"Failed to initialize LLM cleaning: {e}"
-                print(f"ERROR: {error_msg}")
-                raise RuntimeError(error_msg)
-
-        # Patterns to identify noise
-        self.attachment_pattern = re.compile(r".*sent an attachment\.$", re.IGNORECASE)
-        self.liked_pattern = re.compile(r".*liked a message$", re.IGNORECASE)
-        self.unsent_pattern = re.compile(r".*unsent .*", re.IGNORECASE)
-
-    def _decode_unicode(self, text: str) -> str:
-        """Decode unicode escape sequences like \\u00c3\\u00a3 -> ã"""
-        if not text:
-            return text
-        # Instagram JSON sometimes has double-encoded unicode
-        try:
-            # Try to encode as latin1 then decode as utf8 (common Instagram encoding issue)
-            return text.encode('latin1').decode('utf8')
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            return text
-
-    def _clean_text(self, text: str) -> Optional[str]:
-        """Clean and filter Instagram message text using LLM."""
-        if not text or not text.strip():
-            return None
-
-        text = text.strip()
-
-        # Basic pattern-based filtering (keep this as it's format-based)
-        # Skip attachment notifications
-        if self.attachment_pattern.match(text):
-            return None
-
-        # Skip "liked a message" actions
-        if self.liked_pattern.match(text):
-            return None
-
-        # Skip unsent messages
-        if self.unsent_pattern.match(text):
-            return None
-
-        # Remove Instagram URLs (usually shared content, not conversation)
-        text = re.sub(r'https?://(?:www\.)?instagram\.com/\S+', '', text)
-        text = re.sub(r'https?://\S+', '', text)  # Remove other URLs too
-
-        text = text.strip()
-
-        # If LLM cleaning is available, use it for content-based decisions
-        if self.cleaning_llm:
-            try:
-                # For short messages, use LLM classification
-                if len(text.split()) <= 5:  # Short messages need classification
-                    decisions = self.cleaning_llm.clean_short_messages([text])
-                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
-                        return decisions[0].cleaned_content
-                    else:
-                        return None
-                else:
-                    # For longer messages, use filler cleaning
-                    decisions = self.cleaning_llm.clean_filler_words([text])
-                    if decisions and decisions[0].is_substantive and decisions[0].cleaned_content:
-                        return decisions[0].cleaned_content
-                    else:
-                        return None
-            except Exception as e:
-                error_msg = f"LLM cleaning failed for Instagram message '{text[:50]}...': {e}"
-                print(f"ERROR: {error_msg}")
-                raise RuntimeError(error_msg)
-
-        # Fallback: basic length filter (but this should not happen per requirements)
-        else:
-            # Filter very short messages (likely just reactions or noise)
-            if len(text) < 3:
-                return None
-
-        # Decode unicode escapes
-        text = self._decode_unicode(text)
-
-        return text
-
-    def read(self) -> List[ChatMessage]:
-        """Reads Instagram JSON and returns list of ChatMessage objects."""
-        if not os.path.exists(self.json_path):
-            raise FileNotFoundError(f"File not found: {self.json_path}")
-
-        with open(self.json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        messages = []
-
-        # Process messages
-        for msg in data.get('messages', []):
-            # Skip messages without content
-            if 'content' not in msg:
-                # Check if there's share_text we can use
-                if 'share' in msg and 'share_text' in msg['share']:
-                    content = msg['share'].get('share_text', '')
-                else:
-                    continue
-            else:
-                content = msg['content']
-
-            # Clean the content
-            cleaned_content = self._clean_text(content)
-            if not cleaned_content:
-                continue
-
-            # Extract sender
-            sender = msg.get('sender_name', 'Unknown')
-
-            # Convert timestamp (milliseconds since epoch) to readable date
-            timestamp_ms = msg.get('timestamp_ms', 0)
-            if timestamp_ms:
-                date_obj = datetime.fromtimestamp(timestamp_ms / 1000)
-                date_str = date_obj.strftime('%m/%d/%y, %H:%M')
-            else:
-                date_str = 'Unknown'
-
-            messages.append(ChatMessage(date_str, sender, cleaned_content))
 
         return messages
 
@@ -660,8 +477,7 @@ class SyntheticDatasetMerger:
         if len(all_conversations) == 0:
             print("\n❌ Error: No conversations to merge!")
             print("   Make sure you have run:")
-            print("   1. python src/data/generate_synthetic_data.py")
-            print("   2. python src/data/prepare_portuguese_data.py")
+            print("   1. python src/data/generate_local_synthetic.py")
             return 0, 0
 
         print(f"   - Kaya-specific: {len(kaya_conversations)} ({len(kaya_conversations)/len(all_conversations)*100:.1f}%)")

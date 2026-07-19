@@ -1,17 +1,17 @@
 # KayaChatBot
 
-An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp and Instagram conversations using LoRA fine-tuning. Supports multiple model profiles; production currently runs Gemma 4 E4B (heretic base) trained at 4096 context, with Qwen3-14B available as an alternative profile. All of the app runs on a single RTX 3090 GPU.
+An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp conversations using LoRA fine-tuning. Supports multiple model profiles; production currently runs Gemma 4 E4B (heretic base) trained at 4096 context, with Qwen3-14B available as an alternative profile. All of the app runs on a single RTX 3090 GPU.
 
 ## 🎯 Overview
 
 KayaChatBot is the AI memory of the Kaya group. It is **not** a group member — it is an assistant with access to the group's collective memory. It learns facts, events, and relationships from the group's conversation history so it can answer questions like "what did we talk about at the beach trip?" or just have a casual chat. It communicates naturally in **European Portuguese or English**.
 
 **Key Features:**
-- Extracts and cleans messages from WhatsApp exports and Instagram JSON
-- Generates synthetic multi-turn training conversations using xAI Grok or Azure OpenAI GPT-4.1-mini
+- Extracts and cleans messages from WhatsApp exports
+- Generates synthetic training conversations fully on-prem with a local teacher model (no group data leaves the box)
 - **Always-on RAG**: Retrieves relevant context for every message (not just detected questions)
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
-- **Automated knowledge generation**: Uses Azure GPT-4.1-mini to extract biographical facts from chat history
+- **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
 - Fine-tunes the active model profile (Gemma 4 E4B by default) using LoRA with 4-bit quantization
 - Efficient training on consumer GPUs (RTX 3090 24 GB; ~11 GB VRAM for gemma4-e4b, ~15 GB for qwen3-14b)
@@ -64,9 +64,11 @@ Kaya Bot: oi! tudo bem? 😊
 KayaChatBot/
 ├── src/
 │   ├── data/                         # Data processing & generation
-│   │   ├── extract_all_messages.py   # WhatsApp + Instagram parser
+│   │   ├── extract_all_messages.py   # WhatsApp export parser
 │   │   ├── generate_synthetic_data.py # LLM synthetic conversation generation
-│   │   ├── generate_knowledge_base.py # LLM biographical fact extraction (Azure)
+│   │   ├── generate_knowledge_base.py # Biographical fact extraction (local teacher)
+│   │   ├── generate_local_synthetic.py # On-prem synthetic training data (local teacher)
+│   │   ├── local_teacher.py          # Shared 4-bit local teacher model
 │   │   ├── build_vector_db.py        # Build ChromaDB collections
 │   │   ├── prepare_portuguese_data.py
 │   │   ├── merge_datasets.py
@@ -106,8 +108,7 @@ KayaChatBot/
 
 - Python 3.10+
 - CUDA-capable GPU with 16GB+ VRAM (for training; less for inference)
-- Azure OpenAI API access (for knowledge generation and optional synthetic generation)
-- xAI API access (for synthetic data generation with Grok models)
+- xAI API access *(optional)* — used only for the production web-search feature and the eval-time LLM judge; no group data is ever sent, except member-free web queries
 
 ### Installation
 
@@ -129,10 +130,8 @@ KayaChatBot/
    pip install -r requirements.txt
    ```
 
-4. **Set up credentials**
+4. **Set up credentials** *(optional — web-search / eval judge only)*
    ```bash
-   # Create .env with your API keys:
-   echo 'AZURE_OPENAI_API_KEY_gpt_41_mini=your_key_here' >> .env
    echo 'XAI_API_KEY=your_key_here' >> .env
    ```
 
@@ -140,7 +139,6 @@ KayaChatBot/
 
 1. **Add your chat data**
    - WhatsApp: Export chat as TXT → `data/wpp/`
-   - Instagram: Download JSON messages → `data/insta/`
 
 2. **Extract and clean messages**
    ```bash
@@ -148,6 +146,8 @@ KayaChatBot/
    ```
 
 3. **Generate knowledge base from chat history (recommended)**
+
+   Runs on the local on-prem teacher model — stop the serving container first (the teacher needs the GPU).
    ```bash
    # Test with 3 chunks first
    kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py --test
@@ -169,8 +169,7 @@ KayaChatBot/
 ### Training
 
 ```bash
-# Skip synthetic generation, train directly from messages
-# (ensure pipeline.skip_synthetic: true in config.yaml)
+# Full pipeline: extract → format → merge → train (fully on-prem)
 kaya_chatbot_env/bin/python run_full_pipeline.py
 
 # Or train step by step:
@@ -194,7 +193,7 @@ The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
 ## 📊 Pipeline Stages
 
 ### 1. **Message Extraction** (`extract_all_messages.py`)
-- Reads WhatsApp TXT and Instagram JSON files
+- Reads WhatsApp TXT export files
 - Cleans and standardizes messages (removes URLs, media, system messages)
 - Merges consecutive messages from the same sender
 
@@ -204,19 +203,19 @@ The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
 
 ### 1b. **Knowledge Base Generation** (`generate_knowledge_base.py`) *(optional, recommended)*
 - Iterates over the cleaned message history in ~2000-token chunks
-- Calls Azure GPT-4.1-mini to extract biographical facts per member
+- The local on-prem teacher model extracts biographical facts per member (no data leaves the box)
 - Merges facts into member profiles and curated knowledge entries
 - Checkpoints every 5 chunks; resumable with `--resume-from N`
 
 **Output (updated):** `data/group_members.json`, `data/group_knowledge.json`
 
-### 2. **Synthetic Data Generation** (`generate_synthetic_data.py`) *(skip_synthetic: false)*
-- Uses xAI Grok or Azure OpenAI GPT-4.1-mini to generate diverse Q&A conversations
-- Requires `pipeline.skip_synthetic: false` in `config.yaml`
+### 2. **Local Synthetic Data Generation** (`generate_local_synthetic.py`) *(manual, GPU)*
+- A local teacher model (Qwen3.5-27B, 4-bit) generates behavior-targeted Q&A grounded in local RAG context
+- Fully on-prem — no API calls, no data leaves the machine
 
-**Output:** `data/synthetic_kaya.jsonl`
+**Output:** `data/synthetic_local.jsonl`
 
-### 2 (direct). **Direct Training Format** (`format_direct_training.py`) *(skip_synthetic: true)*
+### 2b. **Direct Training Format** (`format_direct_training.py`)
 - Formats raw messages into training pairs without any API calls
 - Context blocks use `=== Conversas relevantes do grupo ===` markers (matches inference format)
 
@@ -250,8 +249,7 @@ All settings live in [config.yaml](config.yaml). Key sections:
 
 ```yaml
 pipeline:
-  skip_synthetic: true   # true = direct format (no API), false = synthetic generation
-  generate_knowledge: false  # true = run knowledge extraction via Azure (before training)
+  generate_knowledge: false  # true = run knowledge extraction on the local teacher (before training)
 ```
 
 ### Knowledge Approach (Benchmarking)
@@ -324,11 +322,6 @@ kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 kaya_chatbot_env/bin/python -m pytest tests/ -v
 ```
 
-### Test Azure Connection
-```bash
-kaya_chatbot_env/bin/python tests/test_azure.py
-```
-
 ## 💡 Tips & Best Practices
 
 ### Knowledge Base Quality
@@ -336,9 +329,9 @@ kaya_chatbot_env/bin/python tests/test_azure.py
 - Review `data/group_members.json` bios manually and edit them for accuracy
 - The more diverse the chat data, the richer the extracted biographies
 
-### Rate Limiting
-- Azure GPT-4.1-mini has rate limits — the knowledge generator has a 2-second delay between calls
-- Use `--resume-from N` to resume if the script is interrupted
+### Knowledge Generation Runs
+- The local teacher needs the GPU — stop the serving container first (`scripts/app_down.sh prod`)
+- Use `--resume-from N` to resume if the script is interrupted (checkpoints every 5 chunks)
 
 ### RAG Benchmarking
 - Set `knowledge_approach: "json_only"` for simplest setup (no vector KB needed)
@@ -360,7 +353,6 @@ kaya_chatbot_env/bin/python tests/test_azure.py
 The codebase uses Pydantic models for type safety (see [src/models.py](src/models.py)):
 
 - `WhatsAppMessage` — Raw WhatsApp TXT message
-- `InstagramMessage` — Raw Instagram JSON message
 - `CleanedMessage` — Standardized message format
 - `FinetuneChunk` — Chunked messages for generation
 - `SyntheticConversation` — Generated Q&A pairs
@@ -395,11 +387,6 @@ export PYTHONPATH="${PYTHONPATH}:/path/to/KayaChatBot"
 - Reduce `per_device_train_batch_size` in config.yaml
 - Reduce `max_seq_length` (but this affects context)
 - Use gradient checkpointing (already enabled)
-
-### Azure Rate Limit Errors
-- Wait 60 seconds between generation runs
-- Check Azure portal quota limits
-- Consider upgrading to higher TPM tier
 
 ### Model Not Loading
 - Ensure models are downloaded to `kaya_chatbot_env/`
@@ -458,7 +445,6 @@ Private project - All rights reserved.
 
 - [Unsloth](https://github.com/unslothai/unsloth) for efficient LLM fine-tuning
 - [HuggingFace](https://huggingface.co/) for model hosting and transformers
-- [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) for synthetic data generation
 
 ---
 

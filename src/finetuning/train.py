@@ -145,9 +145,8 @@ def main():
         print(f"   Expected: {val_file}")
         print(f"\n   Run the data pipeline first:")
         print(f"   1. python src/data/extract_all_messages.py")
-        print(f"   2. python src/data/generate_synthetic_data.py")
-        print(f"   3. python src/data/prepare_portuguese_data.py")
-        print(f"   4. python src/data/merge_datasets.py")
+        print(f"   2. python src/data/generate_local_synthetic.py")
+        print(f"   3. python src/data/merge_datasets.py")
         return
 
     # Load model

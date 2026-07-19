@@ -1111,7 +1111,7 @@ SCENARIOS: List[dict] = [
         "expected_keywords": ["grupo", "group", "cria"],
         "reference": (
             "No specific founding date for the Kaya group is available in the knowledge base. "
-            "It is a Portuguese friend group that communicates via WhatsApp and Instagram."
+            "It is a Portuguese friend group that communicates via WhatsApp."
         ),
     },
     {

@@ -1,19 +1,13 @@
-"""End-to-end integration tests for the Instagram + WhatsApp extraction pipeline.
+"""End-to-end integration tests for the WhatsApp extraction pipeline.
 
 These tests run the full extraction path against synthetic fixture files that
 mimic the real data format, verifying that the pipeline components work together
 correctly from raw source data to cleaned, deduplicated JSONL output.
-
-Slow tests are marked with ``@pytest.mark.slow`` and require the real ChromaDB
-and model artefacts.  The lightweight integration tests (no DB required) run by
-default.
 """
 
 import json
-import time
 from pathlib import Path
-from typing import Dict, List
-from unittest.mock import MagicMock, patch
+from typing import List
 
 import pytest
 
@@ -33,22 +27,11 @@ MEMBERS = [
     {"name": "Frederico", "aliases": ["frederico", "fred"]},
 ]
 
+# Raw WhatsApp sender strings that need a manual override to resolve
 SENDER_ALIASES = {
-    "peteroupedro": "Peter",
-    "joao_murgeiro": "Murgeiro",
-    "Driehoek": "Frederico",
+    "O Pedro do Costume": "Peter",
+    "Fred NL": "Frederico",
 }
-
-
-def _ts_ms(offset: int = 0) -> int:
-    return int((time.time() - offset) * 1000)
-
-
-def _make_insta_file(tmp_path: Path, messages: List[Dict]) -> Path:
-    data = {"participants": [], "messages": messages}
-    p = tmp_path / "message_1.json"
-    p.write_text(json.dumps(data), encoding="utf-8")
-    return p
 
 
 def _make_whatsapp_file(tmp_path: Path, lines: List[str]) -> Path:
@@ -84,137 +67,78 @@ def extractor(resolver: SenderResolver) -> MessageExtractor:
 def test_config_override_resolves_in_extraction(
     extractor: MessageExtractor, tmp_path: Path
 ) -> None:
-    """peteroupedro in Instagram data resolves to Peter via config override."""
-    path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "peteroupedro",
-            "timestamp_ms": _ts_ms(),
-            "content": "Bom dia a todos",
-        }
+    """An opaque raw sender resolves to the member via config override."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - O Pedro do Costume: Bom dia a todos",
     ])
-    msgs = extractor.extract_instagram(path)
+    msgs = extractor.extract_whatsapp(path)
     assert len(msgs) == 1
     assert msgs[0]["sender"] == "Peter"
 
 
-def test_double_encoded_name_resolves_via_token_match(
+def test_full_name_resolves_via_token_match(
     extractor: MessageExtractor, tmp_path: Path
 ) -> None:
-    """Double-encoded sender like 'JoÃ£o Gil' resolves to Gil via token match."""
-    path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "JoÃ£o Gil",
-            "timestamp_ms": _ts_ms(),
-            "content": "Olá pessoal",
-        }
+    """A full sender name like 'João Gil' resolves to Gil via token match."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - João Gil: Olá pessoal como estão",
     ])
-    msgs = extractor.extract_instagram(path)
+    msgs = extractor.extract_whatsapp(path)
     assert len(msgs) == 1
     assert msgs[0]["sender"] == "Gil"
 
 
-def test_anonymous_sender_dropped_end_to_end(
-    extractor: MessageExtractor, tmp_path: Path
-) -> None:
-    """Messages from 'Instagram user' are dropped throughout the full path."""
-    path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "Instagram user",
-            "timestamp_ms": _ts_ms(),
-            "content": "Some message",
-        }
-    ])
-    msgs = extractor.extract_instagram(path)
-    assert msgs == []
-
-
-def test_reel_and_system_messages_filtered(
-    extractor: MessageExtractor, tmp_path: Path
-) -> None:
-    """Reels, reactions, and system messages are all filtered out."""
-    path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "Gustavo",
-            "timestamp_ms": _ts_ms(30),
-            "content": "Real message",
-        },
-        {
-            "sender_name": "Gil",
-            "timestamp_ms": _ts_ms(20),
-            "content": "Check this",
-            "share": {"link": "https://www.instagram.com/reel/xyz"},
-        },
-        {
-            "sender_name": "Gil",
-            "timestamp_ms": _ts_ms(10),
-            "content": "Gustavo liked a message",
-        },
-    ])
-    msgs = extractor.extract_instagram(path)
-    assert len(msgs) == 1
-    assert msgs[0]["sender"] == "Gustavo"
-
-
-def test_mixed_sources_whatsapp_and_instagram(
-    extractor: MessageExtractor, tmp_path: Path
-) -> None:
-    """WhatsApp and Instagram extraction both produce correct source labels."""
-    insta_path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "peteroupedro",
-            "timestamp_ms": _ts_ms(),
-            "content": "Via Instagram",
-        }
-    ])
-    wpp_path = _make_whatsapp_file(tmp_path, [
-        "3/26/20, 15:28 - Gustavo: Via WhatsApp",
-    ])
-    insta_msgs = extractor.extract_instagram(insta_path)
-    wpp_msgs = extractor.extract_whatsapp(wpp_path)
-
-    insta_sources = {m["source"] for m in insta_msgs}
-    wpp_sources = {m["source"] for m in wpp_msgs if "Via WhatsApp" in m.get("text", "")}
-
-    assert insta_sources == {"instagram"}
-    assert wpp_sources == {"whatsapp"}
-
-
 def test_non_member_name_preserved(extractor: MessageExtractor, tmp_path: Path) -> None:
-    """A non-member sender passes through with their decoded name intact."""
-    path = _make_insta_file(tmp_path, [
-        {
-            "sender_name": "Maria Costa",
-            "timestamp_ms": _ts_ms(),
-            "content": "Bem-vindos",
-        }
+    """A non-member sender passes through with their name intact."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - Maria Costa: Bem-vindos ao grupo pessoal",
     ])
-    msgs = extractor.extract_instagram(path)
+    msgs = extractor.extract_whatsapp(path)
     assert len(msgs) == 1
     assert msgs[0]["sender"] == "Maria Costa"
 
 
-def test_all_required_fields_present(extractor: MessageExtractor, tmp_path: Path) -> None:
-    """Every extracted Instagram message has timestamp, sender, text, source."""
-    path = _make_insta_file(tmp_path, [
-        {"sender_name": "Gustavo", "timestamp_ms": _ts_ms(), "content": "Hello"},
-        {"sender_name": "Gil", "timestamp_ms": _ts_ms(5), "content": "World"},
+def test_system_messages_filtered(extractor: MessageExtractor, tmp_path: Path) -> None:
+    """System lines (no 'Sender:' part) and media are filtered out."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - Gil João added you",
+        "3/26/20, 15:29 - Gustavo: <Media omitted>",
+        "3/26/20, 15:30 - Gustavo: Real message here",
     ])
-    msgs = extractor.extract_instagram(path)
+    msgs = extractor.extract_whatsapp(path)
+    assert len(msgs) == 1
+    assert "Real message here" in msgs[0]["text"]
+
+
+def test_source_label_is_whatsapp(extractor: MessageExtractor, tmp_path: Path) -> None:
+    """Extracted messages carry source='whatsapp'."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - Gustavo: Uma mensagem de teste",
+    ])
+    msgs = extractor.extract_whatsapp(path)
+    assert msgs and all(m["source"] == "whatsapp" for m in msgs)
+
+
+def test_all_required_fields_present(extractor: MessageExtractor, tmp_path: Path) -> None:
+    """Every extracted message has timestamp, sender, text, source."""
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - Gustavo: Hello there friends",
+        "3/26/20, 15:40 - João Gil: World is big today",
+    ])
+    msgs = extractor.extract_whatsapp(path)
+    assert len(msgs) == 2
     required_keys = {"timestamp", "sender", "text", "source"}
     for msg in msgs:
         assert required_keys.issubset(msg.keys()), f"Missing keys in: {msg}"
 
 
-# ---------------------------------------------------------------------------
-# Slow tests (marked, skipped unless --runslow / -m slow)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.slow
-def test_real_instagram_files_extract_nonzero_messages(extractor: MessageExtractor) -> None:
-    """The real data/insta/ files each yield a nonzero number of messages."""
-    insta_dir = Path("data/insta")
-    if not insta_dir.exists():
-        pytest.skip("data/insta/ not present in this environment")
-    for json_file in sorted(insta_dir.glob("message_*.json")):
-        msgs = extractor.extract_instagram(json_file)
-        assert len(msgs) > 0, f"No messages extracted from {json_file.name}"
+def test_timestamp_is_iso8601(extractor: MessageExtractor, tmp_path: Path) -> None:
+    """The 'timestamp' field parses as ISO-8601."""
+    from datetime import datetime
+    path = _make_whatsapp_file(tmp_path, [
+        "3/26/20, 15:28 - Gustavo: Data e hora corretas",
+    ])
+    msgs = extractor.extract_whatsapp(path)
+    assert len(msgs) == 1
+    dt = datetime.fromisoformat(msgs[0]["timestamp"])
+    assert dt.year == 2020

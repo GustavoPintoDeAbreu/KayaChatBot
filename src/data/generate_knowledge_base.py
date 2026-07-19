@@ -1,14 +1,16 @@
 """
 generate_knowledge_base.py
 
-Uses an LLM provider (Azure OpenAI or xAI Grok, configured via
-``generation.provider`` in config.yaml) to extract structured per-member
-biographical profiles from the cleaned message history.
+Uses the LOCAL on-prem teacher model (src/data/local_teacher.py, default
+Qwen3.5-27B in 4-bit) to extract structured per-member biographical profiles
+from the cleaned message history — no group data leaves the box. Run it with
+the serving container stopped (the teacher needs the GPU); intended as a
+weekly manual refresh.
 
 The script:
   1. Chunks all_messages_cleaned.jsonl into ~2000-token segments.
-  2. For each chunk, sends it to the LLM and asks for structured profile
-     fields (age, interests, occupation, etc.) for each mentioned member.
+  2. For each chunk, asks the teacher for structured profile fields
+     (age, interests, occupation, etc.) for each mentioned member.
   3. Merges returned profiles into group_members.json and writes a legacy
      ``notes`` string (biography_summary) for backward compatibility.
   4. Adds ``topic_mapping`` fact entries to group_knowledge.json for each
@@ -16,14 +18,16 @@ The script:
   5. Checkpoints every N chunks so it can be resumed with --resume-from.
 
 Config controls:
-  knowledge_base.profile_fields   — list of fields to extract (subset for testing)
-  knowledge_generation.chunk_size_tokens
-  knowledge_generation.checkpoint_every
-  knowledge_generation.rate_limit_delay
+  knowledge_base.profile_fields          — list of fields to extract
+  knowledge_generation.backend           — "local" (default) | "cloud" (eval-only escape hatch)
+  knowledge_generation.teacher_model_id  — falls back to synthetic_generation.teacher_model_id
+  knowledge_generation.chunk_size_tokens / checkpoint_every / max_new_tokens / temperature
 
 CLI flags:
-  --test           Process only the first N chunks (test_mode.generation.chunks_limit).
-  --resume-from N  Skip the first N chunks (resume after crash/partial run).
+  --test             Process only the first N chunks (test_mode.generation.chunks_limit).
+  --resume-from N    Skip the first N chunks (resume after crash/partial run).
+  --backend X        local | cloud (default: knowledge_generation.backend).
+  --teacher-model M  Override the local teacher HF model id.
 
 Usage:
   python src/data/generate_knowledge_base.py
@@ -128,11 +132,50 @@ def get_profile_fields(config: Dict[str, Any]) -> List[str]:
     return config.get("knowledge_base", {}).get("profile_fields", DEFAULT_PROFILE_FIELDS)
 
 
-def load_provider(config: Dict[str, Any]):
-    """Load the configured LLM provider (Azure or xAI)."""
-    sys.path.insert(0, str(BASE_DIR / "src"))
-    from llm_providers import get_provider  # noqa: PLC0415
-    return get_provider(config)
+def load_backend(config: Dict[str, Any], backend_override: Optional[str] = None,
+                 teacher_model_override: Optional[str] = None):
+    """Load the extraction backend: local on-prem teacher (default) or cloud.
+
+    ``knowledge_generation.backend: "local"`` runs the shared 4-bit teacher
+    model (src/data/local_teacher.py) — no group data leaves the box.
+    ``"cloud"`` is an explicit escape hatch that sends raw chat chunks to the
+    configured provider (Azure/xAI); it must never be used with group data.
+    """
+    kg_config = config.get("knowledge_generation", {})
+    backend = (backend_override or kg_config.get("backend", "local")).lower()
+
+    if backend == "cloud":
+        print("⚠️  PRIVACY WARNING: backend=cloud sends RAW CHAT off-box to "
+              f"{config['generation']['provider']}. Use only for eval, never "
+              "with group data.", flush=True)
+        from src.llm_providers import get_provider  # noqa: PLC0415
+        return get_provider(config), f"cloud:{config['generation']['provider']}"
+
+    if backend != "local":
+        raise ValueError(f"Unknown knowledge_generation.backend: {backend!r} "
+                         "(expected 'local' or 'cloud')")
+
+    from src.data.local_teacher import TeacherModel, LocalTeacherProvider  # noqa: PLC0415
+    model_id = (
+        teacher_model_override
+        or kg_config.get("teacher_model_id")
+        or config.get("synthetic_generation", {}).get("teacher_model_id")
+    )
+    if not model_id:
+        raise ValueError(
+            "No teacher model configured: set knowledge_generation.teacher_model_id "
+            "or synthetic_generation.teacher_model_id in config.yaml"
+        )
+    sampling = {
+        "max_new_tokens": kg_config.get("max_new_tokens", 2000),
+        "temperature": kg_config.get("temperature", 0.3),
+        "top_p": kg_config.get(
+            "top_p", config.get("synthetic_generation", {}).get("top_p", 0.8)),
+        "top_k": kg_config.get(
+            "top_k", config.get("synthetic_generation", {}).get("top_k", 20)),
+    }
+    teacher = TeacherModel(model_id, sampling)
+    return LocalTeacherProvider(teacher), f"local:{model_id}"
 
 
 def load_messages() -> List[Dict]:
@@ -504,7 +547,9 @@ def save_group_knowledge(
         json.dump(knowledge_data, f, ensure_ascii=False, indent=2)
 
 
-def main(test_mode: bool = False, resume_from: int = 0) -> None:
+def main(test_mode: bool = False, resume_from: int = 0,
+         backend_override: Optional[str] = None,
+         teacher_model_override: Optional[str] = None) -> None:
     """Main knowledge extraction pipeline."""
     print("=" * 60, flush=True)
     print("📚 KAYA KNOWLEDGE BASE GENERATOR (Structured Profiles)", flush=True)
@@ -526,9 +571,8 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
     chunk_size_tokens = kg_config.get("chunk_size_tokens", 2000)
     chunk_size_words = int(chunk_size_tokens * words_per_token)
     checkpoint_every = kg_config.get("checkpoint_every", 5)
-    rate_limit_delay = float(kg_config.get("rate_limit_delay", 2.0))
+    rate_limit_delay = float(kg_config.get("rate_limit_delay", 0.0))
 
-    print(f"\n⚙️  Config: provider={config['generation']['provider']}", flush=True)
     print(f"   Profile fields: {', '.join(profile_fields)}", flush=True)
 
     # Load data
@@ -597,15 +641,16 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
         chunks = chunks[resume_from:]
         print(f"  Resuming: skipping first {resume_from} chunks.", flush=True)
 
-    # Load LLM provider
-    print(f"\n🔗 Loading LLM provider ({config['generation']['provider']})...", flush=True)
+    # Load extraction backend (local teacher by default)
     try:
-        provider = load_provider(config)
-        print("  Provider loaded.", flush=True)
+        provider, backend_label = load_backend(
+            config, backend_override, teacher_model_override
+        )
+        print(f"\n🔗 Extraction backend: {backend_label}", flush=True)
     except Exception as e:
-        print(f"  ⚠️  Could not load provider: {e}", flush=True)
-        print("  Ensure API keys are set in .env", flush=True)
+        print(f"  ⚠️  Could not load extraction backend: {e}", flush=True)
         sys.exit(1)
+    is_local_backend = backend_label.startswith("local:")
 
     # Main loop
     print(f"\n🔄 Processing {len(chunks)} chunks...\n", flush=True)
@@ -678,8 +723,8 @@ def main(test_mode: bool = False, resume_from: int = 0) -> None:
             save_group_members(members_data, current_profiles, profile_fields, current_recent_summaries)
             save_group_knowledge(knowledge_data, current_profiles, current_member_dates)
 
-        # Rate limit
-        if i < len(chunks) - 1:
+        # Rate limit (cloud backend only — the local teacher has no rate limits)
+        if not is_local_backend and rate_limit_delay > 0 and i < len(chunks) - 1:
             time.sleep(rate_limit_delay)
 
     # Final save
@@ -721,6 +766,23 @@ if __name__ == "__main__":
         metavar="N",
         help="Skip the first N chunks and resume from chunk N.",
     )
+    parser.add_argument(
+        "--backend",
+        choices=["local", "cloud"],
+        default=None,
+        help="Extraction backend (overrides knowledge_generation.backend; default local).",
+    )
+    parser.add_argument(
+        "--teacher-model",
+        type=str,
+        default=None,
+        help="HF model id for the local teacher (overrides config).",
+    )
     args = parser.parse_args()
-    main(test_mode=args.test, resume_from=args.resume_from)
+    main(
+        test_mode=args.test,
+        resume_from=args.resume_from,
+        backend_override=args.backend,
+        teacher_model_override=args.teacher_model,
+    )
 

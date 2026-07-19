@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Purpose
 
-KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp/Instagram history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
+KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
 
 **Core invariant**: RAG is always-on. The model must never answer from fine-tuned weights alone — every message retrieves context first.
+
+**Privacy invariant**: No group data leaves the box. Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles).
 
 ---
 
@@ -32,7 +34,7 @@ kaya_chatbot_env/bin/python run_full_pipeline.py
 
 # Individual pipeline steps
 kaya_chatbot_env/bin/python src/data/extract_all_messages.py
-kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py  # --test or --resume-from N
+kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py  # --test / --resume-from N / --backend local|cloud — local teacher needs the GPU (stop prod first)
 kaya_chatbot_env/bin/python src/data/build_vector_db.py
 kaya_chatbot_env/bin/python src/data/format_direct_training.py
 kaya_chatbot_env/bin/python src/data/merge_datasets.py
@@ -73,12 +75,12 @@ scripts/app_status.sh           # running containers + GPU usage
 ### Data Flow
 
 ```
-Raw chat data (data/wpp/, data/insta/)
+Raw chat data (data/wpp/)
     → extract_all_messages.py
     → data/all_messages_cleaned.jsonl + data/finetune_chunks.jsonl
-    → [optional] generate_knowledge_base.py → data/group_members.json, data/group_knowledge.json
+    → [optional] generate_knowledge_base.py (local teacher) → data/group_members.json, data/group_knowledge.json
     → build_vector_db.py → data/rag_db/ (ChromaDB: kaya_conversations + kaya_knowledge_base)
-    → format_direct_training.py (or generate_synthetic_data.py)
+    → format_direct_training.py and/or generate_local_synthetic.py (local teacher) → data/synthetic_local.jsonl
     → merge_datasets.py → data/train_synthetic.jsonl, data/val_synthetic.jsonl
     → train.py → models/kaya_<version>/  (LoRA adapter)
     → chat.py (loads adapter + RAG at runtime)
@@ -107,7 +109,7 @@ Single entry point: `load_config(path, profile_override=None)`. Profiles (define
 
 ### LLM Providers (`src/llm_providers/`)
 
-Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resilience. Azure OpenAI (`azure_provider.py`) and xAI Grok (`xai_provider.py`) are first-class providers; switch via `generation.provider` in `config.yaml`.
+Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resilience. Azure OpenAI (`azure_provider.py`) and xAI Grok (`xai_provider.py`); switch via `generation.provider` in `config.yaml`. **Eval-judge + web-search only** — never send group data to these providers; knowledge extraction and synthetic generation use the local teacher (`src/data/local_teacher.py`).
 
 ### Fine-tuning (`src/finetuning/train.py`)
 

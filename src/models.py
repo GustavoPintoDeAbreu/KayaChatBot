@@ -2,7 +2,7 @@
 Pydantic models for type safety across the KayaChatBot pipeline.
 
 This module defines data models for each phase of the pipeline:
-- Raw data sources (WhatsApp, Instagram)
+- Raw data sources (WhatsApp)
 - Processed data (cleaned messages, finetune chunks)
 - Synthetic generation (conversations)
 - Training format (formatted examples)
@@ -39,43 +39,19 @@ class WhatsAppMessage(BaseModel):
         return v.strip()
 
 
-class InstagramMessage(BaseModel):
-    """Raw Instagram message from JSON export.
-    
-    Instagram exports use double-encoded UTF-8 (latin1 → utf8).
-    """
-    timestamp_ms: int
-    sender_name: str
-    content: Optional[str] = None
-    source: Literal["instagram"] = "instagram"
-    
-    # Optional fields for media/reactions
-    photos: Optional[List[Dict[str, Any]]] = None
-    videos: Optional[List[Dict[str, Any]]] = None
-    reactions: Optional[List[Dict[str, Any]]] = None
-    share: Optional[Dict[str, Any]] = None
-    
-    model_config = ConfigDict(frozen=False)
-    
-    @property
-    def timestamp(self) -> datetime:
-        """Convert timestamp_ms to datetime."""
-        return datetime.fromtimestamp(self.timestamp_ms / 1000)
-
-
 # ============================================================================
 # Processed Data Models
 # ============================================================================
 
 class CleanedMessage(BaseModel):
-    """Cleaned and standardized message from any source.
-    
-    This is the unified format after preprocessing WhatsApp and Instagram data.
+    """Cleaned and standardized message.
+
+    This is the unified format after preprocessing WhatsApp data.
     """
     timestamp: datetime
     sender: str
     text: str
-    source: Literal["whatsapp", "instagram"]
+    source: Literal["whatsapp"]
     
     model_config = ConfigDict(frozen=False)
     
@@ -98,9 +74,8 @@ class CleanedMessage(BaseModel):
 
 class FinetuneChunk(BaseModel):
     """A chunk of messages for synthetic data generation.
-    
-    Messages are chunked into ~50K token groups to fit within
-    Azure GPT-4.1-mini context window for synthetic generation.
+
+    Messages are chunked into ~50K token groups for downstream processing.
     """
     chunk_id: int = Field(ge=0)
     messages: List[CleanedMessage]

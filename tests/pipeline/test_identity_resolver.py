@@ -22,9 +22,9 @@ MEMBERS = [
 ]
 
 SENDER_ALIASES = {
-    "peteroupedro": "Peter",
+    "O Pedro do Costume": "Peter",
     "joao_murgeiro": "Murgeiro",
-    "Driehoek": "Frederico",
+    "Fred NL": "Frederico",
 }
 
 
@@ -47,9 +47,9 @@ def resolver(members_file: Path) -> SenderResolver:
 
 def test_config_override_exact_key(resolver: SenderResolver) -> None:
     """Config overrides are resolved first, regardless of alias matching."""
-    assert resolver.resolve("peteroupedro") == "Peter"
+    assert resolver.resolve("O Pedro do Costume") == "Peter"
     assert resolver.resolve("joao_murgeiro") == "Murgeiro"
-    assert resolver.resolve("Driehoek") == "Frederico"
+    assert resolver.resolve("Fred NL") == "Frederico"
 
 
 def test_exact_alias_match(resolver: SenderResolver) -> None:
@@ -73,21 +73,14 @@ def test_token_match_full_name(resolver: SenderResolver) -> None:
     assert result == "Gil"
 
 
-def test_token_match_double_encoded(resolver: SenderResolver) -> None:
-    """Double-encoded UTF-8 names (Instagram) are decoded before matching."""
-    # "JoÃ£o Gil" decodes to "João Gil" → token "Gil" → member Gil
-    result = resolver.resolve("JoÃ£o Gil")
-    assert result == "Gil"
-
-
-def test_anonymous_instagram_returns_none(resolver: SenderResolver) -> None:
-    """Anonymous Instagram senders ("Instagram user") map to None."""
-    assert resolver.resolve("Instagram user") is None
-    assert resolver.resolve("instagram user") is None
+def test_resolve_always_returns_str(resolver: SenderResolver) -> None:
+    """resolve() never returns None — unknown senders pass through as-is."""
+    assert resolver.resolve("") == ""
+    assert isinstance(resolver.resolve("Someone Unknown"), str)
 
 
 def test_non_member_preserves_name(resolver: SenderResolver) -> None:
-    """A sender not in any member list is returned as-is (decoded)."""
+    """A sender not in any member list is returned as-is."""
     result = resolver.resolve("Maria Costa")
     assert result == "Maria Costa"
 

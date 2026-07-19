@@ -1,5 +1,5 @@
 """
-Extract and clean all messages from WhatsApp and Instagram sources.
+Extract and clean all messages from WhatsApp exports.
 Creates unified cleaned message dataset and chunks for synthetic generation.
 """
 
@@ -27,8 +27,7 @@ CONFIG_PATH = _REPO_ROOT / "config.yaml"
 config = load_config(str(CONFIG_PATH))
 
 # Configuration
-TEST_MODE = config['test_mode']['enabled']
-MAX_TOKENS_PER_CHUNK = 50000  # 50K tokens per chunk for Azure GPT-4.1-mini
+MAX_TOKENS_PER_CHUNK = 50000  # 50K tokens per finetune chunk
 
 # Detect if running in Docker
 if os.path.exists('/app'):
@@ -131,10 +130,7 @@ class MessageExtractor:
                 return
             resolved_sender = current_sender
             if self._resolver is not None:
-                resolved = self._resolver.resolve(current_sender)
-                if resolved is None:
-                    return  # anonymous sender — drop
-                resolved_sender = resolved
+                resolved_sender = self._resolver.resolve(current_sender)
             messages.append({
                 'timestamp': current_date,
                 'sender': resolved_sender,
@@ -188,117 +184,6 @@ class MessageExtractor:
         print(f"✅ Extracted {len(messages)} WhatsApp messages")
         return messages
     
-    def decode_instagram_text(self, text: str) -> str:
-        """Decode Instagram's double-encoded UTF-8."""
-        try:
-            return text.encode('latin1').decode('utf-8')
-        except Exception:
-            return text
-
-    # Instagram system-message skip patterns (content-level)
-    _INSTAGRAM_SKIP_PATTERNS = [
-        'sent an attachment',
-        'liked a message',
-        'loved a message',
-        'reacted',
-        'unsent a message',
-        'started a call',
-        'missed a call',
-        'shared a post',
-        'shared a story',
-        'set the nickname',
-        'named the group',
-        'created the group',
-        'changed the group',
-    ]
-
-    def _is_instagram_system_message(self, text: str) -> bool:
-        """Return True if *text* looks like an Instagram system notification."""
-        text_lower = text.lower()
-        return any(pattern in text_lower for pattern in self._INSTAGRAM_SKIP_PATTERNS)
-
-    def _is_pure_emoji_or_empty(self, text: str) -> bool:
-        """Return True if *text* contains no alphabetic characters."""
-        return not any(c.isalpha() for c in text)
-
-    def extract_instagram(self, file_path: Path) -> List[Dict]:
-        """Extract messages from Instagram JSON export.
-
-        Filters applied:
-        - Messages with ``share.link`` (reel / post shares) are dropped.
-        - System notifications (likes, reactions, attachment labels) are dropped.
-        - Messages containing only emoji / punctuation are dropped.
-        - Sender names are normalised via the SenderResolver; anonymous
-          senders ("Instagram user") are dropped entirely.
-        """
-        print(f"\n💬 Processing Instagram: {file_path.name}")
-        messages = []
-
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            # Instagram format: {'participants': [...], 'messages': [...]}
-            instagram_messages = data.get('messages', [])
-
-            for msg in instagram_messages:
-                # Skip if no text content
-                if 'content' not in msg:
-                    continue
-
-                # Skip reel / post shares — the message object carries a
-                # share dict with a 'link' field pointing to instagram.com
-                if msg.get('share', {}).get('link'):
-                    continue
-
-                text = msg['content']
-
-                # Decode Instagram's double-encoded UTF-8
-                text = self.decode_instagram_text(text)
-
-                # Skip system notifications and reactions
-                if self._is_instagram_system_message(text):
-                    continue
-
-                # Skip messages that are purely emoji / punctuation (no letters)
-                if self._is_pure_emoji_or_empty(text):
-                    continue
-
-                # Clean text
-                cleaned_text = self.clean_text(text)
-
-                if not self.is_valid_message(cleaned_text):
-                    continue
-
-                # Resolve sender to canonical group member name
-                raw_sender = msg.get('sender_name', 'Unknown')
-                if self._resolver is not None:
-                    resolved = self._resolver.resolve(raw_sender)
-                    if resolved is None:
-                        # Anonymous sender — drop the message
-                        continue
-                    sender = resolved
-                else:
-                    sender = self.decode_instagram_text(raw_sender).strip()
-
-                # Get timestamp (milliseconds → datetime)
-                timestamp_ms = msg.get('timestamp_ms', 0)
-                timestamp = datetime.fromtimestamp(timestamp_ms / 1000)
-
-                messages.append({
-                    'timestamp': timestamp.isoformat(),
-                    'sender': sender,
-                    'text': cleaned_text,
-                    'source': 'instagram',
-                })
-
-        except Exception as e:
-            print(f"❌ Error processing Instagram file: {e}")
-            return []
-
-        print(f"✅ Extracted {len(messages)} Instagram messages")
-        return messages
-    
     def merge_consecutive_messages(self, messages: List[Dict]) -> List[Dict]:
         """Merge consecutive messages from the same sender."""
         if not messages:
@@ -339,21 +224,6 @@ class MessageExtractor:
                 if 'processed' not in txt_file.name.lower():  # Skip already processed files
                     messages = self.extract_whatsapp(txt_file)
                     all_messages.extend(messages)
-        
-        # Extract Instagram messages
-        insta_dir = DATA_DIR / "insta"
-        if insta_dir.exists():
-            insta_files = sorted(insta_dir.glob("message_*.json"))
-            
-            if TEST_MODE:
-                # Only process limited files in test mode
-                limit = config['test_mode']['extraction']['instagram_files_limit']
-                insta_files = insta_files[:limit]
-                print(f"\n⚠️  TEST MODE: Processing only first {limit} Instagram file(s)")
-            
-            for json_file in insta_files:
-                messages = self.extract_instagram(json_file)
-                all_messages.extend(messages)
         
         # Sort by timestamp
         all_messages.sort(key=lambda x: x['timestamp'])
@@ -433,11 +303,6 @@ def main():
     print("🚀 MESSAGE EXTRACTION PIPELINE")
     print("=" * 60)
     
-    if TEST_MODE:
-        print("\n⚠️  RUNNING IN TEST MODE")
-        print("   - Only first Instagram JSON will be processed")
-        print("   - Set TEST_MODE=False for full extraction\n")
-    
     # Create output directory
     DATA_DIR.mkdir(exist_ok=True)
     
@@ -495,7 +360,7 @@ def main():
     print("\n✅ Extraction complete!")
     print(f"\nNext steps:")
     print(f"  1. Review {OUTPUT_CLEANED.name} for quality")
-    print(f"  2. Run generate_synthetic_data.py to create training data from finetune chunks")
+    print(f"  2. Run generate_local_synthetic.py to create training data (fully on-prem)")
 
 
 if __name__ == "__main__":

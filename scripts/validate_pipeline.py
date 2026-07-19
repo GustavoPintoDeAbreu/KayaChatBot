@@ -124,8 +124,7 @@ def main():
     check_file(DATA_DIR / "finetune_chunks.jsonl", "Finetune chunks")
     
     print("\nSynthetic generation outputs:")
-    kaya_count = check_file(DATA_DIR / "synthetic_kaya.jsonl", "Kaya conversations")
-    port_count = check_file(DATA_DIR / "synthetic_portuguese.jsonl", "Portuguese data")
+    kaya_count = check_file(DATA_DIR / "synthetic_local.jsonl", "Local synthetic conversations")
     
     print("\nMerged outputs:")
     train_count = check_file(DATA_DIR / "train_synthetic.jsonl", "Training set")
@@ -143,11 +142,7 @@ def main():
     print("=" * 60)
     
     if kaya_count == 0:
-        print("⚠️  No Kaya conversations yet - need to run generation")
-        print("   Note: Azure rate limits may require waiting between runs")
-    
-    if port_count == 0:
-        print("⚠️  No Portuguese data yet - need to run prepare_portuguese_data.py")
+        print("⚠️  No local synthetic conversations yet - run generate_local_synthetic.py")
     
     if train_count > 0 and val_count > 0:
         total = train_count + val_count

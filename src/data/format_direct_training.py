@@ -1,7 +1,7 @@
 """
 Direct Training Data Formatter
 
-Converts extracted WhatsApp/Instagram messages into ShareGPT-formatted
+Converts extracted WhatsApp messages into ShareGPT-formatted
 training examples without any API calls.
 
 Each example is a sliding-window conversation turn:
