@@ -26,3 +26,7 @@ None of them feed into `train_synthetic.jsonl`.
 | `val_synthetic.jsonl` | Final validation set (output of `merge_datasets.py`) |
 | `all_messages_cleaned.jsonl` | Extracted + cleaned chat messages (pipeline intermediate) |
 | `finetune_chunks.jsonl` | 50K-token chunks for API-based generation (pipeline intermediate) |
+
+## 2026-07-19 — Instagram purge
+
+All archived `.jsonl` datasets were deleted as part of the WhatsApp-only migration: they were generated from Instagram-inclusive extractions and/or by the removed cloud synthetic-generation pipeline. Current datasets are regenerated WhatsApp-only with the local teacher.
