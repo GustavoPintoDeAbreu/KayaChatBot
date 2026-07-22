@@ -103,6 +103,17 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 
 **Follow-up suggestions (web UI only).** After each answer, `src/chat/suggestions.py` prompts the already-loaded local model a second time for 2-3 follow-up questions, shown as clickable chips in the Gradio UI (`web_app.py`). Controlled by `chat.suggestions` in `config.yaml`; degrades to no chips on any failure.
 
+### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
+
+`get_engine()` is the process-wide singleton that loads the model + retriever once. Every surface generates through a pluggable `InferenceBackend`: the WhatsApp webhook (`engine.generate_reply`), the Gradio UI token stream (`web_app.py`), and follow-up `suggestions.py`. Two backends:
+
+| Backend | What runs |
+|---|---|
+| `hf` | Unsloth `FastModel` / PEFT model **in-process** on the GPU (default). |
+| `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/kaya-wpp-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model at parity quality. |
+
+Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (default `hf`). **Prod runs `gguf`** (env set on the `kaya-prod` compose service); local dev stays `hf`. The gguf file is gitignored — rebuild it by merging the active adapter → GGUF (`convert_hf_to_gguf.py`, run under the venv's transformers) → `llama-quantize Q6_K`. `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS. The CLI `chat.py` is hf-only (dev tool).
+
 ### Config System (`src/config_loader.py`)
 
 Single entry point: `load_config(path, profile_override=None)`. Profiles (defined under `model_profiles` in `config.yaml`) deep-merge into the top-level `model:` and `training:` sections. The active profile is set by `active_model_profile` in `config.yaml` or passed via `--profile` CLI flag. **All code paths must use `load_config()` — never read `config.yaml` directly.**
@@ -120,6 +131,8 @@ Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training 
 `kaya-prod` is the **always-on** production web app. The box is **serving-only** (fine-tuning is done separately). Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile) with two protection layers: Cloudflare Access (network login) and the Gradio username/password (`KAYA_WEB_USER`/`KAYA_WEB_PASS`, read from env in `web_app.py`, overriding `chat.web_auth`). The UI header shows the running env + commit (`KAYA_ENV`/`KAYA_VERSION`).
 
 **Prod runs from its own checkout** at `~/kaya-prod` (separate from this dev copy), with `models/` and `data/` symlinked to the shared originals — so you can develop here without touching the live site. `kaya-prod` has `restart: unless-stopped`, so with Docker enabled on boot (`sudo systemctl enable docker`) the site **auto-recovers after a reboot**.
+
+Prod serves generation from the `llama` compose service (`gguf` profile) with `KAYA_INFERENCE_BACKEND=gguf` set on `kaya-prod`; `deploy_prod.sh` starts the `llama` server automatically. **Roll back to the in-process model** with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Note: `~/kaya-prod/data/` must contain the gitignored runtime files (`rag_db/`, `group_members.json`, `whatsapp_whitelist.json`, `whatsapp_contacts.json`) — if `data/` is a real dir instead of the intended symlink to the dev copy, copy them in or RAG/whitelist gating silently fail.
 
 **Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) calls `deploy_prod.sh` to update the live site. `kaya-dev` (port 7861) is for occasional manual dev runs only and shares the single GPU with prod (run one at a time). Full runbook in `DEPLOYMENT.md`.
 

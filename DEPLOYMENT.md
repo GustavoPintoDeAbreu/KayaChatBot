@@ -20,15 +20,18 @@ Cloudflare Access  ──►  login page (allowed emails only)   [protection lay
 Cloudflare Tunnel  ──►  cloudflared container (no inbound ports on the box)
    │  http://kaya-prod:7860  (compose network)
    ▼
-kaya-prod / kaya-dev container (Gradio)
+kaya-prod / kaya-dev container (Gradio + WhatsApp webhook)
    │  Gradio username/password                              [protection layer 2]
    ▼
-fine-tuned model + RAG  (GPU)
+RAG (GPU) ──► generation backend
+                ├─ hf:   in-process Unsloth model (dev default)
+                └─ gguf: llama.cpp `llama` container over HTTP (prod, ~15× faster)
 ```
 
 - **dev**: `dev.kaya.example.com` → `kaya-dev:7861`
 - **prod**: `kaya.example.com` → `kaya-prod:7860`
 - dev and prod **share one GPU** — only run one at a time (`app_up.sh` enforces this).
+- **Inference backend:** prod runs the `gguf` backend (`KAYA_INFERENCE_BACKEND=gguf` on `kaya-prod`), so generation happens in the `llama` compose service (`gguf` profile) serving `models/gguf/kaya-wpp-Q6_K.gguf`. `deploy_prod.sh` starts it automatically. Roll back with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Dev defaults to `hf` (in-process) — no `llama` service needed.
 
 ---
 
@@ -193,3 +196,21 @@ scripts/app_up.sh dev
   — a 302 to `*.cloudflareaccess.com/.../login/...` means Access is gating it
   correctly; the "Unable to find application" body means the binding is stale
   (recreate the app, above).
+
+- **Ungrounded answers / DMs ignored after a deploy.** `~/kaya-prod/data/` must
+  hold the gitignored runtime files: `rag_db/`, `group_members.json`,
+  `whatsapp_whitelist.json`, `whatsapp_contacts.json`. If `data/` is a **real dir**
+  (git materialised the tracked `*.example.json`) instead of the intended
+  `ln -s ~/Desktop/KayaChatBot/data ~/kaya-prod/data` symlink, those files are
+  missing → RAG init fails (hallucinated answers) and the DM whitelist is empty
+  (every direct message silently ignored). Fix: copy them from the dev `data/`
+  (leave `data/waha/` — the linked-device session — untouched), then
+  `docker restart kaya-prod`. Boot log should show `RAG Retriever initialized` and
+  `Loaded N WhatsApp whitelist number(s)`.
+
+- **gguf backend: bot never replies / errors on generate.** The `llama` service
+  isn't up. `deploy_prod.sh` starts it, or manually
+  `docker compose --profile gguf up -d llama`; check `docker logs kaya-llama` for
+  `model loaded`. The app reaches it at `http://llama:8080` on the compose network.
+  Requires `models/gguf/kaya-wpp-Q6_K.gguf` to exist (shared via the `models`
+  symlink). To bypass entirely, redeploy with `KAYA_INFERENCE_BACKEND=hf`.

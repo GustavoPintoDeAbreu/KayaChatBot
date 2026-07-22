@@ -81,6 +81,7 @@ KayaChatBot/
 │   │   ├── web_app.py                # Gradio web UI (suggestions, feedback, metrics)
 │   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
 │   │   ├── engine.py                 # Shared generation engine (web + WhatsApp)
+│   │   ├── inference_backend.py       # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
 │   │   ├── inference.py
 │   │   └── retriever.py              # RAG retrieval (conversations + KB)
 │   ├── llm_providers/                # LLM provider abstractions

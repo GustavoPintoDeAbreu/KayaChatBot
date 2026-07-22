@@ -18,7 +18,7 @@ WhatsApp ⇄ WAHA container (Node, Docker)  ──webhook POST──▶  whatsap
 | File | Role |
 |---|---|
 | `src/chat/engine.py` | Single model load (`get_engine`) + non-streaming `generate_reply` + `build_system_prompt`. Shared by the web UI and the bridge. |
-| `src/chat/whatsapp_adapter.py` | Parses WAHA webhooks, decides whether to reply (DM always; group on mention/reply), resolves the speaker, manages per-chat history. |
+| `src/chat/whatsapp_adapter.py` | Parses WAHA webhooks, decides whether to reply (DM gated by the whitelist; group on mention/reply), resolves the speaker, manages per-chat history. |
 | `src/chat/waha_client.py` | `WahaClient` (real REST) and `MockWahaClient` (captures replies — used with no real number). |
 | `src/chat/memory.py` → `KeyedSessionMemory` | Per-chat rolling history under `data/whatsapp_sessions/`. |
 | `src/chat/whatsapp_server.py` | FastAPI webhook + mounts the Gradio UI; run this instead of `web_app.py` when WhatsApp is on. |
@@ -71,8 +71,17 @@ curl -s localhost:7860/whatsapp/outbox
 
 ## Behaviour & limits
 
-- **DM:** always answers. **Group:** answers only on @-mention or reply-to-bot
-  (`whatsapp.group.*`); never answers itself.
+- **DM:** answered only for numbers in the anti-spam whitelist when
+  `whatsapp.whitelist.enabled` is true (the default) — every other DM is silently
+  ignored so a leaked number can't be spammed. Numbers live in the gitignored
+  `data/whatsapp_whitelist.json` (`{"allowed": ["351…", …]}`), merged into
+  `whatsapp.whitelist.allowed` at startup; edit that file + `docker restart kaya-prod`
+  to change who can DM. Set `whitelist.enabled: false` to answer every DM.
+  **Group:** answers only on @-mention or reply-to-bot (`whatsapp.group.*`),
+  regardless of the DM whitelist; never answers itself.
+- **Single loaded model, two surfaces:** `kaya-prod` runs `whatsapp_server`, which
+  serves both the WhatsApp webhook and the mounted Gradio UI off one `get_engine()`
+  instance — so both honour the active inference backend (prod = gguf; see CLAUDE.md).
 - **Ban/ToS risk:** WAHA is unofficial (drives WhatsApp Web). Use the dedicated
   number, keep volume modest, leave `send_seen` on for human-like pacing.
 - **Single GPU:** WhatsApp generations share the in-process `gpu_lock` with the web
