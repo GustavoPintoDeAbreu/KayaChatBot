@@ -8,8 +8,6 @@ in-memory model/tokenizer — no extra model load and no external API call.
 """
 from typing import Any, Dict, List
 
-import torch
-
 # Instruction used to coax the local model into emitting short follow-up
 # questions, one per line. Kept in European Portuguese to match the bot persona.
 _SUGGESTION_SYSTEM_PROMPT = (
@@ -73,17 +71,17 @@ def parse_suggestions(raw: str, count: int = 3) -> List[str]:
 
 
 def generate_suggestions(
-    model: Any,
-    tokenizer: Any,
+    backend: Any,
     config: Dict[str, Any],
     user_message: str,
     assistant_response: str,
     context: str = "",
     count: int = 3,
 ) -> List[str]:
-    """Generate up to ``count`` follow-up questions using the local model.
+    """Generate up to ``count`` follow-up questions via the inference backend.
 
-    Returns an empty list on any failure so the UI degrades gracefully (no chips).
+    ``backend`` is an ``InferenceBackend`` (hf or gguf) — the same one the engine
+    uses. Returns an empty list on any failure so the UI degrades gracefully.
     """
     sug_cfg = config.get("chat", {}).get("suggestions", {})
     if not sug_cfg.get("enabled", True):
@@ -107,25 +105,10 @@ def generate_suggestions(
     ]
 
     try:
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        raw = backend.generate(
+            messages, max_new_tokens=max_new_tokens,
+            sampling={"temperature": temperature, "top_p": 0.95},
         )
-        device = getattr(model, "device", None) or (
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-        inputs = tokenizer(text=[prompt], return_tensors="pt").to(device)
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=temperature > 0,
-                top_p=0.95,
-                use_cache=True,
-            )
-        generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-        raw = tokenizer.decode(generated_ids, skip_special_tokens=True)
     except Exception as exc:  # noqa: BLE001 — suggestions are best-effort
         print(f"⚠️  Suggestion generation failed: {exc}")
         return []

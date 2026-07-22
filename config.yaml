@@ -223,6 +223,13 @@ training:
 
 # Inference Settings
 inference:
+  # Generation engine. "hf" = in-process Unsloth/PEFT model (default, unchanged).
+  # "gguf" = route generation to a llama.cpp llama-server (~15x faster at Q6_K
+  # parity quality). gguf needs the `llama` compose service running the GGUF.
+  backend: hf                        # hf | gguf
+  gguf:
+    server_url: "http://llama:8080"  # llama-server URL; in Docker use the compose service name
+    timeout: 180
   max_new_tokens: 768  # Elaboration ceiling — used when a question explicitly asks for detail
   max_new_tokens_default: 256  # Chatty default; replies stay short unless detail is requested
   temperature: 0.8             # chat default; chosen by scripts/temperature_sweep.py (v15: AVG 4.6 vs 4.4-4.47)

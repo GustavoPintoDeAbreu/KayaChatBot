@@ -160,11 +160,49 @@ services:
       - KAYA_WEB_PORT=7860
       - KAYA_ENV=prod
       - KAYA_VERSION=${KAYA_VERSION:-unknown}
+      # Prod serves generation from the llama.cpp gguf server (the `llama`
+      # service). Overrides config.yaml's hf default. Set to hf to roll back.
+      - KAYA_INFERENCE_BACKEND=${KAYA_INFERENCE_BACKEND:-gguf}
       - KAYA_WAHA_URL=http://waha:3000
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
+
+  # ──────────────────────────────────────────────────────────────
+  # llama  [profile: gguf]
+  # llama.cpp GGUF inference server — the fast backend. When
+  # inference.backend=gguf, the app process holds only the tokenizer + RAG
+  # retriever and sends generation here (reachable as http://llama:8080 on the
+  # compose network). Serves the merged fine-tuned model at Q6_K (~15x faster
+  # than the in-process bnb-4bit model, at parity quality). Bring up alongside
+  # prod: `docker compose --profile prod --profile gguf up -d` (set backend=gguf).
+  # ──────────────────────────────────────────────────────────────
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:full-cuda
+    container_name: kaya-llama
+    profiles: [gguf]
+    restart: unless-stopped
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./models/gguf:/models:ro
+    entrypoint: /app/llama-server
+    # -fa off is required for the Gemma-4 MTP arch / KV layout; --jinja avoids a
+    # template crash. The app strips its own leading BOS to prevent a double-BOS.
+    command: >
+      -m /models/kaya-wpp-Q6_K.gguf -ngl 999 -fa off --jinja
+      --host 0.0.0.0 --port 8080 -c 4096
+    expose:
+      - "8080"
 
   # ──────────────────────────────────────────────────────────────
   # cloudflared  [profile: tunnel]

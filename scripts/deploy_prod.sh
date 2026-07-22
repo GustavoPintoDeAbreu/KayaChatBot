@@ -56,6 +56,14 @@ docker compose build kaya-prod
 echo "🚀 (Re)starting prod + WAHA + tunnel ..."
 docker compose --profile prod --profile tunnel up -d --force-recreate kaya-prod waha cloudflared
 
+# Prod generates via the llama.cpp gguf server (KAYA_INFERENCE_BACKEND=gguf, set
+# on the kaya-prod service). Start it too. Not force-recreated, so a redeploy
+# leaves the 6GB model loaded. Export KAYA_INFERENCE_BACKEND=hf to skip + roll back.
+if [[ "${KAYA_INFERENCE_BACKEND:-gguf}" == "gguf" ]]; then
+  echo "🦙 backend=gguf → ensuring the llama.cpp server is up ..."
+  docker compose --profile gguf up -d llama
+fi
+
 echo
 echo "✅ Prod is now serving commit $KAYA_VERSION (ref: $REF)."
 echo "   Local:  http://localhost:7860"

@@ -74,6 +74,19 @@ def _load_model(config: Dict[str, Any]):
     ``web_app.py`` so behaviour is unchanged.
     """
     model_dir = config["training"]["output_dir"]
+
+    # With the llama.cpp (gguf) backend the heavy model lives in the llama-server
+    # sidecar; this process only needs the tokenizer (for chat templating).
+    from src.chat.inference_backend import resolve_backend
+
+    if resolve_backend(config) == "gguf":
+        from transformers import AutoTokenizer
+
+        print(f"Backend=gguf — loading tokenizer only from {model_dir} (generation via llama.cpp) …")
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        print("✓ Tokenizer loaded")
+        return None, tokenizer
+
     adapter_cfg_path = Path(model_dir) / "adapter_config.json"
     if not adapter_cfg_path.exists():
         raise FileNotFoundError(f"adapter_config.json not found in {model_dir}")
@@ -122,7 +135,7 @@ class KayaEngine:
     history), so the web UI and the WhatsApp bridge can share one instance.
     """
 
-    def __init__(self, model, tokenizer, retriever, config: Dict[str, Any]):
+    def __init__(self, model, tokenizer, retriever, config: Dict[str, Any], backend=None):
         self.model = model
         self.tokenizer = tokenizer
         self.retriever = retriever
@@ -131,6 +144,11 @@ class KayaEngine:
         self.rag_enabled = bool(rag_cfg.get("enabled", False)) and retriever is not None
         self.knowledge_approach = rag_cfg.get("knowledge_approach", "both")
         self._inf = config.get("inference", {})
+        if backend is None:
+            from src.chat.inference_backend import build_backend
+
+            backend = build_backend(config, model, tokenizer)
+        self.backend = backend
 
     def build_user_turn(
         self, message: str, recent_lines: Optional[List[str]] = None, speaker_label: str = "User"
@@ -218,23 +236,9 @@ class KayaEngine:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_turn},
             ]
-            prompt = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+            raw = self.backend.generate(
+                messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
-            inputs = self.tokenizer(text=[prompt], return_tensors="pt").to("cuda")
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=self._inf.get("temperature", 1.0),
-                do_sample=True,
-                top_p=self._inf.get("top_p", 0.95),
-                top_k=self._inf.get("top_k", 64),
-                repetition_penalty=self._inf.get("repetition_penalty", 1.0),
-                no_repeat_ngram_size=self._inf.get("no_repeat_ngram_size", 0),
-                use_cache=True,
-            )
-            generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-            raw = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
         return clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
 

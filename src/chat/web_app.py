@@ -8,10 +8,8 @@ import os
 import sys
 import time
 from pathlib import Path
-from threading import Thread
 
 import gradio as gr
-from transformers import TextIteratorStreamer
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -36,6 +34,7 @@ config = load_config(config_path)
 _engine = get_engine(config)
 model = _engine.model
 tokenizer = _engine.tokenizer
+backend = _engine.backend
 retriever = _engine.retriever
 rag_enabled = _engine.rag_enabled
 rag_config = config.get("rag", {})
@@ -152,30 +151,13 @@ def bot_stream(history: list):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message_full},
             ]
-            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
-
-            # timeout=60s prevents the iterator from hanging if the generation thread crashes
-            streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0)
-            gen_kwargs = dict(
-                **inputs,
-                streamer=streamer,
-                max_new_tokens=_inf.get("max_new_tokens", 512),
-                temperature=_inf.get("temperature", 1.0),
-                do_sample=True,
-                top_p=_inf.get("top_p", 0.95),
-                top_k=_inf.get("top_k", 64),
-                repetition_penalty=_inf.get("repetition_penalty", 1.0),
-                no_repeat_ngram_size=_inf.get("no_repeat_ngram_size", 0),
-                use_cache=True,
-            )
-
-            # Run generation in a background thread; iterate tokens on the main thread
-            Thread(target=model.generate, kwargs=gen_kwargs, daemon=True).start()
-
+            # Backend-agnostic streaming: hf streams from the in-process model,
+            # gguf streams SSE deltas from the llama.cpp server. Same token loop.
             history = history + [{"role": "assistant", "content": ""}]
             partial = ""
-            for token in streamer:
+            for token in backend.generate_stream(
+                messages, max_new_tokens=_inf.get("max_new_tokens", 512), sampling=_inf
+            ):
                 partial += token
                 history[-1]["content"] = partial
                 yield history, context, ""
@@ -207,7 +189,7 @@ def make_suggestions(history: list, context: str):
     try:
         with gpu_section(config):
             suggestions = generate_suggestions(
-                model, tokenizer, config, user_msg, bot_msg, context,
+                backend, config, user_msg, bot_msg, context,
                 count=SUGGESTION_COUNT,
             )
     except Exception as exc:  # noqa: BLE001 — chips are best-effort (incl. GpuBusyError)
