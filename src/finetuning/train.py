@@ -71,6 +71,18 @@ def main():
         action="store_true",
         help="Force test mode: applies test_mode.training overrides from config.yaml.",
     )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=None,
+        help="Override the profile's lora_r. First rung of the OOM ladder (16 -> 8).",
+    )
+    parser.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=None,
+        help="Override the profile's max_seq_length. Second rung of the OOM ladder (4096 -> 2048).",
+    )
     args = parser.parse_args()
 
     # GPU check
@@ -101,8 +113,10 @@ def main():
     # supplying the chat template, response-masking markers, and LoRA settings.
     if args.model_id:
         model_id = args.model_id
-    max_seq_length = config['model']['max_seq_length']
-    lora_r = config['model']['lora_r']
+    # CLI overrides for the OOM ladder in CLAUDE.md (lora_r -> 8, then
+    # max_seq_length -> 2048), so a retry does not need config.yaml edited.
+    max_seq_length = args.max_seq_length or config['model']['max_seq_length']
+    lora_r = args.lora_r or config['model']['lora_r']
     lora_alpha = config['model']['lora_alpha']
     lora_dropout = config['model']['lora_dropout']
     target_modules = config['model']['target_modules']
