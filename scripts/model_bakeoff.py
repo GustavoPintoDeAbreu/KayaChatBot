@@ -145,6 +145,19 @@ ARMS: List[Arm] = [
         seq_lengths=[16384, 32768, 49152],
         note="CONTEXT arm, upper bound: if the server OOMs here, 31b-ctx32k is "
              "the answer and that is itself the finding."),
+    # The 31B held 100% needle recall out to 27,413 tokens at -c 32768, ~11.6x
+    # prod's measured ~2360 window, using 27.0GB (both cards). These ask whether
+    # the cheaper models do the same: 12B at Q6 is 11.8GB, so 12B + a 32K cache
+    # should fit ONE card — which would mean the big context costs no second GPU
+    # at all. Same seq ladder as 31b-ctx32k so the numbers are comparable.
+    Arm("12b-ctx32k", "B", "gemma-4-12b-it-Q6_K.gguf",
+        "unsloth/gemma-4-12b-it", 32768, "off", f"{ONE_SLOT} {SINGLE_GPU}", 9.8,
+        seq_lengths=[4096, 8192, 16384, 24576], sm="none",
+        note="CONTEXT on one card: quality leader + 32K cache, single GPU."),
+    Arm("26b-a4b-ctx32k", "B", "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+        "unsloth/gemma-4-26B-A4B-it", 32768, "off", f"{TS_BIAS} {ONE_SLOT}", 14.2,
+        seq_lengths=[4096, 8192, 16384, 24576],
+        note="CONTEXT + speed: the 153 tok/s MoE with a 32K cache."),
     Arm("70b-abl-iq4", "B", "Llama-3.3-70B-Instruct-abliterated-IQ4_XS.gguf",
         "huihui-ai/Llama-3.3-70B-Instruct-abliterated", 8192, "on",
         f"{TS_BIAS} {ONE_SLOT}", 37.9,
