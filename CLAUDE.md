@@ -53,6 +53,13 @@ kaya_chatbot_env/bin/python -m pytest tests/rag/ -v
 kaya_chatbot_env/bin/python -m pytest tests/pipeline/ -v
 kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 
+# Model bake-off (candidate models across GPU configurations)
+scripts/fetch_bakeoff_models.sh                          # download candidate GGUFs (~262GB)
+kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
+kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
+kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
+kaya_chatbot_env/bin/python scripts/export_gguf.py --profile gemma4-31b-wpp --quant Q4_K_M
+
 # Docker (always rebuild+prune after changes)
 docker-compose up --build
 docker system prune  # prevent storage overload
@@ -63,7 +70,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
-scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one GPU → one env at a time)
+scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
 scripts/app_down.sh dev|prod    # stop and free the GPU
 scripts/app_status.sh           # running containers + GPU usage
 ```
@@ -103,6 +110,41 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 
 **Follow-up suggestions (web UI only).** After each answer, `src/chat/suggestions.py` prompts the already-loaded local model a second time for 2-3 follow-up questions, shown as clickable chips in the Gradio UI (`web_app.py`). Controlled by `chat.suggestions` in `config.yaml`; degrades to no chips on any failure.
 
+### GPU topology (2× RTX 3090, no NVLink)
+
+The box has **two 24 GB RTX 3090s and no NVLink bridge**. They are two separate
+devices, not a 48 GB pool: `can_device_access_peer(0,1)` is False and `nvidia-smi
+topo -p2p` reports `CNS`, so there is **no GPU-to-GPU P2P** and all inter-GPU
+traffic stages through system RAM.
+
+| | Serving (llama.cpp) | Python (training, hf backend, CI) |
+|---|---|---|
+| `NVIDIA_VISIBLE_DEVICES` | `all` | `all` |
+| `CUDA_VISIBLE_DEVICES` | `0,1` | **`0`** |
+| Ceiling | ~45 GB weights+KV, layer-split | 24 GB |
+
+- **Serving can exceed 24 GB** by layer-splitting one model across both cards
+  (`-sm layer`). Only the hidden state crosses PCIe at the layer boundary.
+  **Never use `-sm row`** here — without P2P it round-trips through host RAM every
+  step. There must be **no `deploy.resources.reservations.devices` block** on the
+  llama services: a `count:` reservation overrides `NVIDIA_VISIBLE_DEVICES` and
+  silently caps serving at one card.
+- **`CUDA_VISIBLE_DEVICES=0` on the Python services is load-bearing.** Unsloth
+  only installs its `DistributedType.NO` patch when `device_count() == 1`
+  (`unsloth/models/_utils.py`); with both cards visible, HF Trainer falls into
+  DataParallel — slower and flaky with 4-bit models. Unsloth's own multi-GPU path
+  is **DDP** (a full model copy per card, `models/loader_utils.py
+  prepare_device_map`), so exposing both cards gives training **no extra
+  capacity** anyway. Training above 24 GB would mean leaving Unsloth for HF+peft
+  `device_map="auto"`.
+- GPU0 drives the desktop, is capped at 250 W and burn-in measured its sustained
+  clocks ~15% below GPU1's (1238 vs 1448 MHz), so it is the slow half of a split
+  — two-card serving uses `-ts 0.45,0.55` to give it fewer layers.
+- Power caps are enforced by `gpu-power-limit.service` **by UUID** (indices are
+  not stable across reboots). `SwPowerCap` in the throttle bitmask is expected and
+  healthy. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
+  do not write monitoring that expects it.
+
 ### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
 
 `get_engine()` is the process-wide singleton that loads the model + retriever once. Every surface generates through a pluggable `InferenceBackend`: the WhatsApp webhook (`engine.generate_reply`), the Gradio UI token stream (`web_app.py`), and follow-up `suggestions.py`. Two backends:
@@ -110,7 +152,11 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 | Backend | What runs |
 |---|---|
 | `hf` | Unsloth `FastModel` / PEFT model **in-process** on the GPU (default). |
-| `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/kaya-wpp-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model at parity quality. |
+| `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/kaya-wpp-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model at parity quality. This is the only backend that can serve a model larger than one card. |
+
+`KAYA_LLAMA_URL` overrides `inference.gguf.server_url` (env wins), which is how a
+benchmark run targets the `llama-bench` candidate server on `127.0.0.1:8081`
+while leaving what prod resolves untouched.
 
 Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (default `hf`). **Prod runs `gguf`** (env set on the `kaya-prod` compose service); local dev stays `hf`. The gguf file is gitignored — rebuild it by merging the active adapter → GGUF (`convert_hf_to_gguf.py`, run under the venv's transformers) → `llama-quantize Q6_K`. `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS. The CLI `chat.py` is hf-only (dev tool).
 
@@ -134,7 +180,7 @@ Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training 
 
 Prod serves generation from the `llama` compose service (`gguf` profile) with `KAYA_INFERENCE_BACKEND=gguf` set on `kaya-prod`; `deploy_prod.sh` starts the `llama` server automatically. **Roll back to the in-process model** with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Note: `~/kaya-prod/data/` must contain the gitignored runtime files (`rag_db/`, `group_members.json`, `whatsapp_whitelist.json`, `whatsapp_contacts.json`) — if `data/` is a real dir instead of the intended symlink to the dev copy, copy them in or RAG/whitelist gating silently fail.
 
-**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) calls `deploy_prod.sh` to update the live site. `kaya-dev` (port 7861) is for occasional manual dev runs only and shares the single GPU with prod (run one at a time). Full runbook in `DEPLOYMENT.md`.
+**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) calls `deploy_prod.sh` to update the live site. `kaya-dev` (port 7861) is for occasional manual dev runs only; run one env at a time, since a served model may claim both GPUs. Full runbook in `DEPLOYMENT.md`.
 
 ---
 
@@ -153,7 +199,8 @@ These are easy to break — treat them as hard rules:
 
 ## Training Memory Rules
 
-To avoid OOM on RTX 3090 (24 GB VRAM):
+Training is capped at **one 24 GB card** — see the GPU topology section above for
+why the second 3090 does not raise this ceiling. To avoid OOM:
 
 - `skip_memory_metrics=True` — avoids the HF `TrainerMemoryTracker` busy-loop
 - `dataset_num_proc: 1` — prevents fork-based memory duplication

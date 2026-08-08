@@ -4,7 +4,8 @@ How the Kaya web app is served to other computers, and how the CI/CD pipeline
 deploys it. The box is **serving-only**: `kaya-prod` is the **always-on**
 production app (auto-recovers after reboot). "Push to prod" rebuilds and restarts
 the live container from a dedicated `~/kaya-prod` checkout. `kaya-dev` exists for
-occasional manual testing and shares the single GPU, so only one runs at a time.
+occasional manual testing; only one env runs at a time, since a served model may
+claim both GPUs.
 
 ---
 
@@ -30,7 +31,15 @@ RAG (GPU) ──► generation backend
 
 - **dev**: `dev.kaya.example.com` → `kaya-dev:7861`
 - **prod**: `kaya.example.com` → `kaya-prod:7860`
-- dev and prod **share one GPU** — only run one at a time (`app_up.sh` enforces this).
+- The box has **2× RTX 3090 (24 GB each), no NVLink** — two separate devices, not a
+  48 GB pool. llama.cpp can layer-split one model across both for a ~45 GB
+  weights+KV ceiling (`-sm layer`; never `-sm row` — there is no P2P). Because a
+  model may claim both cards, **only run one env at a time** (`app_up.sh` enforces
+  this). Python services stay pinned to one card via `CUDA_VISIBLE_DEVICES=0` — see
+  the GPU topology section in `CLAUDE.md` for why that is load-bearing.
+- Serving a model larger than 24 GB: set `KAYA_PROD_GGUF` (and `KAYA_PROD_CTX`) so
+  the `llama` service loads it; verify with `docker exec kaya-llama nvidia-smi -L`
+  (must list both cards) and check VRAM lands on both.
 - **Inference backend:** prod runs the `gguf` backend (`KAYA_INFERENCE_BACKEND=gguf` on `kaya-prod`), so generation happens in the `llama` compose service (`gguf` profile) serving `models/gguf/kaya-wpp-Q6_K.gguf`. `deploy_prod.sh` starts it automatically. Roll back with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Dev defaults to `hf` (in-process) — no `llama` service needed.
 
 ---
@@ -129,7 +138,7 @@ scripts/deploy_prod.sh <ref>       # deploy a specific commit/tag/branch
 
 # Manually power an env up/down (also starts/stops the Cloudflare Tunnel).
 scripts/app_up.sh prod             # → http://localhost:7860 + prod hostname
-scripts/app_up.sh dev              # → http://localhost:7861 + dev hostname (stops prod first; one GPU)
+scripts/app_up.sh dev              # → http://localhost:7861 + dev hostname (stop prod first)
 scripts/app_down.sh prod|dev|all   # stop and free the GPU
 scripts/app_status.sh              # running containers + GPU usage
 
