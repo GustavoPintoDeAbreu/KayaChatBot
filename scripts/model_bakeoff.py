@@ -399,7 +399,15 @@ def score_arm(arm: Arm, judge: str, quick: bool) -> Dict:
     return row
 
 
-def run_arm(arm: Arm, judge: str, quick: bool, load_timeout: float) -> Dict:
+def run_arm(arm: Arm, judge: str, quick: bool, load_timeout: float,
+            throughput_only: bool = False) -> Dict:
+    """Score one arm. throughput_only skips the three harnesses.
+
+    Split mode changes speed but not answers, so re-measuring tok/s after a
+    topology change (e.g. single-card vs layer-split) does not need the full
+    quality suite re-run — that would cost ~15 min per arm for numbers that
+    cannot have moved.
+    """
     row: Dict = {"tag": arm.tag, "tier": arm.tier, "gguf": arm.gguf,
                  "tokenizer": arm.tokenizer, "ctx": arm.ctx, "fa": arm.fa,
                  "extra": arm.extra, "sm": arm.sm, "est_gb": arm.est_gb, "note": arm.note,
@@ -441,7 +449,8 @@ def run_arm(arm: Arm, judge: str, quick: bool, load_timeout: float) -> Dict:
         row["throughput"] = measure_throughput()
         log(f"  throughput: {row['throughput'].get('predicted_per_second')} tok/s")
 
-        row.update(score_arm(arm, judge, quick))
+        if not throughput_only:
+            row.update(score_arm(arm, judge, quick))
         row["gpu_after"] = gpu_snapshot()
     finally:
         compose_down()
@@ -535,6 +544,9 @@ def main() -> None:
     ap.add_argument("--resume", default=None,
                     help="Existing scorecard JSON; arms already scored are skipped.")
     ap.add_argument("--list", action="store_true", help="Print the matrix and exit.")
+    ap.add_argument("--throughput-only", action="store_true",
+                    help="Measure load + tok/s only, skipping the three harnesses. "
+                         "For re-measuring speed after a topology change.")
     args = ap.parse_args()
 
     arms = ARMS
@@ -576,7 +588,8 @@ def main() -> None:
         log("=" * 78)
         log(f"ARM {i}/{len(todo)}: {arm.tag}  [tier {arm.tier}]  {arm.gguf}")
         try:
-            row = run_arm(arm, args.judge, args.quick, args.load_timeout)
+            row = run_arm(arm, args.judge, args.quick, args.load_timeout,
+                          throughput_only=args.throughput_only)
         except KeyboardInterrupt:
             log("interrupted — tearing down and saving what we have")
             compose_down()
