@@ -88,12 +88,18 @@ class Arm:
     est_gb: float = 0.0
     seq_lengths: List[int] = field(default_factory=lambda: [2048, 4096])
     note: str = ""
+    sm: str = "layer"      # "none" = keep the whole model on one card
 
 
 # GPU0 drives the desktop, is capped at 250W and burn-in measured its sustained
 # clocks ~15% below GPU1's (1238 vs 1448 MHz avg). It is therefore the slow half
 # of any layer split, so two-card arms give it slightly fewer layers.
 TS_BIAS = "-ts 0.45,0.55"
+# Tier A exists to answer "what does ONE card give you", so those arms keep the
+# whole model on GPU1 (-sm none). Left to split, llama.cpp spreads even a 10GB
+# model over both cards and charges a cross-PCIe hop per token, which understates
+# single-card throughput. GPU1 is the compute-clean card (no desktop, 280W).
+SINGLE_GPU = "--main-gpu 1"
 # One slot, so the whole KV budget serves a single request instead of being
 # divided four ways (llama-server defaults to 4 slots).
 ONE_SLOT = "--parallel 1"
@@ -105,18 +111,18 @@ ONE_SLOT = "--parallel 1"
 ARMS: List[Arm] = [
     # ---- Tier A: fits one card. Establishes what the second GPU is worth. ----
     Arm("base-e4b", "A", "kaya-wpp-Q6_K.gguf",
-        "models/kaya_gemma4_heretic_seq4096_wpp", 8192, "off", ONE_SLOT, 5.8,
-        note="REFERENCE: current prod, E4B + WhatsApp LoRA, abliterated base"),
+        "models/kaya_gemma4_heretic_seq4096_wpp", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 5.8,
+        note="REFERENCE: current prod, E4B + WhatsApp LoRA, abliterated base", sm="none"),
     Arm("12b-q6", "A", "gemma-4-12b-it-Q6_K.gguf",
-        "unsloth/gemma-4-12b-it", 8192, "off", ONE_SLOT, 9.8),
+        "unsloth/gemma-4-12b-it", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 9.8, sm="none"),
     Arm("26b-a4b-q4", "A", "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "unsloth/gemma-4-26B-A4B-it", 8192, "off", ONE_SLOT, 14.2,
-        note="MoE ~4B active: near-E4B speed, far more knowledge"),
+        "unsloth/gemma-4-26B-A4B-it", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 14.2,
+        note="MoE ~4B active: near-E4B speed, far more knowledge", sm="none"),
     Arm("26b-a4b-q6", "A", "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf",
-        "unsloth/gemma-4-26B-A4B-it", 8192, "off", ONE_SLOT, 23.3),
+        "unsloth/gemma-4-26B-A4B-it", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 23.3, sm="none"),
     Arm("31b-q4", "A", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
-        "unsloth/gemma-4-31B-it", 8192, "off", ONE_SLOT, 17.3,
-        note="QAT: Q4 footprint at near-BF16 quality"),
+        "unsloth/gemma-4-31B-it", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 17.3,
+        note="QAT: Q4 footprint at near-BF16 quality", sm="none"),
 
     # ---- Tier B: needs both cards. The reason the second GPU was bought. ----
     Arm("31b-q5", "B", "gemma-4-31B-it-Q5_K_M.gguf",
@@ -218,7 +224,7 @@ def compose_up(arm: Arm) -> None:
         "KAYA_BENCH_CTX": str(arm.ctx),
         "KAYA_BENCH_FA": arm.fa,
         "KAYA_BENCH_EXTRA": arm.extra,
-        "KAYA_BENCH_SM": "layer",
+        "KAYA_BENCH_SM": arm.sm,
     }
     subprocess.run(["docker", "rm", "-f", BENCH_CONTAINER], check=False,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -396,7 +402,7 @@ def score_arm(arm: Arm, judge: str, quick: bool) -> Dict:
 def run_arm(arm: Arm, judge: str, quick: bool, load_timeout: float) -> Dict:
     row: Dict = {"tag": arm.tag, "tier": arm.tier, "gguf": arm.gguf,
                  "tokenizer": arm.tokenizer, "ctx": arm.ctx, "fa": arm.fa,
-                 "extra": arm.extra, "est_gb": arm.est_gb, "note": arm.note,
+                 "extra": arm.extra, "sm": arm.sm, "est_gb": arm.est_gb, "note": arm.note,
                  "error": None}
 
     gguf_path = GGUF_DIR / arm.gguf
