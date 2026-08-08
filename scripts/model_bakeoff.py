@@ -158,11 +158,14 @@ ARMS: List[Arm] = [
              "server OOMs at this ctx, that IS the finding — record and move on."),
 
     # ---- Tier C: bigger than VRAM; experts spill into the 64GB of system RAM. ----
+    # ~63GB of weights against ~45GB of VRAM, so some expert layers must live in
+    # system RAM. KAYA_MOE_N tunes how many: higher N = less VRAM, more CPU work.
+    # There is no way to know the right N without trying, so the driver retries
+    # with a larger offload when the server fails to come up.
     Arm("gptoss-120b", "C", "gpt-oss-120b-Q4_K_M-00001-of-00002.gguf",
         "unsloth/gpt-oss-120b", 8192, "on",
-        f"{TS_BIAS} {ONE_SLOT} --n-cpu-moe 12", 62.7,
-        note="MoE ~5B active, ~63GB total. --n-cpu-moe N is a starting guess; "
-             "tune N down while it still fits (see --moe-sweep)."),
+        f"{TS_BIAS} {ONE_SLOT} --n-cpu-moe {os.environ.get('KAYA_MOE_N', '12')}", 62.7,
+        note="MoE ~5B active, ~63GB total; experts spill into the 64GB of RAM."),
 ]
 
 
