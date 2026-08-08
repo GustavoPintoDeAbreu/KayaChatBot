@@ -124,12 +124,21 @@ ARMS: List[Arm] = [
     Arm("31b-q8", "B", "gemma-4-31B-it-Q8_0.gguf",
         "unsloth/gemma-4-31B-it", 8192, "off", f"{TS_BIAS} {ONE_SLOT}", 32.6,
         note="precision arm: what 2 cards buy in quality at fixed size"),
-    Arm("31b-ctx", "B", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
+    # Two context arms off the same file. Gemma's KV cost at 64K is uncertain
+    # (it alternates local sliding-window and global attention, so the naive
+    # per-layer estimate badly overshoots), and 17.3GB of weights + a 64K cache
+    # may not fit in ~45GB. Running 32K as well means a 64K OOM still leaves a
+    # measured answer instead of a hole.
+    Arm("31b-ctx32k", "B", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
+        "unsloth/gemma-4-31B-it", 32768, "off", f"{TS_BIAS} {ONE_SLOT}", 17.3,
+        seq_lengths=[4096, 8192, 16384, 24576],
+        note="CONTEXT arm: rag.max_context_tokens is 2500 today and the measured "
+             "reliable window was ~2360 — this tests whether that ceiling moves."),
+    Arm("31b-ctx64k", "B", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
         "unsloth/gemma-4-31B-it", 65536, "off", f"{TS_BIAS} {ONE_SLOT}", 17.3,
-        seq_lengths=[4096, 16384, 32768, 49152],
-        note="CONTEXT arm: Q4 weights + ~25GB KV. rag.max_context_tokens is 2500 "
-             "today and the measured reliable window was ~2360 — this is the arm "
-             "that tests whether that ceiling can move."),
+        seq_lengths=[16384, 32768, 49152],
+        note="CONTEXT arm, upper bound: if the server OOMs here, 31b-ctx32k is "
+             "the answer and that is itself the finding."),
     Arm("70b-abl-iq4", "B", "Llama-3.3-70B-Instruct-abliterated-IQ4_XS.gguf",
         "huihui-ai/Llama-3.3-70B-Instruct-abliterated", 8192, "on",
         f"{TS_BIAS} {ONE_SLOT}", 37.9,
