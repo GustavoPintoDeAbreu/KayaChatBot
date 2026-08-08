@@ -607,6 +607,37 @@ model_profiles:
       learning_rate: 0.00005
       max_steps: 450
 
+  # Quality leader of the one-card serving arms (golden 4.34 / knowledge 3.86 vs
+  # prod's 3.75 / 2.80, stock and un-fine-tuned). At ~7GB in 4-bit it is by far
+  # the most comfortable of these to train, which leaves headroom to raise lora_r
+  # or max_seq_length if the first run underfits. No pre-quantized 4-bit repo
+  # exists, so this points at the bf16 repo and relies on load_in_4bit.
+  gemma4-12b-wpp:
+    model:
+      model_id: "unsloth/gemma-4-12b-it"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 32
+      lora_dropout: 0.0
+      chat_template: "gemma-4"
+      instruction_part: "<|turn>user\n"
+      response_part: "<|turn>model\n"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_12b_wpp"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.00005
+      max_steps: 450
+
   # MoE variant. There is no pre-quantized 4-bit repo for 26B-A4B — Unsloth
   # deliberately maps MoE 4-bit repos back to the full-precision one and
   # quantizes on the fly (see BAD_MAPPINGS in models/loader_utils.py), so this
