@@ -566,3 +566,74 @@ model_profiles:
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
       max_steps: 450
+
+  # ── Bigger-base candidates (scripts/model_bakeoff.py Phase 3) ────────────────
+  # Same Gemma-4 recipe as the profiles above — identical chat_template,
+  # instruction/response parts and target_modules — so train.py needs no changes:
+  # it is already the FastModel Gemma-4 path.
+  #
+  # These train on ONE card. Unsloth 2026.4.5's multi-GPU path is DDP (a full
+  # model copy per GPU, models/loader_utils.py prepare_device_map), so the second
+  # 3090 adds no training capacity; it only helps serving. Keep
+  # CUDA_VISIBLE_DEVICES=0 for training runs — with both cards visible, Unsloth
+  # skips its DistributedType.NO patch (models/_utils.py) and HF Trainer falls
+  # into DataParallel, which is slower and flaky with 4-bit models.
+  gemma4-31b-wpp:
+    model:
+      # 19.1GB of 4-bit weights on a 24GB card leaves ~5GB for activations,
+      # gradients and optimizer state. If this OOMs, apply the CLAUDE.md
+      # fallbacks in order: lora_r -> 8, then max_seq_length -> 2048.
+      model_id: "unsloth/gemma-4-31B-it-unsloth-bnb-4bit"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 32
+      lora_dropout: 0.0
+      chat_template: "gemma-4"
+      instruction_part: "<|turn>user\n"
+      response_part: "<|turn>model\n"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_31b_wpp"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.00005
+      max_steps: 450
+
+  # MoE variant. There is no pre-quantized 4-bit repo for 26B-A4B — Unsloth
+  # deliberately maps MoE 4-bit repos back to the full-precision one and
+  # quantizes on the fly (see BAD_MAPPINGS in models/loader_utils.py), so this
+  # points at the bf16 repo and relies on load_in_4bit. ~4B active params means
+  # markedly lower activation memory than the dense 31B.
+  gemma4-26b-a4b-wpp:
+    model:
+      model_id: "unsloth/gemma-4-26B-A4B-it"
+      max_seq_length: 4096
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 32
+      lora_dropout: 0.0
+      chat_template: "gemma-4"
+      instruction_part: "<|turn>user\n"
+      response_part: "<|turn>model\n"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_26b_a4b_wpp"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.00005
+      max_steps: 450
