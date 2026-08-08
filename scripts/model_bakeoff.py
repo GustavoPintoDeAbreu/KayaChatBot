@@ -129,6 +129,17 @@ ARMS: List[Arm] = [
         "unsloth/gemma-4-31B-it", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 17.3,
         note="QAT: Q4 footprint at near-BF16 quality", sm="none"),
 
+    # ---- Tier D: FINE-TUNED candidates. The fair fight. ----
+    # Every other arm is a stock instruct model with no group voice, which is the
+    # one real asymmetry in this bake-off. This is the same 31B base carrying the
+    # WhatsApp LoRA, so `31b-wpp-tuned` vs `31b-q4` isolates exactly what the
+    # fine-tune contributes on an identical base at an identical quant.
+    # Trained at lora_r 8 / seq 2048 — the only settings that fit one 24GB card.
+    Arm("31b-wpp-tuned", "D", "kaya_gemma4_31b_wpp-Q4_K_M.gguf",
+        "models/kaya_gemma4_31b_wpp", 8192, "off", f"{ONE_SLOT} {SINGLE_GPU}", 18.5,
+        sm="none",
+        note="FINE-TUNED 31B: compare against 31b-q4 (same base, same quant, no LoRA)"),
+
     # ---- Tier B: needs both cards. The reason the second GPU was bought. ----
     Arm("31b-q5", "B", "gemma-4-31B-it-Q5_K_M.gguf",
         "unsloth/gemma-4-31B-it", 8192, "off", f"{TS_BIAS} {ONE_SLOT}", 21.7),
