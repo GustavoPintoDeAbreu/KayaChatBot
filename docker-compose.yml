@@ -252,11 +252,15 @@ services:
     entrypoint: /app/llama-server
     # -fa is per-arm: Gemma-4's MTP arch / KV layout requires `off`, but Llama and
     # the MoE models want it `on` (faster, smaller KV cache).
+    # -ngl deliberately lives in KAYA_BENCH_EXTRA rather than here: for a model
+    # larger than VRAM it has to be OMITTED entirely so llama.cpp auto-fits the
+    # layer count. With n_gpu_layers explicitly set it refuses to shrink and
+    # aborts with "failed to fit params to free device memory".
     command: >
-      -m /models/${KAYA_BENCH_GGUF:-kaya-wpp-Q6_K.gguf} -ngl ${KAYA_BENCH_NGL:-999}
+      -m /models/${KAYA_BENCH_GGUF:-kaya-wpp-Q6_K.gguf}
       -fa ${KAYA_BENCH_FA:-off} --jinja -sm ${KAYA_BENCH_SM:-layer}
       --host 0.0.0.0 --port 8080 -c ${KAYA_BENCH_CTX:-4096}
-      ${KAYA_BENCH_EXTRA:-}
+      ${KAYA_BENCH_EXTRA:--ngl 999}
     ports:
       - "127.0.0.1:8081:8080"
 

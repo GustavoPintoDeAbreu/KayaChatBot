@@ -89,6 +89,11 @@ class Arm:
     seq_lengths: List[int] = field(default_factory=lambda: [2048, 4096])
     note: str = ""
     sm: str = "layer"      # "none" = keep the whole model on one card
+    # -ngl. "999" offloads everything. Set "auto" for models too big to fit: with
+    # n_gpu_layers explicitly set, llama.cpp refuses to shrink the layer count and
+    # aborts with "failed to fit params to free device memory" instead of
+    # auto-fitting, which is exactly what a >VRAM MoE needs it to do.
+    ngl: str = "999"
 
 
 # GPU0 drives the desktop, is capped at 250W and burn-in measured its sustained
@@ -178,7 +183,10 @@ ARMS: List[Arm] = [
     Arm("gptoss-120b", "C", "gpt-oss-120b-Q4_K_M-00001-of-00002.gguf",
         "unsloth/gpt-oss-120b", 8192, "on",
         f"{TS_BIAS} {ONE_SLOT} --n-cpu-moe {os.environ.get('KAYA_MOE_N', '12')}", 62.7,
-        note="MoE ~5B active, ~63GB total; experts spill into the 64GB of RAM."),
+        ngl="auto",
+        note="MoE ~5B active, ~63GB total; experts spill into the 64GB of RAM. "
+             "ngl=auto is required: with -ngl pinned, llama.cpp aborts instead of "
+             "shrinking the layer count to fit."),
 ]
 
 
@@ -239,7 +247,10 @@ def compose_up(arm: Arm) -> None:
         "KAYA_BENCH_GGUF": arm.gguf,
         "KAYA_BENCH_CTX": str(arm.ctx),
         "KAYA_BENCH_FA": arm.fa,
-        "KAYA_BENCH_EXTRA": arm.extra,
+        # -ngl is prepended here rather than fixed in compose: an "auto" arm omits
+        # it so llama.cpp can shrink the layer count to fit a >VRAM model.
+        "KAYA_BENCH_EXTRA": (arm.extra if arm.ngl == "auto"
+                             else f"-ngl {arm.ngl} {arm.extra}").strip(),
         "KAYA_BENCH_SM": arm.sm,
     }
     subprocess.run(["docker", "rm", "-f", BENCH_CONTAINER], check=False,
@@ -426,7 +437,7 @@ def run_arm(arm: Arm, judge: str, quick: bool, load_timeout: float,
     """
     row: Dict = {"tag": arm.tag, "tier": arm.tier, "gguf": arm.gguf,
                  "tokenizer": arm.tokenizer, "ctx": arm.ctx, "fa": arm.fa,
-                 "extra": arm.extra, "sm": arm.sm, "est_gb": arm.est_gb, "note": arm.note,
+                 "extra": arm.extra, "sm": arm.sm, "ngl": arm.ngl, "est_gb": arm.est_gb, "note": arm.note,
                  "error": None}
 
     gguf_path = GGUF_DIR / arm.gguf
