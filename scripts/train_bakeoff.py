@@ -45,7 +45,15 @@ FINALISTS = [
 OOM_LADDER = [(None, None), (8, None), (8, 2048)]
 
 OOM_MARKERS = ("out of memory", "CUDA out of memory", "OutOfMemoryError",
-               "torch.OutOfMemoryError")
+               "torch.OutOfMemoryError",
+               # bitsandbytes' way of saying "the 4-bit model does not fit": accelerate
+               # spills modules to CPU/disk and bnb refuses. It is a capacity failure
+               # even though the text never says "out of memory".
+               "dispatched on the CPU or the disk")
+
+# Failures the ladder cannot fix, because they happen before lora_r or
+# max_seq_length are ever applied. Retrying just burns time.
+LOAD_TIME_MARKERS = ("dispatched on the CPU or the disk", "is not supported yet in")
 
 
 def log(msg: str) -> None:
@@ -66,12 +74,16 @@ def run(cmd: List[str], log_path: Path, env: Optional[Dict[str, str]] = None) ->
     return proc.returncode
 
 
-def looks_like_oom(log_path: Path) -> bool:
+def _tail(log_path: Path, n: int = 20000) -> str:
     try:
-        tail = log_path.read_text(encoding="utf-8", errors="replace")[-20000:]
+        return log_path.read_text(encoding="utf-8", errors="replace")[-n:]
     except OSError:
-        return False
-    return any(m.lower() in tail.lower() for m in OOM_MARKERS)
+        return ""
+
+
+def looks_like_oom(log_path: Path) -> bool:
+    tail = _tail(log_path).lower()
+    return any(m.lower() in tail for m in OOM_MARKERS)
 
 
 def train_one(profile: str, gpu: str) -> Dict:
@@ -99,6 +111,15 @@ def train_one(profile: str, gpu: str) -> Dict:
         if rc == 0:
             row.update(trained=True, lora_r=lora_r, max_seq_length=seq, minutes=mins)
             log(f"  ✓ {profile} trained in {mins} min ({label})")
+            return row
+
+        tail = _tail(log_path)
+        if any(m in tail for m in LOAD_TIME_MARKERS):
+            # The base model could not even be loaded, so a smaller lora_r or a
+            # shorter sequence changes nothing. Record the real reason.
+            row["error"] = (f"base model does not fit / is unsupported at load time — "
+                            f"see {log_path.name}")
+            log(f"  ✗ {profile} failed at model load; the OOM ladder cannot help")
             return row
 
         if looks_like_oom(log_path):
