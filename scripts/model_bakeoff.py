@@ -98,20 +98,24 @@ TS_BIAS = "-ts 0.45,0.55"
 # divided four ways (llama-server defaults to 4 slots).
 ONE_SLOT = "--parallel 1"
 
+# The server's -c must exceed the largest sequence a recall sweep builds, or the
+# deepest cells overflow the context and are recorded as failures rather than as
+# genuine recall misses. Arms therefore run with roughly 2x headroom over their
+# max seq_length.
 ARMS: List[Arm] = [
     # ---- Tier A: fits one card. Establishes what the second GPU is worth. ----
     Arm("base-e4b", "A", "kaya-wpp-Q6_K.gguf",
-        "models/kaya_gemma4_heretic_seq4096_wpp", 4096, "off", ONE_SLOT, 5.8,
+        "models/kaya_gemma4_heretic_seq4096_wpp", 8192, "off", ONE_SLOT, 5.8,
         note="REFERENCE: current prod, E4B + WhatsApp LoRA, abliterated base"),
     Arm("12b-q6", "A", "gemma-4-12b-it-Q6_K.gguf",
-        "unsloth/gemma-4-12b-it", 4096, "off", ONE_SLOT, 9.8),
+        "unsloth/gemma-4-12b-it", 8192, "off", ONE_SLOT, 9.8),
     Arm("26b-a4b-q4", "A", "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "unsloth/gemma-4-26B-A4B-it", 4096, "off", ONE_SLOT, 14.2,
+        "unsloth/gemma-4-26B-A4B-it", 8192, "off", ONE_SLOT, 14.2,
         note="MoE ~4B active: near-E4B speed, far more knowledge"),
     Arm("26b-a4b-q6", "A", "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf",
-        "unsloth/gemma-4-26B-A4B-it", 4096, "off", ONE_SLOT, 23.3),
+        "unsloth/gemma-4-26B-A4B-it", 8192, "off", ONE_SLOT, 23.3),
     Arm("31b-q4", "A", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
-        "unsloth/gemma-4-31B-it", 4096, "off", ONE_SLOT, 17.3,
+        "unsloth/gemma-4-31B-it", 8192, "off", ONE_SLOT, 17.3,
         note="QAT: Q4 footprint at near-BF16 quality"),
 
     # ---- Tier B: needs both cards. The reason the second GPU was bought. ----
@@ -122,7 +126,7 @@ ARMS: List[Arm] = [
         note="precision arm: what 2 cards buy in quality at fixed size"),
     Arm("31b-ctx", "B", "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
         "unsloth/gemma-4-31B-it", 65536, "off", f"{TS_BIAS} {ONE_SLOT}", 17.3,
-        seq_lengths=[4096, 16384, 32768, 65536],
+        seq_lengths=[4096, 16384, 32768, 49152],
         note="CONTEXT arm: Q4 weights + ~25GB KV. rag.max_context_tokens is 2500 "
              "today and the measured reliable window was ~2360 — this is the arm "
              "that tests whether that ceiling can move."),
@@ -132,10 +136,11 @@ ARMS: List[Arm] = [
         note="raw-parameter arm; abliterated to keep the low-refusal property "
              "without a fine-tune"),
     Arm("70b-abl-q4km", "B", "Llama-3.3-70B-Instruct-abliterated-Q4_K_M.gguf",
-        "huihui-ai/Llama-3.3-70B-Instruct-abliterated", 4096, "on",
+        "huihui-ai/Llama-3.3-70B-Instruct-abliterated", 8192, "on",
         f"{TS_BIAS} {ONE_SLOT}", 42.5,
         seq_lengths=[2048, 4096],
-        note="largest that fits in VRAM at all: 42.5GB of ~45GB usable"),
+        note="largest that fits in VRAM at all: 42.5GB of ~45GB usable. If the "
+             "server OOMs at this ctx, that IS the finding — record and move on."),
 
     # ---- Tier C: bigger than VRAM; experts spill into the 64GB of system RAM. ----
     Arm("gptoss-120b", "C", "gpt-oss-120b-Q4_K_M-00001-of-00002.gguf",
