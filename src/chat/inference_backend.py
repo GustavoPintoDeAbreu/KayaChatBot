@@ -38,6 +38,21 @@ def resolve_backend(config: Dict[str, Any]) -> str:
     ).lower()
 
 
+def resolve_llama_url(config: Dict[str, Any]) -> str:
+    """The llama-server URL: ``KAYA_LLAMA_URL`` env wins, else config, else localhost.
+
+    The env override lets a benchmark arm point at the ``llama-bench`` server
+    (127.0.0.1:8081) serving a candidate model, without editing the committed
+    ``inference.gguf.server_url`` that prod resolves. Used by
+    ``scripts/model_bakeoff.py``.
+    """
+    return (
+        os.environ.get("KAYA_LLAMA_URL")
+        or config.get("inference", {}).get("gguf", {}).get("server_url")
+        or "http://127.0.0.1:8080"
+    )
+
+
 def _templated_prompt(tokenizer, messages: List[Dict[str, str]], strip_bos: bool = False) -> str:
     """Apply the model's chat template. Optionally drop a leading BOS.
 
@@ -169,7 +184,7 @@ def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
     backend = resolve_backend(config)
     if backend == "gguf":
         gcfg = config.get("inference", {}).get("gguf", {})
-        url = gcfg.get("server_url", "http://127.0.0.1:8080")
+        url = resolve_llama_url(config)
         print(f"✓ Inference backend: gguf (llama.cpp @ {url})")
         return LlamaCppBackend(tokenizer, url, timeout=gcfg.get("timeout", 180.0))
     print("✓ Inference backend: hf (in-process model)")

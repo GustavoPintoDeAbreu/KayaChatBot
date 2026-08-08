@@ -11,14 +11,9 @@ services:
       dockerfile: Dockerfile
     image: kaya-chatbot:2.0.0
 
-    # Enable single GPU support
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # No `deploy.resources.reservations.devices` block: a `count:` reservation
+    # overrides NVIDIA_VISIBLE_DEVICES and is what previously capped llama.cpp at
+    # a single 24GB card. GPU selection is done via the environment below.
 
     # Volume mounts shared by all services
     volumes:
@@ -33,8 +28,22 @@ services:
     env_file:
       - .env
 
-    # Environment variables for GPU and caching
+    # Environment variables for GPU and caching.
+    #
+    # Both cards are made visible to the container, but the Python processes are
+    # deliberately restricted to ONE of them.
+    #
+    # CUDA_VISIBLE_DEVICES=0 IS LOAD-BEARING — do not "fix" it to 0,1.
+    # unsloth/models/_utils.py:1561 only installs its `DistributedType.NO` patch
+    # when torch.cuda.device_count() == 1. With two devices visible, that patch is
+    # skipped and HF Trainer silently falls into DataParallel: slower, and flaky
+    # with 4-bit quantized models. Unsloth's own multi-GPU path is DDP (a full
+    # model copy per card, see models/loader_utils.py:88 prepare_device_map), so
+    # exposing both cards buys no extra capacity for training anyway.
+    # Only the llama.cpp servers below get both cards, where layer-splitting a
+    # model larger than 24GB actually works.
     environment:
+      - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
@@ -184,25 +193,70 @@ services:
     profiles: [gguf]
     restart: unless-stopped
     runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # Both GPUs. There is no `deploy.count` block on purpose — `count: 1` here is
+    # what used to cap serving at 24GB regardless of NVIDIA_VISIBLE_DEVICES.
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0,1
     volumes:
       - ./models/gguf:/models:ro
     entrypoint: /app/llama-server
     # -fa off is required for the Gemma-4 MTP arch / KV layout; --jinja avoids a
     # template crash. The app strips its own leading BOS to prevent a double-BOS.
+    #
+    # -sm layer splits the model by LAYER across the two cards: only the hidden
+    # state crosses PCIe at the boundary (a few KB per token). Do NOT use -sm row
+    # on this box — there is no P2P (no NVLink bridge, driver reports CNS), so row
+    # split stages every step through host RAM and is markedly slower.
+    # KAYA_PROD_GGUF/CTX/EXTRA let a >24GB model be swapped in without editing this file.
     command: >
-      -m /models/kaya-wpp-Q6_K.gguf -ngl 999 -fa off --jinja
-      --host 0.0.0.0 --port 8080 -c 4096
+      -m /models/${KAYA_PROD_GGUF:-kaya-wpp-Q6_K.gguf} -ngl 999 -fa off --jinja
+      -sm layer --host 0.0.0.0 --port 8080 -c ${KAYA_PROD_CTX:-4096}
+      ${KAYA_PROD_EXTRA:-}
     expose:
       - "8080"
+
+  # ──────────────────────────────────────────────────────────────
+  # llama-bench  [profile: bench]
+  # A second llama.cpp server used to score CANDIDATE models. Published on
+  # 127.0.0.1:8081 so host-side harnesses running under kaya_chatbot_env/ can
+  # reach it via KAYA_LLAMA_URL. Driven by scripts/model_bakeoff.py, which sets
+  # KAYA_BENCH_* per arm, waits for /health, scores, then tears the container down.
+  #
+  #   KAYA_BENCH_GGUF=gemma-4-31B-it-Q8_0.gguf KAYA_BENCH_CTX=8192 \
+  #     docker compose --profile bench up -d llama-bench
+  #
+  #   KAYA_INFERENCE_BACKEND=gguf KAYA_LLAMA_URL=http://127.0.0.1:8081 \
+  #     kaya_chatbot_env/bin/python scripts/run_golden.py \
+  #       --model-dir unsloth/gemma-4-31B-it
+  #
+  # Under the gguf backend engine._load_model() uses --model-dir ONLY to load a
+  # tokenizer for chat templating, so a plain HF repo id works — no adapter is
+  # needed to score a stock base model.
+  #
+  # KAYA_BENCH_EXTRA carries per-arm flags, e.g. `-ts 0.45,0.55` to bias the layer
+  # split (GPU0 also holds ~400MB of desktop), or `--n-cpu-moe N` to spill MoE
+  # expert layers into the 64GB of system RAM for models too big for 45GB of VRAM.
+  # NOTE: this shares the GPUs with `llama` — run only one of the two at a time.
+  # ──────────────────────────────────────────────────────────────
+  llama-bench:
+    image: ghcr.io/ggml-org/llama.cpp:full-cuda
+    container_name: kaya-llama-bench
+    profiles: [bench]
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0,1
+    volumes:
+      - ./models/gguf:/models:ro
+    entrypoint: /app/llama-server
+    command: >
+      -m /models/${KAYA_BENCH_GGUF:-kaya-wpp-Q6_K.gguf} -ngl ${KAYA_BENCH_NGL:-999}
+      -fa off --jinja -sm ${KAYA_BENCH_SM:-layer}
+      --host 0.0.0.0 --port 8080 -c ${KAYA_BENCH_CTX:-4096}
+      ${KAYA_BENCH_EXTRA:-}
+    ports:
+      - "127.0.0.1:8081:8080"
 
   # ──────────────────────────────────────────────────────────────
   # cloudflared  [profile: tunnel]
