@@ -250,9 +250,11 @@ services:
     volumes:
       - ./models/gguf:/models:ro
     entrypoint: /app/llama-server
+    # -fa is per-arm: Gemma-4's MTP arch / KV layout requires `off`, but Llama and
+    # the MoE models want it `on` (faster, smaller KV cache).
     command: >
       -m /models/${KAYA_BENCH_GGUF:-kaya-wpp-Q6_K.gguf} -ngl ${KAYA_BENCH_NGL:-999}
-      -fa off --jinja -sm ${KAYA_BENCH_SM:-layer}
+      -fa ${KAYA_BENCH_FA:-off} --jinja -sm ${KAYA_BENCH_SM:-layer}
       --host 0.0.0.0 --port 8080 -c ${KAYA_BENCH_CTX:-4096}
       ${KAYA_BENCH_EXTRA:-}
     ports:

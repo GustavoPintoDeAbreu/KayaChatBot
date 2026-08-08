@@ -13,11 +13,29 @@ reports/benchmarks/.
     # needs GPU free (stop prod first if running)
     kaya_chatbot_env/bin/python scripts/bench_context_recall.py
     kaya_chatbot_env/bin/python scripts/bench_context_recall.py --seq-lengths 2048 4096
+
+Two backends, same needles and same scoring:
+
+- ``hf``   — loads the adapter in-process with Unsloth at each max_seq_length.
+             Gemma-4 only, and capped by what fits in one 24GB card.
+- ``gguf`` — sends the prompt to a llama.cpp server via the production
+             ``LlamaCppBackend``, so the measurement reflects exactly what prod
+             does (same chat template, same leading-BOS strip). This is the only
+             path that can measure a model too large for one GPU, or a stock base
+             with no adapter, so it is what scripts/model_bakeoff.py drives:
+
+    KAYA_INFERENCE_BACKEND=gguf KAYA_LLAMA_URL=http://127.0.0.1:8081 \
+      kaya_chatbot_env/bin/python scripts/bench_context_recall.py \
+        --model-dir unsloth/gemma-4-31B-it --seq-lengths 4096 32768
+
+Under gguf the server's own ``-c`` is the real ceiling; --seq-lengths above it
+will simply fail to recall, which is the honest answer.
 """
 
 import argparse
 import gc
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -26,10 +44,12 @@ from typing import List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import requests
 import torch
 
 from src.config_loader import load_config
 from src.chat.engine import build_system_prompt
+from src.chat.inference_backend import LlamaCppBackend, resolve_backend, resolve_llama_url
 import src.chat.engine as engine_module
 
 _NEEDLE = "NOTA IMPORTANTE: o código secreto do Rafa é 4827."
@@ -62,13 +82,43 @@ def _free_model() -> None:
         torch.cuda.synchronize()
 
 
+def _gpu_vram_used_gb() -> float:
+    """VRAM in use across all cards, via nvidia-smi.
+
+    Under gguf the weights live in a separate llama.cpp process (possibly split
+    over both GPUs), so torch's allocator sees nothing. nvidia-smi is the only
+    view that covers it.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15, check=True,
+        ).stdout
+        return round(sum(int(v) for v in out.split()) / 1024, 2)
+    except Exception:
+        return 0.0
+
+
 def _load_model_at_seq(config, seq_len: int):
-    """Load model+tokenizer at a specific max_seq_length, bypassing the singleton."""
+    """Load model+tokenizer at a specific max_seq_length, bypassing the singleton.
+
+    Under the gguf backend the model lives in the llama.cpp server, so only a
+    tokenizer is needed here (for chat templating and for sizing the filler).
+    ``model`` is then None and generation goes over HTTP.
+    """
     import json as _json
     from pathlib import Path as _Path
 
     _free_model()
     model_dir = config["training"]["output_dir"]
+
+    if resolve_backend(config) == "gguf":
+        from transformers import AutoTokenizer
+
+        _log(f"  backend=gguf — tokenizer only from {model_dir} "
+             f"(generation via {resolve_llama_url(config)})")
+        return None, AutoTokenizer.from_pretrained(model_dir)
+
     adapter_cfg = _json.loads((_Path(model_dir) / "adapter_config.json").read_text())
     base_name = adapter_cfg["base_model_name_or_path"]
     is_gemma4 = "gemma-4" in base_name.lower() or "gemma4" in base_name.lower()
@@ -104,10 +154,13 @@ def _build_prompt_with_needle(
     system_prompt: str,
     target_tokens: int,
     depth: float,
-) -> Tuple[dict, int, int]:
+    to_tensors: bool = True,
+) -> Tuple[object, int, int]:
     """Build a prompt of ~target_tokens with the needle at `depth` fraction.
 
-    Returns (inputs_dict, actual_prompt_tokens, needle_position_tokens).
+    Returns (payload, actual_prompt_tokens, needle_position_tokens), where payload
+    is a CUDA tensor dict for the hf backend or the raw ``messages`` list for gguf
+    (which templates them itself, inside LlamaCppBackend).
     """
     base_question = f"{_QUESTION}\n\n"
     reps = 1
@@ -127,11 +180,30 @@ def _build_prompt_with_needle(
         {"role": "user", "content": user_text},
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
-    actual_tokens = int(inputs["input_ids"].shape[1])
-
+    actual_tokens = int(tokenizer(text=[prompt], return_tensors="pt")["input_ids"].shape[1])
     needle_position = int(actual_tokens * depth)
+
+    if not to_tensors:
+        return messages, actual_tokens, needle_position
+
+    inputs = tokenizer(text=[prompt], return_tensors="pt").to("cuda")
     return inputs, actual_tokens, needle_position
+
+
+def _gguf_generate(backend: LlamaCppBackend, messages: list, max_new_tokens: int = 64):
+    """Greedy generate against the llama.cpp server; (answer, elapsed_s, vram_gb).
+
+    temperature=0 matches the hf path's do_sample=False, so the two backends are
+    scored under the same decoding rules.
+    """
+    t0 = time.perf_counter()
+    answer = backend.generate(
+        messages,
+        max_new_tokens=max_new_tokens,
+        sampling={"temperature": 0.0, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0},
+    )
+    elapsed = time.perf_counter() - t0
+    return answer.strip(), round(elapsed, 3), _gpu_vram_used_gb()
 
 
 def _synchronous_generate(model, tokenizer, inputs: dict, max_new_tokens: int = 64):
@@ -165,16 +237,22 @@ def sweep_seq_length(
     seq_len: int,
     target_fractions: List[float],
     depths: List[float],
+    backend: LlamaCppBackend = None,
 ) -> List[dict]:
+    """Sweep one window. ``backend`` non-None selects the gguf (HTTP) path."""
     rows = []
     for frac in target_fractions:
         target_tokens = int(seq_len * frac)
         for depth in depths:
             try:
-                inputs, actual_tokens, needle_pos = _build_prompt_with_needle(
-                    tokenizer, system_prompt, target_tokens, depth
+                payload, actual_tokens, needle_pos = _build_prompt_with_needle(
+                    tokenizer, system_prompt, target_tokens, depth,
+                    to_tensors=backend is None,
                 )
-                answer, elapsed_s, peak_gb = _synchronous_generate(model, tokenizer, inputs)
+                if backend is not None:
+                    answer, elapsed_s, peak_gb = _gguf_generate(backend, payload)
+                else:
+                    answer, elapsed_s, peak_gb = _synchronous_generate(model, tokenizer, payload)
                 recalled = _ANSWER_TOKEN in answer
                 row = {
                     "seq_len": seq_len,
@@ -193,6 +271,17 @@ def sweep_seq_length(
                     f"tok={actual_tokens:5d} recall={'✓' if recalled else '✗'} "
                     f"{elapsed_s:.1f}s {peak_gb:.1f}GB"
                 )
+            except requests.RequestException as exc:
+                # gguf: prompt over the server's -c, server OOM, or a dropped
+                # connection. Record and continue — one bad cell must not abort a
+                # long sweep.
+                row = {
+                    "seq_len": seq_len, "target_frac": frac,
+                    "target_tokens": target_tokens, "depth": depth,
+                    "oom": True, "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                }
+                _log(f"  seq={seq_len:5d} frac={frac:.2f} depth={depth:.2f}  "
+                     f"SERVER ERROR ({type(exc).__name__})")
             except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
                 if "out of memory" in str(exc).lower() or isinstance(exc, torch.cuda.OutOfMemoryError):
                     torch.cuda.empty_cache()
@@ -266,20 +355,38 @@ def main() -> None:
     system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
 
     all_rows: List[dict] = []
+    is_gguf = resolve_backend(config) == "gguf"
 
-    for seq_len in args.seq_lengths:
-        _log(f"\n=== max_seq_length = {seq_len} ===")
-        try:
-            model, tokenizer = _load_model_at_seq(config, seq_len)
-        except Exception as exc:
-            _log(f"  FAILED to load at seq_len={seq_len}: {exc}")
-            continue
+    if is_gguf:
+        # One server, one tokenizer: the window is fixed by the server's -c, so
+        # there is nothing to reload between seq lengths.
+        model, tokenizer = _load_model_at_seq(config, args.seq_lengths[0])
+        backend = LlamaCppBackend(
+            tokenizer,
+            resolve_llama_url(config),
+            timeout=config.get("inference", {}).get("gguf", {}).get("timeout", 180.0),
+        )
+        for seq_len in args.seq_lengths:
+            _log(f"\n=== target window = {seq_len} ===")
+            all_rows.extend(sweep_seq_length(
+                None, tokenizer, system_prompt, seq_len, args.fracs, args.depths,
+                backend=backend,
+            ))
+    else:
+        for seq_len in args.seq_lengths:
+            _log(f"\n=== max_seq_length = {seq_len} ===")
+            try:
+                model, tokenizer = _load_model_at_seq(config, seq_len)
+            except Exception as exc:
+                _log(f"  FAILED to load at seq_len={seq_len}: {exc}")
+                continue
 
-        rows = sweep_seq_length(model, tokenizer, system_prompt, seq_len, args.fracs, args.depths)
-        all_rows.extend(rows)
+            rows = sweep_seq_length(model, tokenizer, system_prompt, seq_len,
+                                    args.fracs, args.depths)
+            all_rows.extend(rows)
 
-        del model, tokenizer
-        _free_model()
+            del model, tokenizer
+            _free_model()
 
     print_summary(all_rows)
 
@@ -292,6 +399,8 @@ def main() -> None:
             {
                 "timestamp": stamp,
                 "model_dir": config["training"]["output_dir"],
+                "backend": resolve_backend(config),
+                "server_url": resolve_llama_url(config) if is_gguf else None,
                 "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
                 "needle": _NEEDLE,
                 "question": _QUESTION,
