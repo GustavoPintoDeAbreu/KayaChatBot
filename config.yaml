@@ -226,7 +226,11 @@ inference:
   # Generation engine. "hf" = in-process Unsloth/PEFT model (default, unchanged).
   # "gguf" = route generation to a llama.cpp llama-server (~15x faster at Q6_K
   # parity quality). gguf needs the `llama` compose service running the GGUF.
-  backend: hf                        # hf | gguf  (env KAYA_INFERENCE_BACKEND wins)
+  # gguf is the default since 2026-08-08: the live profile (gemma4-12b-stock) has
+  # NO adapter, so the hf path has nothing to load and would fail with a missing
+  # adapter_config.json. hf remains usable, but only with a profile that owns an
+  # adapter directory (e.g. the previous gemma4-e4b-seq4096-wpp).
+  backend: gguf                      # hf | gguf  (env KAYA_INFERENCE_BACKEND wins)
   gguf:
     # llama-server URL; in Docker use the compose service name. The env var
     # KAYA_LLAMA_URL overrides this — that is how scripts/model_bakeoff.py points
@@ -391,10 +395,14 @@ rag:
   knowledge_approach: "json_only"
 
   # Token budget for total injected context (whitespace-based approximation: words / 0.60)
-  # Raised to 2500 based on needle-in-haystack sweep (2026-07-17, context_recall_20260717T235539Z.json):
-  # seq4096 adapter passes 100% recall at all depths up to ~4785 total tokens at load=4096.
-  # Targeting system(~700)+RAG(2500)+history(~300)+msg(~100) ≈ 3600 total (well inside window).
-  max_context_tokens: 2500
+  # 2026-08-08 bake-off: gemma-4-12b served at -c 32768 held 100% needle recall at
+  # EVERY depth out to 27,413 tokens (bakeoff_20260808T013135Z.json, arm 12b-ctx32k),
+  # against the ~2,360-token reliable window of the previous E4B adapter.
+  # 14000 is a deliberate midpoint, not the ceiling: measured median response time
+  # rises 3.5s → 12.1s between a 2k and a 14k prompt, and ~19.8s at 27k. The limit
+  # here is latency in a chat, not recall. Raise further only if replies still feel
+  # fast enough; the model itself is good to ~27k.
+  max_context_tokens: 14000
 
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true
@@ -450,11 +458,52 @@ benchmark:
 # Active model profile — overrides model: and training: sections when set.
 # Set to null to use top-level values as-is (backward compatible).
 # Switch by changing this value or passing --profile <name> on the CLI.
-active_model_profile: "gemma4-e4b-seq4096-wpp"
+# 2026-08-08: promoted from gemma4-e4b-seq4096-wpp after the bake-off.
+# The stock 12B beat the fine-tuned E4B on every dimension (golden 4.307 vs 3.778,
+# knowledge 3.77 vs 2.91, n=3 vs n=2, measured noise ±0.07) — and a control run
+# showed the WhatsApp LoRA contributes nothing on an identical base (−0.045,
+# inside noise), so this profile carries no adapter at all.
+# Rollback: set this back to "gemma4-e4b-seq4096-wpp" and KAYA_PROD_GGUF to
+# kaya-wpp-Q6_K.gguf; both the old adapter and its GGUF are untouched.
+active_model_profile: "gemma4-12b-stock"
 
 # Model profiles — each profile overrides specific model: and training: keys.
 # Deep-merged into the top-level sections by src/config_loader.py.
 model_profiles:
+  # ── LIVE (2026-08-08) ────────────────────────────────────────────────────────
+  # Serving-only profile: there is no adapter. Under the gguf backend the app
+  # loads ONLY a tokenizer from output_dir (engine._load_model), and the weights
+  # come from models/gguf/gemma-4-12b-it-Q6_K.gguf in the `llama` service.
+  # output_dir therefore points at a local tokenizer-only directory rather than an
+  # HF repo id, so prod does not need network access to Hugging Face to start.
+  # The training block is present for schema completeness; this profile is not
+  # trainable on this box (gemma4_unified needs transformers >= 5.14, and the
+  # pinned stack is 5.5.0).
+  gemma4-12b-stock:
+    model:
+      model_id: "unsloth/gemma-4-12b-it"
+      max_seq_length: 32768
+      load_in_4bit: true
+      lora_r: 16
+      lora_alpha: 32
+      lora_dropout: 0.0
+      chat_template: "gemma-4"
+      instruction_part: "<|turn>user\n"
+      response_part: "<|turn>model\n"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+    training:
+      output_dir: "./models/kaya_gemma4_12b_stock"
+      per_device_train_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 0.00005
+
   qwen3-14b:
     model:
       model_id: "unsloth/Qwen3-14B-bnb-4bit"

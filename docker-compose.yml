@@ -30,8 +30,10 @@ services:
 
     # Environment variables for GPU and caching.
     #
-    # Both cards are made visible to the container, but the Python processes are
-    # deliberately restricted to ONE of them.
+    # Everything that is not prod runs on the DEV card (KAYA_GPU_DEV), so dev,
+    # training, CI and other projects never touch the live model's GPU. Addressed
+    # by UUID because nvidia-smi index order is not stable across reboots — the
+    # same reason gpu-power-limit.service uses UUIDs. See .env.example.
     #
     # CUDA_VISIBLE_DEVICES=0 IS LOAD-BEARING — do not "fix" it to 0,1.
     # unsloth/models/_utils.py:1561 only installs its `DistributedType.NO` patch
@@ -43,7 +45,7 @@ services:
     # Only the llama.cpp servers below get both cards, where layer-splitting a
     # model larger than 24GB actually works.
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_DEV:-all}
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
@@ -110,7 +112,7 @@ services:
   # Development container: serves the Gradio web UI with ./src mounted
   # read-write so live code edits are picked up without a rebuild.
   # On-demand only — start via scripts/app_up.sh dev (not at boot).
-  # NOTE: dev and prod share the single GPU — run ONE at a time.
+  # Runs on the DEV card, so it can run at the SAME TIME as prod.
   # Usage: scripts/app_up.sh dev   (or: docker compose --profile dev up -d kaya-dev)
   # ──────────────────────────────────────────────────────────────
   kaya-dev:
@@ -141,6 +143,12 @@ services:
       - KAYA_WEB_PORT=7861
       - KAYA_ENV=dev
       - KAYA_VERSION=${KAYA_VERSION:-unknown}
+      # Dev generates from its OWN llama.cpp server on the dev card
+      # (`llama-bench`, profile: bench), never prod's. Start it with:
+      #   KAYA_BENCH_GGUF=gemma-4-12b-it-Q6_K.gguf KAYA_BENCH_CTX=32768 \
+      #     docker compose --profile bench up -d llama-bench
+      - KAYA_INFERENCE_BACKEND=${KAYA_DEV_INFERENCE_BACKEND:-gguf}
+      - KAYA_LLAMA_URL=${KAYA_DEV_LLAMA_URL:-http://llama-bench:8080}
     command: python src/chat/web_app.py
 
   # ──────────────────────────────────────────────────────────────
@@ -149,7 +157,8 @@ services:
   # (from the ~/kaya-prod checkout) and kept running by restart: unless-stopped,
   # so it auto-recovers after a reboot once Docker starts on boot
   # (`sudo systemctl enable docker`). See DEPLOYMENT.md.
-  # NOTE: dev and prod share the single GPU — only one runs at a time.
+  # Pinned to the PROD card (KAYA_GPU_PROD); the other card stays free for dev,
+  # training and unrelated projects.
   # ──────────────────────────────────────────────────────────────
   kaya-prod:
     extends:
@@ -161,6 +170,10 @@ services:
     ports:
       - "7860:7860"
     environment:
+      # MUST be set explicitly: `extends` merges kaya-base's environment, and the
+      # base points at the DEV card. Without this line prod would land on the
+      # wrong GPU and contend with dev/training.
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-all}
       - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
@@ -193,25 +206,32 @@ services:
     profiles: [gguf]
     restart: unless-stopped
     runtime: nvidia
-    # Both GPUs. There is no `deploy.count` block on purpose — `count: 1` here is
-    # what used to cap serving at 24GB regardless of NVIDIA_VISIBLE_DEVICES.
+    # Pinned to the PROD card only. The live model (gemma-4-12b Q6_K) needs ~13GB
+    # with a 32K cache, so it fits one card and leaves the other entirely free for
+    # dev, training and other projects. There is still no `deploy.count` block —
+    # `count:` overrides NVIDIA_VISIBLE_DEVICES and would undo the pinning.
+    # To serve a model larger than one card again, set KAYA_GPU_PROD= (empty, so
+    # it falls back to `all`) and KAYA_PROD_SM=layer.
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=0,1
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-all}
+      - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ./models/gguf:/models:ro
     entrypoint: /app/llama-server
     # -fa off is required for the Gemma-4 MTP arch / KV layout; --jinja avoids a
     # template crash. The app strips its own leading BOS to prevent a double-BOS.
     #
-    # -sm layer splits the model by LAYER across the two cards: only the hidden
-    # state crosses PCIe at the boundary (a few KB per token). Do NOT use -sm row
-    # on this box — there is no P2P (no NVLink bridge, driver reports CNS), so row
-    # split stages every step through host RAM and is markedly slower.
-    # KAYA_PROD_GGUF/CTX/EXTRA let a >24GB model be swapped in without editing this file.
+    # -sm none keeps the whole model on the single pinned card. If a future model
+    # needs both, use -sm layer (never -sm row: no P2P on this box, so row split
+    # stages every step through host RAM).
+    # -c 32768 gives ~2x headroom over rag.max_context_tokens (14000) so a deep
+    # prompt plus system prompt and history cannot overflow the window.
+    # --parallel 1 so the whole KV budget serves one request rather than being
+    # divided across llama-server's default 4 slots.
     command: >
-      -m /models/${KAYA_PROD_GGUF:-kaya-wpp-Q6_K.gguf} -ngl 999 -fa off --jinja
-      -sm layer --host 0.0.0.0 --port 8080 -c ${KAYA_PROD_CTX:-4096}
+      -m /models/${KAYA_PROD_GGUF:-gemma-4-12b-it-Q6_K.gguf} -ngl 999 -fa off --jinja
+      -sm ${KAYA_PROD_SM:-none} --parallel 1
+      --host 0.0.0.0 --port 8080 -c ${KAYA_PROD_CTX:-32768}
       ${KAYA_PROD_EXTRA:-}
     expose:
       - "8080"
@@ -245,7 +265,10 @@ services:
     profiles: [bench]
     runtime: nvidia
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      # Dev card by default so a bench run cannot disturb the live model. Set
+      # KAYA_GPU_BENCH= (empty -> `all`) when an arm genuinely needs both cards,
+      # and stop prod first.
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_BENCH:-${KAYA_GPU_DEV:-all}}
       - CUDA_VISIBLE_DEVICES=0,1
     volumes:
       - ./models/gguf:/models:ro

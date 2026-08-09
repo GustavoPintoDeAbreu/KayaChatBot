@@ -25,7 +25,7 @@ else
   echo "🛑 Stopping kaya-${ENV_NAME} ..."
   docker compose --profile "$ENV_NAME" stop "kaya-${ENV_NAME}" || true
   docker compose --profile "$ENV_NAME" rm -f "kaya-${ENV_NAME}" || true
-  # Leave the tunnel running only if the other app is still up; otherwise stop it.
+  # dev and prod can now run at once, so only stop the tunnel when NEITHER is up.
   OTHER_ENV=$([[ "$ENV_NAME" == "dev" ]] && echo "prod" || echo "dev")
   if ! docker ps --format '{{.Names}}' | grep -qx "kaya-${OTHER_ENV}"; then
     echo "   No app left running — stopping cloudflared too."

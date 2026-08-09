@@ -42,12 +42,13 @@ fi
 export KAYA_VERSION="$(git rev-parse --short HEAD)"
 echo "🔖 Deploying commit $KAYA_VERSION"
 
-# Free the GPU and release container names/ports from any other env. dev and the
-# on-demand WhatsApp dev container (kaya-whatsapp) may belong to a DIFFERENT
-# compose project, so stop them by name. WAHA is recreated below in the prod
-# project (its linked-device session persists in the ./data/waha volume).
-echo "🛑 Stopping other envs that share the single GPU / names ..."
-docker rm -f kaya-dev kaya-whatsapp kaya-waha 2>/dev/null || true
+# Release container names/ports that would collide with prod. kaya-dev is NOT
+# stopped: it owns the other GPU (KAYA_GPU_DEV) and binds 7861, so it survives a
+# prod deploy untouched. kaya-whatsapp still binds 7860 and may belong to a
+# DIFFERENT compose project, so stop it by name. WAHA is recreated below in the
+# prod project (its linked-device session persists in ./data/waha).
+echo "🛑 Releasing conflicting container names/ports ..."
+docker rm -f kaya-whatsapp kaya-waha 2>/dev/null || true
 
 echo "🔨 Building image ..."
 docker compose build kaya-prod
