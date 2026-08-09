@@ -165,3 +165,9 @@ data/ingest_state.json
 data/whatsapp_shared_chats.json
 data/media_descriptions.json
 models/piper/
+
+# Image bake-off — real photos of real people, and edits of their faces.
+# Nothing here may ever reach a remote: the privacy invariant covers generated
+# images exactly as it covers chat history.
+reports/image_bakeoff/
+data/bench_photos/
