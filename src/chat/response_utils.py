@@ -6,6 +6,7 @@ model stack, and reused by every chat entry point (chat.py, web_app.py).
 
 import random
 import re
+from typing import Optional
 
 # Cues that a question is asking for an elaborate answer rather than a quick reply.
 # Used to raise the generation length budget only when warranted (see
@@ -108,22 +109,36 @@ _EN_WORDS = frozenset((
 ))
 
 
-def detect_language(text: str) -> str:
-    """Best-effort language of an incoming message: ``"en"`` or ``"pt"`` (default).
+def language_signal(text: str) -> Optional[str]:
+    """Language of a text *only where there is evidence*: ``"en"``, ``"pt"`` or None.
 
     Lightweight + dependency-free: any Portuguese diacritic ⇒ "pt"; otherwise a
-    distinctive-stopword count decides, defaulting to Portuguese on a tie/empty.
-    Used to steer the reply language so an English message isn't answered in PT.
+    distinctive-stopword count decides. None means the text carries no marker
+    either way ("Absolutely brutal.") — the caller decides what to assume, which
+    matters for per-sentence voice selection, where guessing Portuguese would read
+    an English sentence with Portuguese phonetics.
     """
     if not text:
-        return "pt"
+        return None
     lowered = text.lower()
     if any(ch in lowered for ch in "ãõçáéíóúâêà"):
         return "pt"
     tokens = re.findall(r"[a-zà-ÿ']+", lowered)
     pt = sum(tok in _PT_WORDS for tok in tokens)
     en = sum(tok in _EN_WORDS for tok in tokens)
-    return "en" if en > pt and en > 0 else "pt"
+    if en > pt:
+        return "en"
+    if pt > en:
+        return "pt"
+    return None
+
+
+def detect_language(text: str) -> str:
+    """Best-effort language of an incoming message: ``"en"`` or ``"pt"`` (default).
+
+    Used to steer the reply language so an English message isn't answered in PT.
+    """
+    return language_signal(text) or "pt"
 
 
 # Meta-narration / 4th-wall leaks the model occasionally emits as a leading sentence

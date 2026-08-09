@@ -299,7 +299,14 @@ chat:
     # Portuguese and would sound wrong to this group. Runs on CPU at ~28x
     # realtime, so speaking never competes with the GPU that is answering.
     reply_enabled: true
-    voice_model: "models/piper/pt/pt_PT/tugão/medium/pt_PT-tugão-medium.onnx"
+    # A Piper voice speaks one language: the pt_PT model reads English with
+    # Portuguese phonetics, which does not sound like English. Replies are split
+    # into sentences and each is spoken by the voice for its own language, so a
+    # mixed PT/EN answer still comes out right. Both are male, medium quality,
+    # so the switch mid-message is as unobtrusive as it can be.
+    voices:
+      pt: "models/piper/pt/pt_PT/tugão/medium/pt_PT-tugão-medium.onnx"
+      en: "models/piper/en/en_GB/alan/medium/en_GB-alan-medium.onnx"
     # Incoming voice notes are transcribed with faster-whisper and then flow
     # through the normal text path, router included.
     transcribe_enabled: true

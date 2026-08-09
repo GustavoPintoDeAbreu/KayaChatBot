@@ -572,3 +572,66 @@ def test_one_off_audio_still_generates_a_real_answer(tmp_path):
 
     assert result["reply"] == "Resposta real."
     assert result.get("command") is None   # not treated as a pure command
+
+
+# ── language-aware voice selection ───────────────────────────────────────────
+# A Piper voice speaks one language. Reading an English reply with the pt_PT
+# model produces Portuguese phonetics applied to English words — intelligible to
+# nobody. These pin the sentence-level split that fixes it.
+def test_english_reply_is_spoken_by_the_english_voice():
+    from src.chat.tts import split_by_language
+
+    assert split_by_language("The dinner is at eight, mate.") == [
+        ("en", "The dinner is at eight, mate.")]
+
+
+def test_portuguese_reply_stays_on_the_portuguese_voice():
+    from src.chat.tts import split_by_language
+
+    runs = split_by_language("O Peter chegou atrasado outra vez.")
+    assert [lang for lang, _ in runs] == ["pt"]
+
+
+def test_mixed_reply_switches_voice_per_sentence():
+    """This group code-switches mid-reply; one voice for the lot sounds wrong."""
+    from src.chat.tts import split_by_language
+
+    runs = split_by_language(
+        "Bora lá pessoal, o jantar é às oito. Honestly mate, that is a terrible idea. "
+        "Mas se quiseres, eu vou na mesma.")
+    assert [lang for lang, _ in runs] == ["pt", "en", "pt"]
+    assert "Honestly" in runs[1][1]
+
+
+def test_consecutive_same_language_sentences_are_one_run():
+    """Fewer runs = fewer voice loads and no seam inside a single language."""
+    from src.chat.tts import split_by_language
+
+    runs = split_by_language("Quem é o Peter? É o mais alto do grupo.")
+    assert len(runs) == 1
+
+
+def test_unmarked_sentence_inherits_the_surrounding_language():
+    """"Absolutely brutal." carries no marker; defaulting it to PT mid-English
+    reply is the exact mispronunciation this feature removes."""
+    from src.chat.tts import split_by_language
+
+    runs = split_by_language("The dinner is at eight. Absolutely brutal. Everyone is coming.")
+    assert [lang for lang, _ in runs] == ["en"]
+
+
+def test_reassembled_runs_lose_no_text():
+    from src.chat.tts import split_by_language
+
+    text = "Olá! Ready? Vamos embora, pá."
+    assert "".join(chunk for _, chunk in split_by_language(text)).strip() == text.strip()
+
+
+def test_voice_paths_fall_back_to_the_portuguese_voice(tmp_path):
+    """A missing English model must degrade to PT audio, never to no reply."""
+    from src.chat import tts
+
+    config = {"chat": {"audio": {"reply_enabled": True,
+                                 "voices": {"en": str(tmp_path / "missing.onnx")}}}}
+    assert tts.is_available(config) is True
+    assert tts._voice_paths(config)["pt"] == tts.DEFAULT_VOICES["pt"]
