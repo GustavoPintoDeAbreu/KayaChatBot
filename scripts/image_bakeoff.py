@@ -62,6 +62,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# The 8-bit Qwen transformer leaves under 2GB of headroom on a 24GB card, and a
+# few hundred MB of that was going to allocator fragmentation. Set before torch
+# is imported anywhere (every import in this file is deferred into a function).
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 BASE_DIR = Path(__file__).parent.parent
 
 # The edits the group would actually ask for: strong, funny transformations that
@@ -163,12 +168,44 @@ def fit_source(path: str, longest: int = 1024):
     return image.crop((0, 0, width, height))
 
 
+# Quantizing a diffusion transformer's input/output projections is what turns a
+# 4-bit edit into a crystalline mosaic: they carry the latent in and out of the
+# residual stream, so their error lands directly in pixel space rather than being
+# averaged over many layers. Keeping them in bf16 costs a few hundred MB.
+_KEEP_BF16 = ["img_in", "txt_in", "proj_out", "norm_out", "time_text_embed"]
+
+
+def _bnb_diffusers_config(bits: int):
+    """bitsandbytes config for a diffusers component (transformer, VAE)."""
+    import torch
+    from diffusers import BitsAndBytesConfig
+
+    if bits == 8:
+        return BitsAndBytesConfig(load_in_8bit=True,
+                                  llm_int8_skip_modules=_KEEP_BF16)
+    return BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                              bnb_4bit_compute_dtype=torch.bfloat16,
+                              llm_int8_skip_modules=_KEEP_BF16)
+
+
+def _bnb_transformers_config(bits: int):
+    """The same, for a transformers component — the two libraries each ship
+    their own BitsAndBytesConfig and a pipeline mixes components from both."""
+    import torch
+    from transformers import BitsAndBytesConfig
+
+    if bits == 8:
+        return BitsAndBytesConfig(load_in_8bit=True)
+    return BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                              bnb_4bit_compute_dtype=torch.bfloat16)
+
+
 # ── candidate arms ───────────────────────────────────────────────────────────
 # Each loader returns (generate_fn, label). generate_fn(source_image, edit, seed)
 # returns a PIL image. Loading is deferred into the function so an arm that is
 # not being run costs nothing and a missing download fails only that arm.
 
-def build_sdxl_ipadapter():
+def build_sdxl_ipadapter(photos, edits, seed):
     """SDXL img2img with the plus-face IP-Adapter.
 
     The mature baseline. It cannot follow an instruction, so it gets the
@@ -198,7 +235,7 @@ def build_sdxl_ipadapter():
     pipe.to("cuda")
     pipe.set_progress_bar_config(disable=True)
 
-    def generate(source, edit, seed):
+    def generate(source, edit, seed, photo_id=None):
         generator = torch.Generator("cuda").manual_seed(seed)
         return pipe(
             prompt=edit["scene"] + ", photorealistic, sharp focus",
@@ -211,7 +248,7 @@ def build_sdxl_ipadapter():
     return generate, pipe
 
 
-def build_z_image_turbo():
+def build_z_image_turbo(photos, edits, seed):
     """Z-Image Turbo as img2img.
 
     Turbo is a text-to-image model — the instruction-editing sibling (Z-Image
@@ -228,7 +265,7 @@ def build_z_image_turbo():
     pipe.enable_model_cpu_offload()
     pipe.set_progress_bar_config(disable=True)
 
-    def generate(source, edit, seed):
+    def generate(source, edit, seed, photo_id=None):
         generator = torch.Generator("cpu").manual_seed(seed)
         return pipe(
             prompt=edit["scene"] + ", photorealistic, keep the same face",
@@ -241,36 +278,107 @@ def build_z_image_turbo():
     return generate, pipe
 
 
-def build_qwen_image_edit():
-    """Qwen-Image-Edit-2509 — a true instruction editor, 20B, loaded 4-bit.
+def _qwen_embed_all(repo: str, photos, edits, out_path: Path) -> None:
+    """Pass A: embed every (photo, instruction) pair and write them to disk.
 
-    bf16 would be ~57GB of weights against 24GB of card and 39GB of free RAM, so
-    CPU offload is not an escape either. 4-bit NF4 puts it at roughly 15GB and
-    keeps the whole thing resident, which is also what makes it usable in
-    production later if it wins.
+    Runs as its own process (see `_qwen_embeddings`). Dropping the pipeline in
+    process was not enough — 20.7GB stayed allocated with no nn.Module left
+    alive, so the parameter tensors are held by something the collector cannot
+    see. Process exit is the one deallocation that is guaranteed.
     """
     import torch
     from diffusers import QwenImageEditPlusPipeline
-    from diffusers.quantizers import PipelineQuantizationConfig
+    from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
+        CONDITION_IMAGE_SIZE, calculate_dimensions)
 
-    quant = PipelineQuantizationConfig(
-        quant_backend="bitsandbytes_4bit",
-        quant_kwargs={"load_in_4bit": True,
-                      "bnb_4bit_quant_type": "nf4",
-                      "bnb_4bit_compute_dtype": torch.bfloat16},
-        components_to_quantize=["transformer", "text_encoder"],
-    )
+    encoder = QwenImageEditPlusPipeline.from_pretrained(
+        repo, transformer=None, vae=None, torch_dtype=torch.bfloat16)
+    encoder.to("cuda")
+
+    cache: Dict[Any, Any] = {}
+    for photo in photos:
+        source = fit_source(photo["path"])
+        width, height = calculate_dimensions(CONDITION_IMAGE_SIZE,
+                                             source.width / source.height)
+        condition = [encoder.image_processor.resize(source, height, width)]
+        for edit in list(edits) + [{"id": "__negative__", "instruction": NEGATIVE}]:
+            embeds, mask = encoder.encode_prompt(
+                image=condition, prompt=edit["instruction"],
+                device=torch.device("cuda"))
+            if mask is None:
+                # encode_prompt drops an all-ones mask, but __call__ reads a None
+                # negative mask as "no negative prompt" and silently turns true
+                # CFG off — so it is rebuilt rather than passed through.
+                mask = torch.ones(embeds.shape[:2], dtype=torch.long)
+            cache[(photo["id"], edit["id"])] = (embeds.cpu(), mask.cpu())
+        print(f"  embedded {photo['id']}")
+
+    torch.save({"|".join(key): value for key, value in cache.items()}, out_path)
+    print(f"  wrote {len(cache)} embeddings to {out_path}")
+
+
+def _qwen_embeddings(repo: str, photos, edits) -> Dict[str, Any]:
+    """Run pass A in a subprocess and load what it wrote."""
+    import subprocess
+
+    import torch
+
+    out_path = BASE_DIR / "reports" / "image_bakeoff" / ".qwen_embeds.pt"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"repo": repo, "photos": photos, "edits": list(edits),
+                          "out": str(out_path)})
+    print("  embedding prompts in a separate process …")
+    subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                    "--stage", "embed", "--payload", payload],
+                   check=True, cwd=str(BASE_DIR))
+    return torch.load(out_path, weights_only=False)
+
+
+def build_qwen_image_edit(photos, edits, seed):
+    """Qwen-Image-Edit-2509 — a true instruction editor, 20B, in two passes.
+
+    bf16 is ~57GB of weights against 24GB of card and ~39GB of free RAM, so it has
+    to be quantized to run here at all. At NF4 it composes the edit correctly and
+    then renders it as a crystalline mosaic that destroys the face — measured, not
+    assumed: the VAE round-trips a photo cleanly in bf16, and the artefact
+    survives both a bf16 text encoder and no CPU offload, so it is the 4-bit
+    transformer. 8-bit does not corrupt, but at 19.4GB it leaves no room for the
+    7B text encoder beside it, and this card is Ampere — there is no FP8.
+
+    Hence two passes. The encoder runs alone first and every prompt is embedded up
+    front; then it is freed and the transformer loads 8-bit into the whole card,
+    generating from the cached embeddings. Nothing but latents and text embeddings
+    ever needs both halves resident at once.
+    """
+    import torch
+    from diffusers import QwenImageEditPlusPipeline, QwenImageTransformer2DModel
+    from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
+        CONDITION_IMAGE_SIZE, calculate_dimensions)
+
+    repo = "Qwen/Qwen-Image-Edit-2509"
+    cache = _qwen_embeddings(repo, photos, edits)
+
+    transformer = QwenImageTransformer2DModel.from_pretrained(
+        repo, subfolder="transformer", torch_dtype=torch.bfloat16,
+        quantization_config=_bnb_diffusers_config(8))
     pipe = QwenImageEditPlusPipeline.from_pretrained(
-        "Qwen/Qwen-Image-Edit-2509", torch_dtype=torch.bfloat16,
-        quantization_config=quant)
-    pipe.enable_model_cpu_offload()
+        repo, transformer=transformer, text_encoder=None, torch_dtype=torch.bfloat16)
+    pipe.to("cuda")
+    # Tiling the VAE and slicing attention buy back the ~1GB the 8-bit
+    # transformer does not leave for activations. Both are exact, not lossy.
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
-    def generate(source, edit, seed):
+    def generate(source, edit, seed, photo_id=None):
+        embeds, mask = cache[f"{photo_id}|{edit['id']}"]
+        negative, negative_mask = cache[f"{photo_id}|__negative__"]
         generator = torch.Generator("cpu").manual_seed(seed)
         return pipe(
-            image=[source], prompt=edit["instruction"],
-            negative_prompt=NEGATIVE,
+            image=[source],
+            prompt_embeds=embeds.to("cuda"), prompt_embeds_mask=mask.to("cuda"),
+            negative_prompt_embeds=negative.to("cuda"),
+            negative_prompt_embeds_mask=negative_mask.to("cuda"),
             true_cfg_scale=4.0, num_inference_steps=40,
             generator=generator,
         ).images[0]
@@ -278,7 +386,7 @@ def build_qwen_image_edit():
     return generate, pipe
 
 
-def build_flux_kontext():
+def build_flux_kontext(photos, edits, seed):
     """FLUX.1 Kontext dev — built for instruction editing, gated on HF.
 
     4-bit for the same reason as Qwen: 12B bf16 is 24GB of transformer before the
@@ -301,7 +409,7 @@ def build_flux_kontext():
     pipe.enable_model_cpu_offload()
     pipe.set_progress_bar_config(disable=True)
 
-    def generate(source, edit, seed):
+    def generate(source, edit, seed, photo_id=None):
         generator = torch.Generator("cpu").manual_seed(seed)
         return pipe(
             image=source, prompt=edit["instruction"],
@@ -337,7 +445,7 @@ def stage_generate(run_dir: Path, arms: List[str], photos: List[Dict[str, Any]],
         print(f"\n=== {arm}")
         free_gpu()
         try:
-            generate, pipe = ARMS[arm]()
+            generate, pipe = ARMS[arm](photos, edits, seed)
         except Exception as exc:  # noqa: BLE001 — one broken arm must not end the run
             print(f"!! {arm} failed to load: {type(exc).__name__}: {exc}")
             results["cells"].append({"arm": arm, "photo": None, "edit": None,
@@ -356,7 +464,7 @@ def stage_generate(run_dir: Path, arms: List[str], photos: List[Dict[str, Any]],
                     continue
                 started = time.time()
                 try:
-                    image = generate(source, edit, seed)
+                    image = generate(source, edit, seed, photo_id=photo['id'])
                 except Exception as exc:  # noqa: BLE001
                     print(f"  !! {photo['id']}/{edit['id']}: {type(exc).__name__}: {exc}")
                     results["cells"].append({"arm": arm, "photo": photo["id"],
@@ -581,7 +689,8 @@ the usual "same person" threshold). Adherence and realism are 1-5, judged locall
 def main() -> None:
     parser = argparse.ArgumentParser(description="Image-editing model bake-off.")
     parser.add_argument("--stage", default="generate",
-                        choices=["generate", "score", "report"])
+                        choices=["generate", "score", "report", "embed"])
+    parser.add_argument("--payload", default=None, help="internal: embed-stage arguments")
     parser.add_argument("--arms", default="sdxl-ipadapter,z-image-turbo,qwen-image-edit")
     parser.add_argument("--photos", default="data/bench_photos")
     parser.add_argument("--run", default=None, help="existing run dir (resume / score / report)")
@@ -595,6 +704,11 @@ def main() -> None:
     photo_dir = BASE_DIR / args.photos if not Path(args.photos).is_absolute() else Path(args.photos)
     run_dir = Path(args.run) if args.run else BASE_DIR / "reports" / "image_bakeoff" / timestamp()
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.stage == "embed":
+        spec = json.loads(args.payload)
+        _qwen_embed_all(spec["repo"], spec["photos"], spec["edits"], Path(spec["out"]))
+        return
 
     if args.stage == "generate":
         photos = load_photos(photo_dir)

@@ -55,7 +55,9 @@ fetch Qwen/Qwen-Image-Edit-2509 --exclude "*.onnx*" --exclude "*.msgpack"
 
 # FLUX.1 Kontext — the favourite on paper, but gated. Skip the 23.8GB
 # single-file checkpoint; diffusers loads the sharded transformer/ directory.
-if "$HF" auth whoami >/dev/null 2>&1; then
+# `hf auth whoami` exits 0 while printing "Not logged in", so the exit code says
+# nothing — the output is what has to be checked.
+if ! "$HF" auth whoami 2>&1 | grep -qi "not logged in"; then
     fetch black-forest-labs/FLUX.1-Kontext-dev --exclude "flux1-kontext-dev.safetensors"
 else
     echo "=== black-forest-labs/FLUX.1-Kontext-dev SKIPPED — no HF token."
