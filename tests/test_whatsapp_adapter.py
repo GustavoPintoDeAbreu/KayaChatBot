@@ -321,3 +321,111 @@ def test_clear_command_not_generated_as_reply(tmp_path):
     # the stub responder would echo "reply[..." — confirm we short-circuited it
     assert result["command"] == "clear"
     assert not result["reply"].startswith("reply[")
+
+
+# ── routed commands + sticky output preference (2026-08-09) ──────────────────
+class RoutedReply:
+    """Mimics ``engine.Reply``: reply text plus how the message was routed."""
+
+    def __init__(self, text="", command=None, mode="banter"):
+        self.text = text
+        self.route = type("Route", (), {"mode": mode, "command": command})()
+
+
+def make_routed_adapter(tmp_path, reply, **overrides):
+    """Adapter whose responder returns a Reply (production shape) not a string."""
+    from src.chat.memory import ChatPreferences
+
+    config = {
+        "whatsapp": {
+            "bot_jid": BOT_JID,
+            "contacts": {"351911111111@c.us": "Alice"},
+            "send_seen": False,
+            **overrides,
+        }
+    }
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines: reply,
+        waha_client=MockWahaClient(echo=False),
+        config=config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+    )
+    return adapter
+
+
+def test_audio_command_sets_sticky_preference(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    assert adapter.output_mode(ALICE) == "text"
+
+    result = adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
+
+    assert result["command"] == "audio"
+    assert adapter.output_mode(ALICE) == "audio"
+
+
+def test_output_preference_is_per_chat_and_survives_restart(tmp_path):
+    from src.chat.memory import ChatPreferences
+
+    adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
+
+    # a different chat keeps the default
+    assert adapter.output_mode(GROUP) == "text"
+    # and the setting is on disk, so a restart keeps it
+    reloaded = ChatPreferences(base_dir=str(tmp_path / "prefs"))
+    assert reloaded.output_mode(ALICE) == "audio"
+
+
+def test_text_command_switches_back(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
+
+    adapter.responder = lambda message, speaker, recent: RoutedReply(command="text")
+    adapter.handle_event(dm_event("volta a texto"), system_prompt="")
+
+    assert adapter.output_mode(ALICE) == "text"
+
+
+def test_command_confirmation_is_not_model_generated(tmp_path):
+    """Confirmations come from code, so they cannot drift or be refused."""
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="", command="audio"))
+    result = adapter.handle_event(dm_event("só áudio"), system_prompt="")
+    assert result["reply"] == adapter.command_replies["audio"]
+
+
+def test_string_responder_still_supported(tmp_path):
+    """Back-compat: the simulator and older tests hand back a bare string."""
+    adapter, _ = make_adapter(tmp_path)
+    result = adapter.handle_event(dm_event("olá"), system_prompt="")
+    assert result["reply"].startswith("reply[")
+    assert result.get("command") is None
+
+
+def test_pushname_matching_an_alias_resolves_to_canonical_member(tmp_path):
+    """group_members.json has no phone numbers, so the map is learned from traffic."""
+    import json
+
+    contacts_file = tmp_path / "contacts.json"
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="ok", mode="factual"),
+        member_aliases={"piteru": "Peter", "peter": "Peter"},
+        contacts_file=str(contacts_file),
+        contacts={},
+    )
+    msg = parse_waha_message(dm_event("olá", sender="351999000111@c.us", name="Piteru"))
+
+    # the alias resolves to the CANONICAL name, so RAG person-filtering matches
+    assert adapter.resolve_speaker(msg) == "Peter"
+    # and the mapping was persisted for next time
+    assert "Peter" in json.loads(contacts_file.read_text()).values()
+
+
+def test_unknown_pushname_falls_back_to_pushname(tmp_path):
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="ok"),
+        member_aliases={"peter": "Peter"}, contacts={},
+    )
+    msg = parse_waha_message(dm_event("olá", sender="351999000222@c.us", name="Estranho"))
+    assert adapter.resolve_speaker(msg) == "Estranho"

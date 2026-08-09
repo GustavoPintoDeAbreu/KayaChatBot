@@ -251,6 +251,43 @@ inference:
 
 # Chat Settings
 chat:
+  # ── Intent routing ──────────────────────────────────────────────────────────
+  # Every inbound message is classified before it is answered, because treating
+  # everything as a factual question is what produced the logged failures:
+  # "Ahahhha" -> 77-word analysis of group dynamics, "hey" -> a roast aimed at the
+  # wrong person. See src/chat/router.py.
+  #
+  # Any router failure falls back to `factual`, i.e. exactly the old behaviour.
+  router:
+    enabled: true
+    max_new_tokens: 8       # it answers with a single label
+    temperature: 0.0        # deterministic classification
+    fallback_mode: factual
+
+  # Per-mode overrides. Each mode picks retrieval depth, reply length and prompt
+  # together — a short token cap alone does NOT make replies feel chatty, the
+  # model just writes a dense paragraph under the cap, so the prompt matters too.
+  modes:
+    banter:
+      # Social noise: laughter, emoji, greetings, insults. No retrieval at all —
+      # this is the fix for member profiles leaking into a reply to "😂".
+      retrieval: false
+      max_new_tokens: 48
+      brevity_hint: "Responde em UMA frase curta, no máximo 15 palavras. É conversa, não é uma pergunta — não expliques nada nem menciones factos sobre os membros a menos que te perguntem."
+      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás a conversar de forma casual, não a responder a uma pergunta. Responde curto, natural e com personalidade, como uma pessoa num grupo de WhatsApp — uma frase, às vezes só umas palavras. Não debites factos sobre os membros, não faças análises do grupo, não elabores. Se alguém se rir ou mandar emojis, responde ao momento. Se te corrigirem, aceita a correção de forma simples e directa. Não és membro do grupo. Escreve em português europeu, ou em inglês se te falarem em inglês."
+    mixed:
+      # Chat that references people/events without really asking to be informed.
+      retrieval: true
+      top_k: 3
+      max_new_tokens: 128
+      brevity_hint: "Responde de forma conversacional e curta (1-2 frases). Usa factos só se forem mesmo precisos para a resposta."
+      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás numa conversa casual que toca em pessoas ou episódios do grupo. Responde de forma natural e curta, como alguém que conhece o contexto — podes referir o que sabes, mas não faças um resumo nem uma análise. Não inventes detalhes que não estejam no contexto. Não és membro do grupo. Escreve em português europeu, ou em inglês se te falarem em inglês."
+    factual:
+      # Genuine information requests — unchanged from the pre-routing behaviour.
+      retrieval: true
+      max_new_tokens: 256
+      system_prompt: null   # null = use data.system_prompt (the detailed one)
+
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.
   # Toggle to false to revert to default (filtered) behavior instantly.

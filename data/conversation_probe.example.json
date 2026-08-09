@@ -1,0 +1,130 @@
+{
+  "_meta": {
+    "purpose": "Score CONVERSATIONAL quality, which the golden suite cannot. The golden judge grades every answer on factual grounding and detail, so a correct short reply to 'Hey! How are you?' scores 1.33/5 — penalising exactly the behaviour we want. These cases are scored on brevity, staying on the point, and not volunteering group facts nobody asked for.",
+    "created": "2026-08-09",
+    "expected_mode": "the intent the router should pick; a mismatch is itself a failure",
+    "note": "Example copy with member names replaced. The real probe lives at data/conversation_probe.json (gitignored, like golden_test_conversations.json)."
+  },
+  "cases": [
+    {
+      "id": "laugh_pt",
+      "message": "Ahahhha",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "laugh_emoji",
+      "message": "😂😂😂😂😂😂",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "greet_pt",
+      "message": "boa noite",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "greet_en",
+      "message": "hey",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "greet_howareyou",
+      "message": "Hey! How are you?",
+      "expected_mode": "banter",
+      "max_words": 25
+    },
+    {
+      "id": "greet_pt_full",
+      "message": "Olá! Estás bem?",
+      "expected_mode": "banter",
+      "max_words": 25
+    },
+    {
+      "id": "lol",
+      "message": "lol",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "agree",
+      "message": "pois é",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "insult_bot",
+      "message": "és burro",
+      "expected_mode": "banter",
+      "max_words": 25
+    },
+    {
+      "id": "correction",
+      "message": "Wrong Pedro mate",
+      "expected_mode": "banter",
+      "max_words": 25
+    },
+    {
+      "id": "correction_pt",
+      "message": "não, estás enganado",
+      "expected_mode": "banter",
+      "max_words": 25
+    },
+    {
+      "id": "thanks",
+      "message": "obrigado!",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "bye",
+      "message": "vou nessa, até logo",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "single_word",
+      "message": "boas",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "reaction",
+      "message": "que cena",
+      "expected_mode": "banter",
+      "max_words": 20
+    },
+    {
+      "id": "mixed_ref",
+      "message": "o Alice outra vez a fazer das suas",
+      "expected_mode": "mixed",
+      "max_words": 45
+    },
+    {
+      "id": "mixed_memory",
+      "message": "ainda me lembro daquele jantar",
+      "expected_mode": "mixed",
+      "max_words": 45
+    },
+    {
+      "id": "factual_who",
+      "message": "Quem é o Bob?",
+      "expected_mode": "factual",
+      "max_words": 140
+    },
+    {
+      "id": "factual_work",
+      "message": "what does Carol do for work?",
+      "expected_mode": "factual",
+      "max_words": 140
+    },
+    {
+      "id": "factual_when",
+      "message": "quando é que foi o último jantar?",
+      "expected_mode": "factual",
+      "max_words": 140
+    }
+  ]
+}

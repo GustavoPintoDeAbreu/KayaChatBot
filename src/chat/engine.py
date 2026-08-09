@@ -16,10 +16,12 @@ preamble) without duplicating the member-profile / date assembly.
 
 import json
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.chat import router
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -28,6 +30,36 @@ from src.chat.response_utils import (
     truncate_history_line,
     wants_long_answer,
 )
+
+
+@dataclass
+class Reply:
+    """One answered turn: the text plus how the message was classified.
+
+    The WhatsApp bridge needs ``route`` to act on commands (switch to voice
+    replies, clear context) that are executed in code rather than generated —
+    those come back with an empty ``text``.
+    """
+
+    text: str
+    route: Optional["router.Route"] = None
+
+
+def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
+    """System prompt for a non-factual mode.
+
+    Deliberately does NOT append the group-member profiles that
+    ``build_system_prompt`` adds. Those profiles are exactly what made the model
+    answer "😂" with an analysis of a randomly chosen member — given a pile of
+    profiles and told to elaborate, it finds someone to talk about. The date line
+    is kept so the model can still reason about "hoje"/"ontem".
+    """
+    prompt = mode_prompt
+    if config.get("chat", {}).get("uncensored_mode", False):
+        preamble = config.get("chat", {}).get("uncensored_system_prompt", "")
+        if preamble:
+            prompt = preamble + "\n\n" + prompt
+    return prompt + f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
 
 
 def build_system_prompt(
@@ -151,20 +183,28 @@ class KayaEngine:
         self.backend = backend
 
     def build_user_turn(
-        self, message: str, recent_lines: Optional[List[str]] = None, speaker_label: str = "User"
+        self,
+        message: str,
+        recent_lines: Optional[List[str]] = None,
+        speaker_label: str = "User",
+        retrieval: bool = True,
+        top_k: Optional[int] = None,
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
         ``recent_lines`` is a list of already-formatted ``"<who>: <text>"`` lines.
-        The RAG context is retrieved fresh for every turn (RAG is always-on). Web
-        search is handled separately in ``generate_reply`` (it answers directly via
-        Grok and bypasses the local model), so it is not injected here.
+
+        RAG is retrieved fresh per turn for factual and mixed intent, but is
+        deliberately SKIPPED for banter (``retrieval=False``) — injecting member
+        profiles into a reply to "😂" is what made the bot answer laughter with an
+        essay about someone chosen at random. ``top_k`` narrows retrieval for the
+        lighter `mixed` mode. Web search is handled separately in ``respond``.
         """
         context = ""
-        if self.rag_enabled and self.retriever:
+        if retrieval and self.rag_enabled and self.retriever:
             try:
                 context = self.retriever.retrieve_all(
-                    message, knowledge_approach=self.knowledge_approach
+                    message, knowledge_approach=self.knowledge_approach, top_k=top_k
                 )
             except Exception as exc:  # noqa: BLE001 — never let RAG failure drop a reply
                 print(f"⚠️  RAG retrieval failed: {exc}")
@@ -190,9 +230,30 @@ class KayaEngine:
     ) -> str:
         """Non-streaming generation for one message. Serialized on the GPU lock.
 
-        Used by the WhatsApp bridge (the web UI streams instead). ``speaker`` is
-        the display name of who is talking, used both as the prompt label and to
-        trim any hallucinated continuation in ``clean_response``.
+        Thin wrapper over ``respond`` that returns just the text, kept because
+        several callers (benchmarks, the agent simulator, the probes) expect a
+        plain string.
+        """
+        return self.respond(
+            message, speaker, recent_lines, system_prompt, max_new_tokens
+        ).text
+
+    def respond(
+        self,
+        message: str,
+        speaker: str,
+        recent_lines: Optional[List[str]],
+        system_prompt: str,
+        max_new_tokens: Optional[int] = None,
+    ) -> "Reply":
+        """Route, then answer. Returns the text plus the routing decision.
+
+        The WhatsApp bridge uses the ``route`` to act on commands (switch to voice
+        replies, clear context) that are handled in code rather than generated.
+
+        Routing and generation run inside ONE ``gpu_section``. Taking the lock
+        twice would double the contention, and ``whatsapp_server._process`` drops
+        a message when the lock is contended rather than queueing it.
         """
         # Dynamic length: short & chatty by default, raised to the elaboration
         # ceiling only when the question actually asks for detail. An explicit
@@ -206,25 +267,54 @@ class KayaEngine:
             web_result = maybe_web_search(message, self.retriever, self.config)
             if web_result.used and web_result.answer:
                 citation = web_result.citation_line()
-                return f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
+                answer = f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
+                # Web search bypasses the local model entirely, so nothing was
+                # routed — but the caller still expects a Reply.
+                return Reply(text=answer, route=None)
 
         wants_long = wants_long_answer(message)
-        if max_new_tokens is None:
-            if wants_long:
-                max_new_tokens = self._inf.get("max_new_tokens", 512)
-            else:
-                max_new_tokens = self._inf.get(
-                    "max_new_tokens_default", min(256, self._inf.get("max_new_tokens", 512))
-                )
+        explicit_cap = max_new_tokens is not None
 
         with gpu_section(self.config):
+            # 1. What kind of message is this? Inside the lock, so the whole turn
+            #    costs one acquisition. Never raises; falls back to `factual`.
+            route = router.classify(self.backend, self.config, message, recent_lines)
+            mcfg = router.mode_config(self.config, route.mode)
+
+            # A pure command ("responde só em áudio") is executed by the caller,
+            # not generated — return immediately without spending a generation.
+            if route.command:
+                return Reply(text="", route=route)
+
+            # 2. Mode picks the length budget, unless the caller forced one.
+            if not explicit_cap:
+                if wants_long and route.mode == router.FACTUAL:
+                    max_new_tokens = self._inf.get("max_new_tokens", 512)
+                elif "max_new_tokens" in mcfg:
+                    max_new_tokens = int(mcfg["max_new_tokens"])
+                else:
+                    max_new_tokens = self._inf.get(
+                        "max_new_tokens_default", min(256, self._inf.get("max_new_tokens", 512))
+                    )
+
+            # 3. Mode picks the prompt. `banter` deliberately drops the member
+            #    profiles that made the model riff about a random person.
+            mode_prompt = mcfg.get("system_prompt")
+            if mode_prompt:
+                system_prompt = build_mode_system_prompt(self.config, mode_prompt)
+
+            # 4. Mode picks retrieval: off for banter, reduced for mixed.
             user_turn, _context = self.build_user_turn(
-                message, recent_lines, speaker_label=speaker
+                message,
+                recent_lines,
+                speaker_label=speaker,
+                retrieval=mcfg.get("retrieval", True),
+                top_k=mcfg.get("top_k"),
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
-            brevity_hint = self._inf.get("brevity_hint", "")
-            if brevity_hint and not wants_long:
+            brevity_hint = mcfg.get("brevity_hint") or self._inf.get("brevity_hint", "")
+            if brevity_hint and not (wants_long and route.mode == router.FACTUAL):
                 user_turn += f"\n\n({brevity_hint})"
             # Steer the reply language so an English message isn't answered in Portuguese
             # (and reinforce European-PT otherwise, against Brazilian-PT drift).
@@ -240,7 +330,10 @@ class KayaEngine:
                 messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
 
-        return clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
+        return Reply(
+            text=clean_response(raw, user_name=speaker, bot_name="Kaya Bot"),
+            route=route,
+        )
 
 
 _engine_instance: Optional[KayaEngine] = None

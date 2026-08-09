@@ -6,8 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
 
-**Core invariant**: RAG is always-on. Every message retrieves context first — the
-model must never answer from weights alone.
+**Core invariant (revised 2026-08-09)**: RAG is always-on **for factual intent**.
+It used to be unconditional, and that was the bug: every message retrieved group
+context, so `Ahahhha` got a 77-word analysis of group dynamics and `hey` got a
+roast aimed at a randomly chosen member. Handed a pile of member profiles and told
+to elaborate, the model finds someone to talk about.
+
+`src/chat/router.py` now classifies each message first, and the mode selects
+retrieval, prompt and reply length together. `banter` retrieves **nothing** — that
+is deliberate, not a missing call. Factual answers are unchanged (verified: golden
+excluding greetings moved −0.053, inside the ±0.07 noise band). Any router failure
+falls back to `factual`, i.e. the old behaviour.
 
 **Live model (since 2026-08-08): a STOCK `gemma-4-12b-it` at Q6_K, with no LoRA.**
 A 14-config bake-off found the stock 12B beat the fine-tuned E4B on every judged
@@ -65,6 +74,7 @@ kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 
 # Model bake-off (candidate models across GPU configurations)
 scripts/fetch_bakeoff_models.sh                          # download candidate GGUFs (~262GB)
+kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json

@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -133,3 +133,62 @@ class KeyedSessionMemory:
         history = store.load() or []
         history.append(line)
         store.save(history[-self.max_lines:])
+
+
+class ChatPreferences:
+    """Sticky per-chat settings, currently just the reply modality.
+
+    "Responde-me só em áudio" is a standing instruction, not a per-message one —
+    it holds until the user says otherwise, regardless of whether they later send
+    text or a voice note. That makes it state, so it lives on disk next to the
+    per-chat history and survives a restart.
+
+    Same isolation guarantee as ``KeyedSessionMemory``: one file per chat, so a
+    group's preference never affects a DM. Uses its own atomic write rather than
+    ``SessionMemory`` because that class stores (and slices) a list, not a dict.
+    """
+
+    OUTPUT_TEXT = "text"
+    OUTPUT_AUDIO = "audio"
+    VALID_OUTPUT_MODES = (OUTPUT_TEXT, OUTPUT_AUDIO)
+
+    def __init__(self, base_dir: str = "data/whatsapp_prefs"):
+        self.base_dir = Path(base_dir)
+        if not self.base_dir.is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            self.base_dir = project_root / base_dir
+
+    def _path(self, chat_id: str) -> Path:
+        return self.base_dir / f"{_safe_key(chat_id)}.json"
+
+    def get(self, chat_id: str) -> Dict[str, Any]:
+        path = self._path(chat_id)
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            return loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save(self, chat_id: str, prefs: Dict[str, Any]) -> bool:
+        path = self._path(chat_id)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+            return True
+        except OSError as exc:
+            logger.warning("Failed to save chat prefs to %s: %s", path, exc)
+            return False
+
+    def output_mode(self, chat_id: str) -> str:
+        """``"text"`` (default) or ``"audio"``."""
+        mode = self.get(chat_id).get("output_mode", self.OUTPUT_TEXT)
+        return mode if mode in self.VALID_OUTPUT_MODES else self.OUTPUT_TEXT
+
+    def set_output_mode(self, chat_id: str, mode: str) -> bool:
+        if mode not in self.VALID_OUTPUT_MODES:
+            raise ValueError(f"unknown output mode: {mode!r}")
+        prefs = self.get(chat_id)
+        prefs["output_mode"] = mode
+        return self._save(chat_id, prefs)

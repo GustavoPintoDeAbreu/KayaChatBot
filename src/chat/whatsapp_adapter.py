@@ -15,13 +15,16 @@ Routing rules (matching the chosen behaviour):
     **replies to one of the bot's own messages**. Never reply to itself.
 """
 
+import json
 import logging
+import os
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from src.chat.memory import KeyedSessionMemory
+from src.chat.memory import ChatPreferences, KeyedSessionMemory
 from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
@@ -210,6 +213,7 @@ class WhatsAppAdapter:
         waha_client: Any,
         config: Dict[str, Any],
         session_store: Optional[KeyedSessionMemory] = None,
+        prefs: Optional[ChatPreferences] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -223,6 +227,13 @@ class WhatsAppAdapter:
         self.respond_on_reply = bool(group_cfg.get("respond_on_reply", True))
         # phone/JID -> display name, so the model knows who is speaking
         self.contacts = {_normalize_jid(k): v for k, v in (wcfg.get("contacts", {}) or {}).items()}
+        # Canonical member name lookup, keyed by name AND alias, used to learn the
+        # phone->member mapping from real traffic (see resolve_speaker). Without it
+        # every unmapped sender is labelled by their WhatsApp pushName, which may
+        # not match the name RAG person-filtering expects.
+        self.member_aliases = {k.lower(): v for k, v in (wcfg.get("member_aliases", {}) or {}).items()}
+        self.learn_contacts = bool(wcfg.get("learn_contacts", True))
+        self._contacts_path = wcfg.get("contacts_file")
         # DM anti-spam whitelist. When enabled, direct messages are only answered
         # for sender numbers in ``allowed`` (groups stay governed by @mention). The
         # numbers are loaded from the gitignored data/whatsapp_whitelist.json and
@@ -243,6 +254,18 @@ class WhatsAppAdapter:
             base_dir=wcfg.get("sessions_dir", "data/whatsapp_sessions"),
             max_lines=max(2 * self.history_turns, 20),
         )
+        # Sticky per-chat settings (currently the reply modality). "Responde só em
+        # áudio" holds until changed, so it is state on disk, not a per-message flag.
+        self.prefs = prefs or ChatPreferences(
+            base_dir=wcfg.get("prefs_dir", "data/whatsapp_prefs")
+        )
+        # Confirmations for router-detected commands, kept here so the wording is
+        # not generated (and so it cannot drift or refuse).
+        self.command_replies = {
+            "audio": "Feito — passo a responder-te por áudio.",
+            "text": "Feito — volto a responder por texto.",
+            "clear": "Contexto limpo — esqueci as mensagens recentes desta conversa.",
+        }
         # Whether to attribute 👍/👎 emoji reactions on the bot's own replies as
         # feedback. The actual logging happens in the server; the adapter only tracks
         # which sent message ids are the bot's and resolves a reaction back to them.
@@ -273,6 +296,20 @@ class WhatsAppAdapter:
         )
         return bool(mentioned or replied)
 
+    def _apply_command(self, chat_id: str, command: str) -> str:
+        """Execute a routed command and return the confirmation to send back."""
+        if command in (ChatPreferences.OUTPUT_AUDIO, ChatPreferences.OUTPUT_TEXT):
+            self.prefs.set_output_mode(chat_id, command)
+        elif command == "clear":
+            self.session_store._store(chat_id).clear()
+        else:
+            return ""
+        return self.command_replies.get(command, "")
+
+    def output_mode(self, chat_id: str) -> str:
+        """The sticky reply modality for this chat (``"text"`` or ``"audio"``)."""
+        return self.prefs.output_mode(chat_id)
+
     def _dm_allowed(self, msg: InboundMessage) -> bool:
         """Anti-spam gate for direct messages.
 
@@ -297,16 +334,56 @@ class WhatsAppAdapter:
         always gets a usable ``"<who>: <text>"`` and RAG person-filtering can fire.
         """
         id_local = msg.sender_id.split("@", 1)[0]
-        for candidate in (
+        candidates = [
             _normalize_jid(msg.sender_id),
             _normalize_jid(f"{msg.sender_phone}@c.us") if msg.sender_phone else "",
             msg.sender_phone,
             _normalize_jid(f"{id_local}@c.us"),
             id_local,
-        ):
+        ]
+        for candidate in candidates:
             if candidate and candidate in self.contacts:
                 return self.contacts[candidate]
-        return msg.sender_name or "Alguém"
+
+        # Not mapped yet. If WhatsApp's pushName matches a known member name or
+        # alias, adopt the CANONICAL member name (so RAG person-filtering matches)
+        # and remember the number, so the mapping self-populates from real traffic
+        # instead of needing a hand-maintained file.
+        pushname = (msg.sender_name or "").strip()
+        canonical = self.member_aliases.get(pushname.lower()) if pushname else None
+        if not canonical and pushname:
+            first = pushname.split()[0].lower()
+            canonical = self.member_aliases.get(first)
+        if canonical:
+            if self.learn_contacts:
+                self._learn_contact(candidates, canonical)
+            return canonical
+
+        return pushname or "Alguém"
+
+    def _learn_contact(self, candidates, name: str) -> None:
+        """Remember phone -> member name, persisting so it survives a restart."""
+        key = next((c for c in candidates if c), None)
+        if not key or key in self.contacts:
+            return
+        self.contacts[key] = name
+        if not self._contacts_path:
+            return
+        try:
+            path = Path(self._contacts_path)
+            existing = {}
+            if path.exists():
+                existing = json.loads(path.read_text(encoding="utf-8")) or {}
+            if existing.get(key) == name:
+                return
+            existing[key] = name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+            print(f"✓ Learned WhatsApp contact {key} -> {name}")
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"⚠️  Could not persist learned contact {key}: {exc}")
 
     def _strip_bot_mention(self, text: str) -> str:
         """Remove an ``@<botnumber/lid>`` token so it doesn't pollute the prompt."""
@@ -359,10 +436,27 @@ class WhatsAppAdapter:
 
         recent = self.session_store.recent(msg.chat_id, self.history_turns)
         try:
-            reply = self.responder(text, speaker, recent)
+            result = self.responder(text, speaker, recent)
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
+
+        # The responder returns either a plain string (tests, simulators) or a
+        # Reply carrying the routing decision (production). A routed *command* —
+        # "responde só em áudio", "esquece o que falámos" — is executed here rather
+        # than generated, so the confirmation cannot drift or be refused.
+        reply = result if isinstance(result, str) else getattr(result, "text", "")
+        route = None if isinstance(result, str) else getattr(result, "route", None)
+        command = getattr(route, "command", None) if route else None
+
+        if command:
+            reply = self._apply_command(msg.chat_id, command)
+            if reply:
+                self.waha_client.send_text(msg.chat_id, reply)
+            return {
+                "chat_id": msg.chat_id, "speaker": speaker,
+                "reply": reply, "command": command,
+            }
 
         if not reply or not reply.strip():
             return None

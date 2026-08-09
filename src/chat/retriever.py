@@ -400,7 +400,12 @@ class ConversationRetriever:
         lines = ["=== Resumos recentes dos membros ==="] + summaries + ["=== Fim dos resumos ==="]
         return "\n".join(lines)
 
-    def retrieve_all(self, query: str, knowledge_approach: str = "both") -> str:
+    def retrieve_all(
+        self,
+        query: str,
+        knowledge_approach: str = "both",
+        top_k: Optional[int] = None,
+    ) -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
 
@@ -420,8 +425,10 @@ class ConversationRetriever:
         # Embed the query once and reuse it for both conversation and KB search.
         query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0] if self.encoder else None
 
-        # Always retrieve conversation history (sorted by similarity descending)
-        conv_chunks = self.retrieve(query, query_embedding=query_embedding)
+        # Retrieve conversation history (sorted by similarity descending). ``top_k``
+        # is narrowed by the caller for the lighter `mixed` intent, where the reply
+        # is conversational and does not need the full evidence pile.
+        conv_chunks = self.retrieve(query, top_k=top_k, query_embedding=query_embedding)
 
         # Retrieve from knowledge base if approach calls for it
         kb_chunks = []

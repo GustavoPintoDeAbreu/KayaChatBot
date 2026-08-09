@@ -45,16 +45,42 @@ _wcfg = config.setdefault("whatsapp", {})
 
 # Merge real phone->name mappings from a gitignored local file (PII stays out of
 # git). Keys are bare phone numbers or full JIDs; see config.yaml whatsapp.contacts.
+import json as _json
+
 _contacts_path = Path(config_path).parent / "data" / "whatsapp_contacts.json"
 if _contacts_path.exists():
-    import json as _json
-
     try:
         _local_contacts = _json.loads(_contacts_path.read_text(encoding="utf-8"))
         _wcfg["contacts"] = {**(_wcfg.get("contacts") or {}), **_local_contacts}
         print(f"✓ Loaded {len(_local_contacts)} WhatsApp contact name(s) from {_contacts_path.name}")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_contacts_path}: {exc}")
+
+# Let the adapter learn phone -> member mappings from real traffic: group_members.json
+# has names and aliases but no phone numbers, so the map cannot be generated ahead of
+# time. Matching WhatsApp's pushName against an alias fills it in as people talk.
+_wcfg["contacts_file"] = str(_contacts_path)
+try:
+    _members_file = config.get("data", {}).get("group_members_file")
+    if _members_file:
+        _mpath = Path(_members_file)
+        if not _mpath.is_absolute():
+            _mpath = Path(config_path).parent / _members_file
+        if _mpath.exists():
+            _members = _json.loads(_mpath.read_text(encoding="utf-8"))
+            _members = _members.get("members", _members) if isinstance(_members, dict) else _members
+            _aliases = {}
+            for _m in _members:
+                _name = _m.get("name") if isinstance(_m, dict) else str(_m)
+                if not _name:
+                    continue
+                _aliases[_name.lower()] = _name
+                for _a in (_m.get("aliases") or []) if isinstance(_m, dict) else []:
+                    _aliases[str(_a).lower()] = _name
+            _wcfg["member_aliases"] = _aliases
+            print(f"✓ Loaded {len(_aliases)} member name/alias(es) for speaker resolution")
+except Exception as exc:  # noqa: BLE001
+    print(f"⚠️  Could not load member aliases: {exc}")
 
 # Merge the DM anti-spam whitelist from a gitignored local file (PII stays out of
 # git). Shape: {"allowed": ["351XXXXXXXXX", ...]}. Only used when
@@ -86,7 +112,13 @@ _system_prompt = build_system_prompt(
 
 
 def _responder(message: str, speaker: str, recent_lines):
-    return engine.generate_reply(message, speaker, recent_lines, _system_prompt)
+    """Answer one message, returning the text AND how it was routed.
+
+    ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
+    commands — switching a chat to voice replies, clearing its context — which are
+    executed in code rather than generated.
+    """
+    return engine.respond(message, speaker, recent_lines, _system_prompt)
 
 
 if MOCK_MODE:
@@ -141,7 +173,9 @@ def _process_reaction(event: dict):
 
 def _log_interaction_metrics(result: dict, t0: float) -> None:
     """Log one answered message to the metrics sink (shared by the live + mock paths)."""
-    if result and result.get("reply") and result.get("command") != "clear":
+    # Command confirmations ("volto a responder por texto") are bookkeeping, not
+    # conversation — don't pollute the interaction metrics with them.
+    if result and result.get("reply") and not result.get("command"):
         metrics.log_interaction(
             source="whatsapp",
             user_message=result.get("user_text", ""),
