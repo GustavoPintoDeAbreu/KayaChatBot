@@ -302,15 +302,20 @@ def _qwen_embed_all(repo: str, photos, edits, out_path: Path) -> None:
                                              source.width / source.height)
         condition = [encoder.image_processor.resize(source, height, width)]
         for edit in list(edits) + [{"id": "__negative__", "instruction": NEGATIVE}]:
-            embeds, mask = encoder.encode_prompt(
-                image=condition, prompt=edit["instruction"],
-                device=torch.device("cuda"))
+            # no_grad is load-bearing: encode_prompt does not disable autograd, so
+            # a cached embedding keeps the whole VL forward graph alive behind it.
+            # One photo fits; eight fill the card.
+            with torch.no_grad():
+                embeds, mask = encoder.encode_prompt(
+                    image=condition, prompt=edit["instruction"],
+                    device=torch.device("cuda"))
             if mask is None:
                 # encode_prompt drops an all-ones mask, but __call__ reads a None
                 # negative mask as "no negative prompt" and silently turns true
                 # CFG off — so it is rebuilt rather than passed through.
                 mask = torch.ones(embeds.shape[:2], dtype=torch.long)
-            cache[(photo["id"], edit["id"])] = (embeds.cpu(), mask.cpu())
+            cache[(photo["id"], edit["id"])] = (embeds.detach().cpu(),
+                                                mask.detach().cpu())
         print(f"  embedded {photo['id']}")
 
     torch.save({"|".join(key): value for key, value in cache.items()}, out_path)
