@@ -277,7 +277,10 @@ class KayaEngine:
 
             # A pure command ("responde só em áudio") is executed by the caller,
             # not generated — return immediately without spending a generation.
-            if route.command:
+            # A one-off "explain this in audio" still needs a real answer — only
+            # the delivery medium changes. Other commands are pure state changes
+            # and are executed by the caller without generating anything.
+            if route.command and route.command != router.CMD_AUDIO_ONCE:
                 return Reply(text="", route=route)
 
             # Off-topic / current-events questions are answered directly by Grok's

@@ -252,6 +252,30 @@ def _process(event: dict):
         print(f"⚠️  WhatsApp handler error: {exc}")
 
 
+def _preload_audio_models() -> None:
+    """Warm Whisper in the background so the first voice note is not slow.
+
+    Loading large-v3 takes ~30s, and it happens lazily on first use — which made
+    the first voice note of a session take 40-46s end to end, well past the
+    latency budget. Doing it at startup moves that cost off the user's path.
+    """
+    from src.chat import stt
+
+    if not stt.is_available(config):
+        return
+
+    def _warm() -> None:
+        try:
+            import time as _t
+            t0 = _t.time()
+            stt._load(config)
+            print(f"✓ Whisper preloaded in {_t.time() - t0:.0f}s")
+        except Exception as exc:  # noqa: BLE001 — warming is best-effort
+            print(f"⚠️  Whisper preload failed: {exc}")
+
+    threading.Thread(target=_warm, name="kaya-whisper-warm", daemon=True).start()
+
+
 def _start_ingest_scheduler() -> None:
     """Catch up on what was missed while down, then keep folding in new messages.
 
@@ -289,6 +313,7 @@ def _start_ingest_scheduler() -> None:
 
 
 if not MOCK_MODE:
+    _preload_audio_models()
     _start_ingest_scheduler()
 
 

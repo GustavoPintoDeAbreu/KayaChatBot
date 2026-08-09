@@ -37,6 +37,7 @@ FACTUAL = "factual"
 MODES = (BANTER, MIXED, FACTUAL)
 
 CMD_AUDIO = "audio"
+CMD_AUDIO_ONCE = "audio_once"
 CMD_TEXT = "text"
 CMD_CLEAR = "clear"
 
@@ -46,6 +47,7 @@ _LABELS = {
     "MIXED": (MIXED, None),
     "FACTUAL": (FACTUAL, None),
     "CMD_AUDIO": (None, CMD_AUDIO),
+    "CMD_AUDIO_ONCE": (None, CMD_AUDIO_ONCE),
     "CMD_TEXT": (None, CMD_TEXT),
     "CMD_CLEAR": (None, CMD_CLEAR),
 }
@@ -57,13 +59,14 @@ MIXED — chat that references a person or event but is not really asking to be 
 FACTUAL — a genuine request for information, memory or detail about the group, its members, events, or the world. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?".
 CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
 CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
+CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing the default. Examples: "explica isso num áudio", "manda um áudio a explicar", "responde a esta por voz".
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 
 A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
   "o áudio estava mau" -> BANTER (an opinion about a recording)
   "não gosto de áudios" -> BANTER (a preference, not an instruction)
   "ouvi o teu áudio ontem" -> MIXED (talking about a past message)
-  "manda um áudio a explicar isso" -> FACTUAL (a one-off request, not a standing rule)
+  "manda um áudio a explicar isso" -> CMD_AUDIO_ONCE (answer THIS one by voice, without changing the default)
   "audio" -> BANTER (a bare word, not an instruction)
 
 Reply with the token only."""

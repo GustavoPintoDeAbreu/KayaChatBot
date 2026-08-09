@@ -335,13 +335,15 @@ class WhatsAppAdapter:
         )
         return bool(mentioned or replied)
 
-    def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None):
+    def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None,
+                 force_voice: bool = False):
         """Send the reply as text, or as a voice note if this chat asked for it.
 
         Falls back to text whenever synthesis fails — a silent non-reply is much
         worse than the wrong medium.
         """
-        if self.prefs.output_mode(chat_id) != ChatPreferences.OUTPUT_AUDIO:
+        wants_voice = force_voice or self.prefs.output_mode(chat_id) == ChatPreferences.OUTPUT_AUDIO
+        if not wants_voice:
             return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
 
         ogg = None
@@ -576,6 +578,13 @@ class WhatsAppAdapter:
         route = None if isinstance(result, str) else getattr(result, "route", None)
         command = getattr(route, "command", None) if route else None
 
+        # A one-off voice request changes only how THIS reply is delivered, so it
+        # falls through to normal generation rather than being executed as a
+        # state change.
+        deliver_as_voice_once = command == "audio_once"
+        if deliver_as_voice_once:
+            command = None
+
         if command:
             reply = self._apply_command(msg.chat_id, command)
             if reply:
@@ -596,7 +605,8 @@ class WhatsAppAdapter:
 
         # Quote the asker's message in groups so it's clear who the bot answers.
         reply_to = msg.message_id if msg.is_group else None
-        sent = self._deliver(msg.chat_id, reply, reply_to=reply_to)
+        sent = self._deliver(msg.chat_id, reply, reply_to=reply_to,
+                             force_voice=deliver_as_voice_once)
 
         # Remember this sent message so a later 👍/👎 reaction on it can be attributed.
         if self.feedback_enabled:

@@ -544,3 +544,31 @@ def test_voice_note_without_stt_is_still_dropped(tmp_path):
     event["payload"]["media"] = {"url": "http://waha/f.oga", "mimetype": "audio/ogg"}
 
     assert adapter.handle_event(event, system_prompt="") is None
+
+
+def test_one_off_audio_request_speaks_without_changing_the_default(tmp_path):
+    """"explica isso num áudio" answers by voice but leaves the chat on text."""
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="Aqui vai a explicação.", command="audio_once", mode="factual"))
+    adapter.audio_reply_enabled = True
+    adapter.tts_synthesize = lambda text: b"OGG"
+
+    assert adapter.output_mode(ALICE) == "text"
+    adapter.handle_event(dm_event("explica isso num áudio"), system_prompt="")
+
+    assert "voice_bytes" in adapter.waha_client.sent[-1]
+    # the sticky default must NOT have changed
+    assert adapter.output_mode(ALICE) == "text"
+
+
+def test_one_off_audio_still_generates_a_real_answer(tmp_path):
+    """Unlike other commands, this one is a delivery hint, not a state change."""
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="Resposta real.", command="audio_once", mode="factual"))
+    adapter.audio_reply_enabled = True
+    adapter.tts_synthesize = lambda text: b"OGG"
+
+    result = adapter.handle_event(dm_event("manda um áudio a explicar"), system_prompt="")
+
+    assert result["reply"] == "Resposta real."
+    assert result.get("command") is None   # not treated as a pure command
