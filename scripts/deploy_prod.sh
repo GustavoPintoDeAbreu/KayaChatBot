@@ -39,6 +39,13 @@ else
   git checkout -f "$REF"                      # tag or commit SHA
 fi
 
+# Map the pinned GPU UUIDs to current indices (the runtime rejects UUIDs, and
+# indices are not stable across reboots). Operates on $PROD_DIR/.env.
+if [[ -f scripts/gpu_env.sh ]]; then
+  source scripts/gpu_env.sh
+  echo "🎯 GPU pin: prod=index:${KAYA_GPU_PROD:-all} dev=index:${KAYA_GPU_DEV:-all}"
+fi
+
 export KAYA_VERSION="$(git rev-parse --short HEAD)"
 echo "🔖 Deploying commit $KAYA_VERSION"
 

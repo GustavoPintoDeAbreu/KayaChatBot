@@ -27,6 +27,10 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+# Map the pinned GPU UUIDs to their current indices (this runtime cannot take a
+# UUID in NVIDIA_VISIBLE_DEVICES, and indices move across reboots).
+source "$REPO_ROOT/scripts/gpu_env.sh"
+
 OTHER_ENV=$([[ "$ENV_NAME" == "dev" ]] && echo "prod" || echo "dev")
 
 # dev and prod own different cards (KAYA_GPU_DEV / KAYA_GPU_PROD), so they can run
