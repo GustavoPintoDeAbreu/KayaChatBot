@@ -258,20 +258,6 @@ class KayaEngine:
         # Dynamic length: short & chatty by default, raised to the elaboration
         # ceiling only when the question actually asks for detail. An explicit
         # caller-supplied cap always wins.
-        # Off-topic / current-events questions are answered directly by Grok's web
-        # search (factually grounded, EU-PT) and bypass the local model entirely —
-        # the local model garbles facts. Runs before the GPU lock; never raises.
-        if self.retriever:
-            from src.chat.web_search import maybe_web_search
-
-            web_result = maybe_web_search(message, self.retriever, self.config)
-            if web_result.used and web_result.answer:
-                citation = web_result.citation_line()
-                answer = f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
-                # Web search bypasses the local model entirely, so nothing was
-                # routed — but the caller still expects a Reply.
-                return Reply(text=answer, route=None)
-
         wants_long = wants_long_answer(message)
         explicit_cap = max_new_tokens is not None
 
@@ -285,6 +271,31 @@ class KayaEngine:
             # not generated — return immediately without spending a generation.
             if route.command:
                 return Reply(text="", route=route)
+
+            # Off-topic / current-events questions are answered directly by Grok's
+            # web search (factually grounded, EU-PT), bypassing the local model,
+            # which garbles facts.
+            #
+            # This runs AFTER routing, and only for factual intent. It used to run
+            # first, which meant conversational messages could trigger a web
+            # lookup — "isto é creepy, estás a responder mais naturalmente" came
+            # back as "não há informação clara na web sobre alterações no meu
+            # comportamento". Banter must never hit the network.
+            #
+            # The cost is holding the GPU lock across the search call. That is
+            # deliberate: the alternative is a second lock acquisition per turn,
+            # and a contended lock DROPS the message rather than queueing it.
+            # Search fires on a small minority of messages, so the trade is cheap.
+            if route.mode == router.FACTUAL and self.retriever:
+                from src.chat.web_search import maybe_web_search
+
+                web_result = maybe_web_search(message, self.retriever, self.config)
+                if web_result.used and web_result.answer:
+                    citation = web_result.citation_line()
+                    answer = (
+                        f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
+                    )
+                    return Reply(text=answer, route=route)
 
             # 2. Mode picks the length budget, unless the caller forced one.
             if not explicit_cap:
