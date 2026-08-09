@@ -67,8 +67,17 @@ PORT=$([[ "$ENV_NAME" == "dev" ]] && echo 7861 || echo 7860)
 # "unknown" inside the container if unset.
 export KAYA_VERSION="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-echo "🚀 Powering up kaya-${ENV_NAME} + cloudflared (commit ${KAYA_VERSION}) ..."
-docker compose --profile "$ENV_NAME" --profile tunnel up -d "kaya-${ENV_NAME}" cloudflared
+# One Cloudflare Tunnel serves BOTH hostnames (ingress is configured remotely), so
+# only ever start it once. Now that dev and prod run side by side they belong to
+# different compose projects, and both trying to create /kaya-cloudflared fails
+# with a container-name conflict.
+if docker ps --format '{{.Names}}' | grep -qx "kaya-cloudflared"; then
+  echo "🚀 Powering up kaya-${ENV_NAME} (commit ${KAYA_VERSION}); tunnel already running ..."
+  docker compose --profile "$ENV_NAME" up -d "kaya-${ENV_NAME}"
+else
+  echo "🚀 Powering up kaya-${ENV_NAME} + cloudflared (commit ${KAYA_VERSION}) ..."
+  docker compose --profile "$ENV_NAME" --profile tunnel up -d "kaya-${ENV_NAME}" cloudflared
+fi
 
 echo
 echo "✅ kaya-${ENV_NAME} is starting (model load takes ~1 min)."
