@@ -295,8 +295,18 @@ chat:
   # is still recognised — it just answers honestly and does not store a
   # preference that would silently do nothing.
   audio:
-    reply_enabled: false        # TTS (Piper pt_PT) — Phase 4
-    transcribe_enabled: false   # STT (faster-whisper) — Phase 4
+    # Piper pt_PT ("tugão"). Kokoro, the usual 2026 default, only ships Brazilian
+    # Portuguese and would sound wrong to this group. Runs on CPU at ~28x
+    # realtime, so speaking never competes with the GPU that is answering.
+    reply_enabled: true
+    voice_model: "models/piper/pt/pt_PT/tugão/medium/pt_PT-tugão-medium.onnx"
+    # Incoming voice notes are transcribed with faster-whisper and then flow
+    # through the normal text path, router included.
+    transcribe_enabled: true
+    whisper_model: "large-v3"
+    whisper_device: "cuda"
+    whisper_compute: "int8_float16"
+    language: "pt"
 
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.

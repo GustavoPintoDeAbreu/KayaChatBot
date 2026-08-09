@@ -470,3 +470,77 @@ def test_text_command_still_works_without_tts(tmp_path):
     result = adapter.handle_event(dm_event("volta a texto"), system_prompt="")
     assert result["reply"] == adapter.command_replies["text"]
     assert adapter.output_mode(ALICE) == "text"
+
+
+# ── voice replies + incoming voice notes (Phase 4) ───────────────────────────
+def test_voice_reply_sent_when_chat_prefers_audio(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.audio_reply_enabled = True
+    adapter.tts_synthesize = lambda text: b"FAKE_OGG_BYTES"
+    adapter.prefs.set_output_mode(ALICE, "audio")
+
+    adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    sent = adapter.waha_client.sent[-1]
+    assert "voice_bytes" in sent and sent["voice_bytes"] == len(b"FAKE_OGG_BYTES")
+
+
+def test_text_reply_when_chat_prefers_text(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.tts_synthesize = lambda text: b"SHOULD_NOT_BE_USED"
+
+    adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert adapter.waha_client.sent[-1].get("text") == "Olá!"
+
+
+def test_falls_back_to_text_when_synthesis_fails(tmp_path):
+    """A silent non-reply is far worse than the wrong medium."""
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.audio_reply_enabled = True
+    adapter.tts_synthesize = lambda text: None      # synthesis failed
+    adapter.prefs.set_output_mode(ALICE, "audio")
+
+    adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert adapter.waha_client.sent[-1].get("text") == "Olá!"
+
+
+def test_falls_back_to_text_when_sending_voice_raises(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.audio_reply_enabled = True
+    adapter.tts_synthesize = lambda text: b"OGG"
+    adapter.prefs.set_output_mode(ALICE, "audio")
+
+    def boom(*a, **kw):
+        raise RuntimeError("WAHA rejected the voice note")
+    adapter.waha_client.send_voice = boom
+
+    adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert adapter.waha_client.sent[-1].get("text") == "Olá!"
+
+
+def test_incoming_voice_note_is_transcribed_then_answered(tmp_path):
+    """A voice note arrives with EMPTY text and would otherwise be dropped."""
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Percebi!", mode="banter"))
+    adapter.transcribe = lambda url, mime: "isto foi dito em voz alta"
+
+    event = dm_event("")                       # no text, as WhatsApp sends it
+    event["payload"]["media"] = {"url": "http://waha/f.oga", "mimetype": "audio/ogg"}
+
+    result = adapter.handle_event(event, system_prompt="")
+
+    assert result is not None, "voice note was dropped instead of transcribed"
+    assert result["reply"] == "Percebi!"
+
+
+def test_voice_note_without_stt_is_still_dropped(tmp_path):
+    """Without transcription there is genuinely nothing to answer."""
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="x", mode="banter"))
+    adapter.transcribe = None
+
+    event = dm_event("")
+    event["payload"]["media"] = {"url": "http://waha/f.oga", "mimetype": "audio/ogg"}
+
+    assert adapter.handle_event(event, system_prompt="") is None

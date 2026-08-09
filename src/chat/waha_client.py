@@ -57,6 +57,26 @@ class WahaClient:
         resp.raise_for_status()
         return resp.json()
 
+    def send_voice(self, chat_id: str, ogg_bytes: bytes,
+                   reply_to: Optional[str] = None) -> Dict[str, Any]:
+        """Send an OGG/Opus voice note. WhatsApp rejects other codecs as voice."""
+        import base64
+
+        body: Dict[str, Any] = {
+            "session": self.session,
+            "chatId": chat_id,
+            "file": {
+                "mimetype": "audio/ogg; codecs=opus",
+                "filename": "voice.ogg",
+                "data": base64.b64encode(ogg_bytes).decode("ascii"),
+            },
+        }
+        if reply_to:
+            body["reply_to"] = reply_to
+        resp = self._client.post("/api/sendVoice", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
     def send_seen(self, chat_id: str) -> None:
         try:
             self._client.post("/api/sendSeen", json={"session": self.session, "chatId": chat_id})
@@ -89,6 +109,17 @@ class MockWahaClient:
         self.seen: List[str] = []
         self.echo = echo
         self._counter = 0
+
+    def send_voice(self, chat_id: str, ogg_bytes: bytes,
+                   reply_to: Optional[str] = None) -> Dict[str, Any]:
+        """Capture the voice note instead of sending it."""
+        self._counter += 1
+        record = {"chat_id": chat_id, "voice_bytes": len(ogg_bytes or b""),
+                  "reply_to": reply_to}
+        self.sent.append(record)
+        if self.echo:
+            print(f"\n[→ WhatsApp {chat_id}] (voice note, {len(ogg_bytes or b'')} bytes)\n")
+        return {"id": f"mock-voice-{self._counter}"}
 
     def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> Dict[str, Any]:
         self._counter += 1

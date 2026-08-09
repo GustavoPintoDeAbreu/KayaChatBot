@@ -154,7 +154,31 @@ else:
         api_key=os.environ.get("KAYA_WAHA_API_KEY") or _wcfg.get("waha_api_key"),
     )
 
-adapter = WhatsAppAdapter(_responder, waha_client, config)
+def _tts(text: str):
+    """Synthesise a voice note, or None if voice replies are unavailable.
+
+    Injected into the adapter so it stays free of TTS imports. Piper runs on CPU
+    (~28x realtime), so speaking never competes with the GPU that is answering.
+    """
+    from src.chat import tts
+
+    if not tts.is_available(config):
+        return None
+    return tts.synthesize_voice_note(text, config)
+
+
+def _stt(url: str, mimetype: str):
+    """Transcribe an incoming voice note, or None if STT is unavailable."""
+    from src.chat import stt
+
+    if not stt.is_available(config):
+        return None
+    return stt.transcribe_url(url, mimetype, config,
+                              api_key=os.environ.get("KAYA_WAHA_API_KEY", ""))
+
+
+adapter = WhatsAppAdapter(_responder, waha_client, config,
+                          tts_synthesize=_tts, transcribe=_stt)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 

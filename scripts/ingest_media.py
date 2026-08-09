@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Describe images from a WhatsApp export and fold them into the group's memory.
+"""Turn a WhatsApp export's media into searchable group memory.
 
-A photo on its own is weak memory: the vision model can say "um homem num barco
-com uma cerveja" but not who, when, or why it was sent. The export line carries
-exactly that — `31/01/26, 14:02 - Rafa: IMG-20260131-WA0020.jpg (file attached)` —
-so each description is stored together with its sender, its date and the messages
+Photos are described by the vision model; voice notes are transcribed by Whisper.
+Either way the raw file becomes text the retriever can search.
+
+Media alone is weak memory: the model can say "um homem num barco com uma cerveja"
+but not who, when, or why. The export line carries exactly that —
+`31/01/26, 14:02 - Rafa: IMG-20260131-WA0020.jpg (file attached)` — so every
+description or transcript is stored with its sender, its date and the messages
 around it. That is what makes "aquela foto do barco" findable later.
 
 Stickers are skipped by default. The export references them 2,166 times but they
 are only ~640 unique files, reused constantly as reactions; describing them adds
-noise, not memory. Videos and audio are skipped for now (--kinds to change).
+noise, not memory. Video is not handled yet.
+
+    --kinds IMG        photos      (needs a llama.cpp server with --mmproj)
+    --kinds PTT,AUD    voice notes (needs faster-whisper; runs on the GPU)
 
 Idempotent and resumable: descriptions are cached by filename, and chunk ids are
 derived from the filename, so re-running skips work already done and upserts
@@ -48,6 +54,9 @@ LINE = re.compile(
     r"(?P<sender>[^:]{1,60}):\s*(?P<text>.*)$"
 )
 ATTACHMENT = re.compile(r"(?P<file>(?P<kind>IMG|STK|VID|PTT|AUD)-\d{8}-WA\d+\.\w+)\s*\(.*?\)")
+
+AUDIO_KINDS = {"PTT", "AUD"}
+IMAGE_KINDS = {"IMG", "STK"}
 
 DESC_PROMPT = (
     "Descreve esta imagem para servir de memória de um grupo de amigos. "
@@ -133,6 +142,34 @@ def describe(url: str, image_path: Path, timeout: float = 180.0) -> Optional[str
         return None
 
 
+_WHISPER = None
+
+
+def get_whisper(model_name: str, device: str, compute_type: str):
+    """Load Whisper once, lazily — only when audio is actually being ingested."""
+    global _WHISPER
+    if _WHISPER is None:
+        from faster_whisper import WhisperModel
+
+        print(f"loading Whisper {model_name} ({device}/{compute_type}) …")
+        _WHISPER = WhisperModel(model_name, device=device, compute_type=compute_type)
+    return _WHISPER
+
+
+def transcribe(path: Path, model_name: str, device: str, compute_type: str,
+               language: str = "pt") -> Optional[str]:
+    """Transcribe one voice note. Returns None on failure rather than raising."""
+    try:
+        model = get_whisper(model_name, device, compute_type)
+        # vad_filter drops silence, which is most of a WhatsApp voice note's tail.
+        segments, _info = model.transcribe(str(path), language=language,
+                                           vad_filter=True, beam_size=1)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        return text or None
+    except Exception:  # noqa: BLE001 — one bad file must not stop the run
+        return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Describe export images into the vector store.")
     ap.add_argument("--export", required=True, help="WhatsApp chat .txt export")
@@ -143,6 +180,10 @@ def main() -> None:
     ap.add_argument("--cache", default="data/media_descriptions.json")
     ap.add_argument("--dry-run", action="store_true", help="Parse and report only")
     ap.add_argument("--url", default=os.environ.get("KAYA_LLAMA_URL", "http://127.0.0.1:8081"))
+    ap.add_argument("--whisper-model", default="large-v3")
+    ap.add_argument("--whisper-device", default="cuda")
+    ap.add_argument("--whisper-compute", default="int8_float16")
+    ap.add_argument("--language", default="pt")
     args = ap.parse_args()
 
     base_dir = Path(__file__).parent.parent
@@ -201,7 +242,11 @@ def main() -> None:
 
     described, failed, t0 = 0, 0, time.time()
     for n, (idx, m, path) in enumerate(todo, 1):
-        desc = describe(args.url, path)
+        if m["kind"] in AUDIO_KINDS:
+            desc = transcribe(path, args.whisper_model, args.whisper_device,
+                              args.whisper_compute, args.language)
+        else:
+            desc = describe(args.url, path)
         if desc:
             cache[m["file"]] = desc
             described += 1
@@ -229,24 +274,27 @@ def main() -> None:
             continue
         ts = _iso(m["date"], m["time"])
         ctx = context_around(messages, idx)
-        doc = f"[Imagem enviada por {m['sender']}" + (f" em {ts[:10]}" if ts else "") + "]\n"
+        kind_label = "Áudio" if m["kind"] in AUDIO_KINDS else "Imagem"
+        doc = f"[{kind_label} enviado por {m['sender']}" + (f" em {ts[:10]}" if ts else "") + "]\n"
         doc += desc
         if ctx:
             doc += f"\n\nConversa à volta:\n{ctx}"
-        ids.append("img_" + m["file"].replace(".", "_"))
+        ids.append(("aud_" if m["kind"] in AUDIO_KINDS else "img_") + m["file"].replace(".", "_"))
         docs.append(doc)
         metas.append({
             "participants": m["sender"], "mentioned": "",
             "message_count": 1, "token_count": len(doc) // 4,
             "timestamp_start": ts, "timestamp_end": ts,
-            "scope": args.scope, "source": "image", "media_file": m["file"],
+            "scope": args.scope,
+            "source": "audio" if m["kind"] in AUDIO_KINDS else "image",
+            "media_file": m["file"],
         })
 
     if not ids:
         print("nothing to ingest")
         return
 
-    print(f"embedding + upserting {len(ids)} image chunks …")
+    print(f"embedding + upserting {len(ids)} media chunks …")
     embeddings = ing.encoder.encode(docs, show_progress_bar=False,
                                     normalize_embeddings=True).tolist()
     for i in range(0, len(ids), 200):

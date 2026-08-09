@@ -50,6 +50,10 @@ class InboundMessage:
     sender_phone: str = ""
     mentioned_ids: List[str] = field(default_factory=list)
     reply_to_participant: Optional[str] = None
+    # Voice notes arrive with empty text; the audio has to be fetched and
+    # transcribed before the message means anything.
+    media_url: str = ""
+    media_mimetype: str = ""
 
 
 def _normalize_jid(value: Optional[str]) -> str:
@@ -147,6 +151,10 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         sender_phone=sender_phone,
         mentioned_ids=[_normalize_jid(m) for m in mentioned],
         reply_to_participant=_normalize_jid(reply_to_participant) if reply_to_participant else None,
+        # A voice note carries no body text — the words live in this file, which
+        # has to be fetched and transcribed before the message means anything.
+        media_url=str((payload.get("media") or {}).get("url") or ""),
+        media_mimetype=str((payload.get("media") or {}).get("mimetype") or ""),
     )
 
 
@@ -218,6 +226,8 @@ class WhatsAppAdapter:
         session_store: Optional[KeyedSessionMemory] = None,
         prefs: Optional[ChatPreferences] = None,
         message_log: Optional[MessageLog] = None,
+        tts_synthesize: Optional[Callable[[str], Optional[bytes]]] = None,
+        transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -285,6 +295,10 @@ class WhatsAppAdapter:
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
+        # Injected so the adapter stays free of model/TTS imports (and tests can
+        # exercise voice delivery without Piper installed).
+        self.tts_synthesize = tts_synthesize
+        self.transcribe = transcribe
         self.audio_reply_enabled = bool(
             ((config.get("chat", {}) or {}).get("audio", {}) or {}).get("reply_enabled", False)
         )
@@ -320,6 +334,28 @@ class WhatsAppAdapter:
             and msg.reply_to_participant in self.bot_jids
         )
         return bool(mentioned or replied)
+
+    def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None):
+        """Send the reply as text, or as a voice note if this chat asked for it.
+
+        Falls back to text whenever synthesis fails — a silent non-reply is much
+        worse than the wrong medium.
+        """
+        if self.prefs.output_mode(chat_id) != ChatPreferences.OUTPUT_AUDIO:
+            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
+
+        ogg = None
+        if self.tts_synthesize is not None:
+            ogg = self.tts_synthesize(text)
+        if not ogg:
+            print("⚠️  voice synthesis unavailable — replying with text instead")
+            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
+
+        try:
+            return self.waha_client.send_voice(chat_id, ogg, reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  sending the voice note failed ({exc}); replying with text")
+            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
 
     def _note_message_time(self, chat_id: str, ts: Optional[int]) -> None:
         """Track message times so we know where this chat's verbatim window starts.
@@ -475,6 +511,15 @@ class WhatsAppAdapter:
         if msg is None:
             return None
 
+        # A voice note arrives with empty text. Transcribe it first so it becomes
+        # an ordinary message — logged as memory, routed, and answered like any
+        # other. Without this it is silently dropped by the empty-text gate.
+        if not msg.text.strip() and msg.media_url and self.transcribe is not None:
+            transcript = self.transcribe(msg.media_url, msg.media_mimetype)
+            if transcript:
+                msg.text = transcript
+                print(f"🎤 transcribed voice note ({len(transcript)} chars)")
+
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth
         # keeping, and it would otherwise be dropped by the gate below.
@@ -534,7 +579,9 @@ class WhatsAppAdapter:
         if command:
             reply = self._apply_command(msg.chat_id, command)
             if reply:
-                self.waha_client.send_text(msg.chat_id, reply)
+                # Deliver via the (possibly just-changed) preference, so "passo a
+                # responder-te por áudio" arrives as the first voice note.
+                self._deliver(msg.chat_id, reply)
             return {
                 "chat_id": msg.chat_id, "speaker": speaker,
                 "reply": reply, "command": command,
@@ -549,7 +596,7 @@ class WhatsAppAdapter:
 
         # Quote the asker's message in groups so it's clear who the bot answers.
         reply_to = msg.message_id if msg.is_group else None
-        sent = self.waha_client.send_text(msg.chat_id, reply, reply_to=reply_to)
+        sent = self._deliver(msg.chat_id, reply, reply_to=reply_to)
 
         # Remember this sent message so a later 👍/👎 reaction on it can be attributed.
         if self.feedback_enabled:
