@@ -165,3 +165,47 @@ class TestMessageLogIsolation:
         assert state.watermark("dm:aaa") == 1700000100
         # survives a reload
         assert IngestState(path=str(tmp_path / "state.json")).watermark("dm:aaa") == 1700000100
+
+
+class TestMediaIngest:
+    """Image descriptions become scoped, retrievable memory."""
+
+    def test_export_parsing_extracts_sender_and_attachment(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "ingest_media", Path(__file__).parent.parent / "scripts" / "ingest_media.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        export = tmp_path / "chat.txt"
+        export.write_text(
+            "3/26/20, 15:28 - Messages and calls are end-to-end encrypted\n"
+            "6/4/20, 12:01 - Gustavo Abreu: olha esta\n"
+            "6/4/20, 12:02 - Gustavo Abreu: IMG-20200604-WA0004.jpg (file attached)\n"
+            "6/4/20, 12:03 - Peter: ahahah brutal\n"
+            "6/4/20, 12:04 - Gil: STK-20200604-WA0001.webp (file attached)\n",
+            encoding="utf-8")
+
+        msgs = mod.parse_export(export)
+        atts = [m for m in msgs if m.get("kind")]
+        assert {a["kind"] for a in atts} == {"IMG", "STK"}
+        img = next(a for a in atts if a["kind"] == "IMG")
+        assert img["sender"] == "Gustavo Abreu"
+        assert img["file"] == "IMG-20200604-WA0004.jpg"
+
+    def test_context_around_uses_neighbouring_chatter(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "ingest_media", Path(__file__).parent.parent / "scripts" / "ingest_media.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        msgs = [
+            {"sender": "A", "text": "olha esta", "file": None, "kind": None},
+            {"sender": "B", "text": "IMG-1.jpg (file attached)", "file": "IMG-1.jpg", "kind": "IMG"},
+            {"sender": "C", "text": "ahahah brutal", "file": None, "kind": None},
+        ]
+        ctx = mod.context_around(msgs, 1)
+        # the photo's own line is excluded; the chatter around it is what gives it meaning
+        assert "olha esta" in ctx and "brutal" in ctx
+        assert "IMG-1.jpg" not in ctx

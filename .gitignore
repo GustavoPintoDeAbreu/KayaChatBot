@@ -163,3 +163,4 @@ data/live_messages/
 data/whatsapp_prefs/
 data/ingest_state.json
 data/whatsapp_shared_chats.json
+data/media_descriptions.json

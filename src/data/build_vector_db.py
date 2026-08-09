@@ -12,6 +12,8 @@ from typing import List, Dict, Any
 import chromadb
 from sentence_transformers import SentenceTransformer
 import tiktoken
+from src.chat.scope import SHARED
+
 
 # Make src/ importable when run directly as a script (python src/data/build_vector_db.py)
 # or as a subprocess from incremental_update.py.
@@ -135,7 +137,11 @@ class ConversationChunker:
                         'message_count': len(current_chunk),
                         'token_count': current_tokens,
                         'timestamp_start': chunk_start_time,
-                        'timestamp_end': chunk_end_time
+                        'timestamp_end': chunk_end_time,
+                        # Group export = shared memory, readable from every chat.
+                        # Without this a rebuild silently drops scoping and
+                        # scope-filtered retrieval returns nothing.
+                        'scope': SHARED,
                     }
                 })
 
@@ -182,7 +188,8 @@ class ConversationChunker:
                     'message_count': len(current_chunk),
                     'token_count': current_tokens,
                     'timestamp_start': chunk_start_time,
-                    'timestamp_end': chunk_end_time
+                    'timestamp_end': chunk_end_time,
+                    'scope': SHARED,
                 }
             })
 
@@ -236,6 +243,25 @@ class VectorDatabaseBuilder:
         print(f"✅ Embedding model loaded (dimension: {embedding_dim})")
 
         collection_name = "kaya_conversations"
+
+        # A full rebuild DROPS everything, including chunks that did not come from
+        # the export: image descriptions (source=image) and live-ingested
+        # conversation (source=live). Both are re-derivable — images from
+        # data/media_descriptions.json via scripts/ingest_media.py, live messages
+        # from data/live_messages/ via src/data/ingest.py — but they do not come
+        # back on their own, so say so loudly rather than silently losing them.
+        try:
+            existing = self.client.get_collection(name=collection_name)
+            derived = existing.get(where={"source": {"$in": ["image", "live"]}}, limit=1)
+            if derived.get("ids"):
+                print(
+                    "⚠️  This rebuild will drop image + live-ingested chunks.\n"
+                    "    Re-add them afterwards with:\n"
+                    "      scripts/ingest_media.py   (uses the cached descriptions)\n"
+                    "      src/data/ingest.py        (replays data/live_messages/)"
+                )
+        except Exception:
+            pass
 
         try:
             self.client.delete_collection(name=collection_name)
