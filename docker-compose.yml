@@ -18,6 +18,12 @@ services:
     # Volume mounts shared by all services
     volumes:
       - ./data:/app/data
+      # rag_db is mounted EXPLICITLY as well as via ./data above. In the prod
+      # checkout it is a symlink to the dev copy so both share one vector store,
+      # and Docker only resolves a symlink when it is the mount SOURCE — a symlink
+      # sitting inside an already-mounted directory is copied as a dangling link
+      # and the container sees nothing. Naming it here makes Docker resolve it.
+      - ./data/rag_db:/app/data/rag_db
       - ./models:/app/models
       - ./src:/app/src:ro
       - ./configs:/app/configs:ro
@@ -123,6 +129,7 @@ services:
     # Override the base ./src:ro mount so edits inside the repo are live.
     volumes:
       - ./data:/app/data
+      - ./data/rag_db:/app/data/rag_db   # see kaya-base: symlink must be the mount source
       - ./models:/app/models
       - ./src:/app/src
       - ./configs:/app/configs:ro
