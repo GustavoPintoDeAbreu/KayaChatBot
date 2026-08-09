@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
+from src.chat.scope import SHARED, is_readable, parse_iso, scope_filter
+
 
 # Query keywords that signal the user is asking about *when* something happened
 # or how recent it is. Date metadata is only surfaced into the injected context
@@ -169,7 +171,9 @@ class ConversationRetriever:
         return mentioned
 
     def retrieve(self, query: str, top_k: Optional[int] = None,
-                 query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
+                 query_embedding: Optional[Any] = None,
+                 scope: Optional[str] = None,
+                 exclude_from: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Retrieve relevant conversation chunks for a query.
 
@@ -207,12 +211,29 @@ class ConversationRetriever:
         # Retrieve extra results to account for filtering
         n_results_to_fetch = top_k * 3 if query_persons else top_k
 
-        # Query the vector database without where clause
-        results = self.collection.query(
+        # Restrict to scopes this chat may read: shared group memory plus its own.
+        # A DM can recall the group's history; the group can never recall a DM.
+        # Done as a `where` clause so filtered chunks don't eat the top-k budget.
+        where = scope_filter(scope) if scope else None
+
+        query_kwargs = dict(
             query_embeddings=[query_embedding],
             n_results=min(n_results_to_fetch, self.collection.count()),  # Don't exceed collection size
-            include=['documents', 'metadatas', 'distances']
+            include=['documents', 'metadatas', 'distances'],
         )
+        if where:
+            query_kwargs['where'] = where
+        try:
+            results = self.collection.query(**query_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            # An older store may predate the `scope` metadata. Never fail open on
+            # a scope error — that would leak a DM into the group. Fall back to
+            # shared-only, which is always safe to show anywhere.
+            if not where:
+                raise
+            print(f"⚠️  scope-filtered query failed ({exc}); falling back to shared-only")
+            query_kwargs['where'] = {"scope": SHARED}
+            results = self.collection.query(**query_kwargs)
 
         # Format results
         retrieved_chunks = []
@@ -224,6 +245,21 @@ class ConversationRetriever:
             similarity = 1 - distance  # cosine distance → cosine similarity
             if similarity < min_similarity:
                 continue  # Below relevance floor — skip
+
+            # Recency cutoff: the live session store already holds the last few
+            # turns verbatim, so retrieving a chunk covering the same window would
+            # inject the same text twice and waste the context budget. The session
+            # store owns recent history; the vector DB owns everything older.
+            if exclude_from:
+                chunk_end = parse_iso(metadata.get('timestamp_end'))
+                if chunk_end and chunk_end >= exclude_from:
+                    continue
+
+            # Defence in depth: the `where` clause above should already have
+            # excluded other chats, but a chunk written before scoping existed has
+            # no scope field, so verify rather than trust.
+            if scope and not is_readable(metadata.get('scope'), scope):
+                continue
 
             # Post-query filtering by person if needed
             if query_persons:
@@ -405,6 +441,8 @@ class ConversationRetriever:
         query: str,
         knowledge_approach: str = "both",
         top_k: Optional[int] = None,
+        scope: Optional[str] = None,
+        exclude_from: Optional[str] = None,
     ) -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
@@ -428,7 +466,13 @@ class ConversationRetriever:
         # Retrieve conversation history (sorted by similarity descending). ``top_k``
         # is narrowed by the caller for the lighter `mixed` intent, where the reply
         # is conversational and does not need the full evidence pile.
-        conv_chunks = self.retrieve(query, top_k=top_k, query_embedding=query_embedding)
+        conv_chunks = self.retrieve(
+            query,
+            top_k=top_k,
+            query_embedding=query_embedding,
+            scope=scope,
+            exclude_from=exclude_from,
+        )
 
         # Retrieve from knowledge base if approach calls for it
         kb_chunks = []

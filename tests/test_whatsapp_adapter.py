@@ -34,7 +34,7 @@ def make_adapter(tmp_path, **overrides):
     store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=10)
     client = MockWahaClient(echo=False)
 
-    def responder(message, speaker, recent_lines):
+    def responder(message, speaker, recent_lines, scope=None, exclude_from=None):
         return f"reply[{speaker}|{len(recent_lines)}]:{message}"
 
     adapter = WhatsAppAdapter(responder, client, config, session_store=store)
@@ -345,7 +345,7 @@ def make_routed_adapter(tmp_path, reply, **overrides):
         }
     }
     adapter = WhatsAppAdapter(
-        responder=lambda message, speaker, recent_lines: reply,
+        responder=lambda message, speaker, recent_lines, **kw: reply,
         waha_client=MockWahaClient(echo=False),
         config=config,
         session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
@@ -384,7 +384,7 @@ def test_text_command_switches_back(tmp_path):
     adapter.audio_reply_enabled = True   # TTS present (Phase 4)
     adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
 
-    adapter.responder = lambda message, speaker, recent: RoutedReply(command="text")
+    adapter.responder = lambda message, speaker, recent, **kw: RoutedReply(command="text")
     adapter.handle_event(dm_event("volta a texto"), system_prompt="")
 
     assert adapter.output_mode(ALICE) == "text"

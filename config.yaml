@@ -361,6 +361,24 @@ whatsapp:
   send_seen: true             # show read receipt + typing indicator before replying
   history_turns: 6            # how many recent lines of per-chat history to feed the model
   sessions_dir: "data/whatsapp_sessions"
+  prefs_dir: "data/whatsapp_prefs"
+
+  # ── Memory scoping + incremental ingestion (src/chat/scope.py, src/data/ingest.py)
+  # Chat ids whose content is GROUP-WIDE memory, readable from every conversation.
+  # Everything else (DMs, other groups) is private to its own chat. Put the real
+  # group id here; leaving it empty makes the group's own history private to it,
+  # which is safe but loses the shared memory the bot exists for.
+  shared_chats: []
+
+  # Every message the bot SEES is logged (not just ones it replies to) and folded
+  # into the vector store on a schedule. Never at message time — embedding while
+  # answering would compete for the GPU.
+  log_messages: true
+  message_log_dir: "data/live_messages"
+  ingest_state_file: "data/ingest_state.json"
+  ingest:
+    on_boot: true          # catch up on whatever was missed while down
+    interval_minutes: 120  # 0 disables the periodic pass
   group:
     respond_on_mention: true
     respond_on_reply: true

@@ -159,3 +159,7 @@ data/waha/
 data/whatsapp_sessions/
 data/whatsapp_contacts.json
 data/whatsapp_whitelist.json
+data/live_messages/
+data/whatsapp_prefs/
+data/ingest_state.json
+data/whatsapp_shared_chats.json

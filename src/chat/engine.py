@@ -189,6 +189,8 @@ class KayaEngine:
         speaker_label: str = "User",
         retrieval: bool = True,
         top_k: Optional[int] = None,
+        scope: Optional[str] = None,
+        exclude_from: Optional[str] = None,
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -204,7 +206,11 @@ class KayaEngine:
         if retrieval and self.rag_enabled and self.retriever:
             try:
                 context = self.retriever.retrieve_all(
-                    message, knowledge_approach=self.knowledge_approach, top_k=top_k
+                    message,
+                    knowledge_approach=self.knowledge_approach,
+                    top_k=top_k,
+                    scope=scope,
+                    exclude_from=exclude_from,
                 )
             except Exception as exc:  # noqa: BLE001 — never let RAG failure drop a reply
                 print(f"⚠️  RAG retrieval failed: {exc}")
@@ -245,6 +251,8 @@ class KayaEngine:
         recent_lines: Optional[List[str]],
         system_prompt: str,
         max_new_tokens: Optional[int] = None,
+        scope: Optional[str] = None,
+        exclude_from: Optional[str] = None,
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -321,6 +329,8 @@ class KayaEngine:
                 speaker_label=speaker,
                 retrieval=mcfg.get("retrieval", True),
                 top_k=mcfg.get("top_k"),
+                scope=scope,
+                exclude_from=exclude_from,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.

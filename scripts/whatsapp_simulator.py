@@ -62,7 +62,7 @@ def build_event(text, sender_name, is_group, mention=False, reply=False):
 
 def make_responder(use_real, config, config_path):
     if not use_real:
-        def fake(message, speaker, recent_lines):
+        def fake(message, speaker, recent_lines, scope=None, exclude_from=None):
             return f"(mock reply to {speaker}) ouvi: “{message}” · {len(recent_lines)} linhas de histórico"
         return fake
 
@@ -73,7 +73,7 @@ def make_responder(use_real, config, config_path):
         config, config_path, include_uncensored=config.get("chat", {}).get("uncensored_mode", False)
     )
 
-    def real(message, speaker, recent_lines):
+    def real(message, speaker, recent_lines, scope=None, exclude_from=None):
         return engine.generate_reply(message, speaker, recent_lines, system_prompt)
 
     return real

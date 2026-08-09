@@ -32,7 +32,7 @@ def make_adapter(tmp_path, **overrides):
     }
     store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=10)
     client = MockWahaClient(echo=False)
-    adapter = WhatsAppAdapter(lambda m, s, r: "Olá!", client, config, session_store=store)
+    adapter = WhatsAppAdapter(lambda m, s, r, **kw: "Olá!", client, config, session_store=store)
     return adapter, client
 
 

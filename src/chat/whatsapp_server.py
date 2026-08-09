@@ -16,6 +16,7 @@ captured and readable at ``GET /whatsapp/outbox``. This is what
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -82,6 +83,21 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(f"⚠️  Could not load member aliases: {exc}")
 
+# Which chats count as GROUP-WIDE memory, from a gitignored local file (a chat id
+# is still an identifier, so it stays out of git like the contacts and whitelist).
+# Shape: {"shared_chats": ["1203...@g.us"]}. Without this the group's own history
+# is private to it — safe, but it loses the shared memory the bot exists for.
+_scopes_path = Path(config_path).parent / "data" / "whatsapp_shared_chats.json"
+if _scopes_path.exists():
+    try:
+        _shared = _json.loads(_scopes_path.read_text(encoding="utf-8"))
+        _wcfg["shared_chats"] = list(
+            {*(_wcfg.get("shared_chats") or []), *(_shared.get("shared_chats") or [])}
+        )
+        print(f"✓ Loaded {len(_wcfg['shared_chats'])} shared-memory chat id(s)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Could not read {_scopes_path}: {exc}")
+
 # Merge the DM anti-spam whitelist from a gitignored local file (PII stays out of
 # git). Shape: {"allowed": ["351XXXXXXXXX", ...]}. Only used when
 # whatsapp.whitelist.enabled is true; see config.yaml whatsapp.whitelist.
@@ -111,14 +127,21 @@ _system_prompt = build_system_prompt(
 )
 
 
-def _responder(message: str, speaker: str, recent_lines):
+def _responder(message: str, speaker: str, recent_lines, scope=None, exclude_from=None):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
     commands — switching a chat to voice replies, clearing its context — which are
     executed in code rather than generated.
+
+    ``scope`` limits which chat's long-term memory may be retrieved, and
+    ``exclude_from`` stops retrieval re-injecting the recent turns the prompt
+    already carries verbatim.
     """
-    return engine.respond(message, speaker, recent_lines, _system_prompt)
+    return engine.respond(
+        message, speaker, recent_lines, _system_prompt,
+        scope=scope, exclude_from=exclude_from,
+    )
 
 
 if MOCK_MODE:
@@ -198,6 +221,46 @@ def _process(event: dict):
         print("⚠️  GPU busy — dropped a WhatsApp message rather than queueing it.")
     except Exception as exc:  # noqa: BLE001 — never crash the webhook worker
         print(f"⚠️  WhatsApp handler error: {exc}")
+
+
+def _start_ingest_scheduler() -> None:
+    """Catch up on what was missed while down, then keep folding in new messages.
+
+    Runs in a daemon thread, never at message time: embedding competes with
+    answering for the GPU, and a reply must not wait on it. Ingest is idempotent
+    (chunk ids derive from message ids), so a crash mid-run is safe to repeat.
+    """
+    icfg = (_wcfg.get("ingest") or {})
+    if not icfg.get("on_boot", True) and not icfg.get("interval_minutes", 0):
+        return
+
+    from src.data.ingest import run_ingest
+
+    def _loop() -> None:
+        if icfg.get("on_boot", True):
+            try:
+                run_ingest(config)
+            except Exception as exc:  # noqa: BLE001 — ingestion must never take the bot down
+                print(f"⚠️  Boot ingest failed: {exc}")
+        interval = float(icfg.get("interval_minutes", 0) or 0)
+        if interval <= 0:
+            return
+        while True:
+            time.sleep(interval * 60)
+            try:
+                run_ingest(config)
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️  Periodic ingest failed: {exc}")
+
+    threading.Thread(target=_loop, name="kaya-ingest", daemon=True).start()
+    print(
+        f"✓ Ingestion scheduled (boot={icfg.get('on_boot', True)}, "
+        f"every {icfg.get('interval_minutes', 0)} min)"
+    )
+
+
+if not MOCK_MODE:
+    _start_ingest_scheduler()
 
 
 @app.post("/whatsapp/webhook")

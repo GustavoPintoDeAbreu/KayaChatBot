@@ -1,0 +1,167 @@
+"""Memory isolation: a DM must never surface in the group.
+
+Before live ingestion the vector store held only the historical group export, so
+there was nothing to leak and no filtering. Ingesting live conversation is exactly
+what creates the risk — a DM lands in the same collection as the group's history.
+
+These tests pin the asymmetry that makes that safe: shared group memory is
+readable everywhere, a DM is readable only inside that DM.
+"""
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.chat.scope import (
+    DM_PREFIX,
+    GROUP_PREFIX,
+    SHARED,
+    is_readable,
+    readable_scopes,
+    scope_for_chat,
+    scope_filter,
+)
+
+GROUP = "120363000000000000@g.us"
+OTHER_GROUP = "120363999999999999@g.us"
+DM_A = "351911111111@c.us"
+DM_B = "351922222222@c.us"
+
+
+class TestScopeAssignment:
+    def test_the_kaya_group_is_shared_memory(self):
+        assert scope_for_chat(GROUP, shared_chats={GROUP}) == SHARED
+
+    def test_a_dm_is_private_to_itself(self):
+        assert scope_for_chat(DM_A).startswith(DM_PREFIX)
+
+    def test_another_group_is_private_to_itself(self):
+        assert scope_for_chat(OTHER_GROUP, shared_chats={GROUP}).startswith(GROUP_PREFIX)
+
+    def test_different_chats_get_different_scopes(self):
+        assert scope_for_chat(DM_A) != scope_for_chat(DM_B)
+
+    def test_scope_is_stable_for_the_same_chat(self):
+        assert scope_for_chat(DM_A) == scope_for_chat(DM_A)
+
+    def test_no_chat_context_reads_shared(self):
+        """CLI, benchmarks and the web UI have no chat — they get group memory."""
+        assert scope_for_chat(None) == SHARED
+        assert scope_for_chat("") == SHARED
+
+    def test_raw_phone_number_is_not_embedded_in_the_scope(self):
+        """The store already holds message text; no need to index it by number."""
+        assert "351911111111" not in scope_for_chat(DM_A)
+
+
+class TestReadability:
+    def test_a_dm_can_read_shared_group_memory(self):
+        """Intended: asking the bot in private about the group must work."""
+        dm = scope_for_chat(DM_A)
+        assert is_readable(SHARED, dm) is True
+
+    def test_the_group_cannot_read_a_dm(self):
+        """Required: this is the leak the whole design exists to prevent."""
+        dm = scope_for_chat(DM_A)
+        assert is_readable(dm, SHARED) is False
+
+    def test_one_dm_cannot_read_another(self):
+        a, b = scope_for_chat(DM_A), scope_for_chat(DM_B)
+        assert is_readable(b, a) is False
+        assert is_readable(a, b) is False
+
+    def test_a_dm_can_read_itself(self):
+        dm = scope_for_chat(DM_A)
+        assert is_readable(dm, dm) is True
+
+    def test_unscoped_chunks_are_treated_as_shared(self):
+        """Everything predating scoping is the historical group export."""
+        assert is_readable(None, SHARED) is True
+        assert is_readable(None, scope_for_chat(DM_A)) is True
+
+    def test_shared_context_reads_only_shared(self):
+        assert readable_scopes(SHARED) == [SHARED]
+
+
+class TestScopeFilter:
+    def test_shared_filter_is_a_plain_equality(self):
+        assert scope_filter(SHARED) == {"scope": SHARED}
+
+    def test_dm_filter_allows_shared_and_itself_only(self):
+        dm = scope_for_chat(DM_A)
+        where = scope_filter(dm)
+        allowed = where["scope"]["$in"]
+        assert set(allowed) == {SHARED, dm}
+        assert scope_for_chat(DM_B) not in allowed
+
+
+class TestIngestIdempotency:
+    def test_same_messages_produce_the_same_chunk_id(self):
+        """This is what makes a repeated or crashed ingest safe."""
+        from src.data.ingest import chunk_uid
+
+        assert chunk_uid("dm:abc", ["m1", "m2"]) == chunk_uid("dm:abc", ["m1", "m2"])
+
+    def test_different_scopes_produce_different_chunk_ids(self):
+        from src.data.ingest import chunk_uid
+
+        assert chunk_uid("dm:abc", ["m1"]) != chunk_uid("dm:xyz", ["m1"])
+
+    def test_message_uid_is_stable_and_chat_specific(self):
+        from src.data.message_log import message_uid
+
+        assert message_uid("chatA", "m1") == message_uid("chatA", "m1")
+        assert message_uid("chatA", "m1") != message_uid("chatB", "m1")
+
+    def test_chunks_carry_their_scope(self, tmp_path):
+        from src.data.ingest import build_chunks
+
+        msgs = [
+            {"id": "m1", "sender": "Gustavo", "text": "olá", "timestamp": 1700000000},
+            {"id": "m2", "sender": "Rafa", "text": "tudo bem?", "timestamp": 1700000060},
+        ]
+        chunks = build_chunks(msgs, scope="dm:abc")
+        assert chunks and all(c["metadata"]["scope"] == "dm:abc" for c in chunks)
+        assert all(c["metadata"]["source"] == "live" for c in chunks)
+        # timestamps must be present — the recency cutoff depends on them
+        assert chunks[0]["metadata"]["timestamp_start"] <= chunks[0]["metadata"]["timestamp_end"]
+
+
+class TestMessageLogIsolation:
+    def test_scopes_are_separate_files_on_disk(self, tmp_path):
+        """Physical separation, not merely a query-time filter."""
+        from src.data.message_log import MessageLog
+
+        log = MessageLog(base_dir=str(tmp_path))
+        log.append(chat_id=DM_A, message_id="m1", sender="Gustavo",
+                   text="segredo", timestamp=1700000000, scope="dm:aaa")
+        log.append(chat_id=GROUP, message_id="m2", sender="Rafa",
+                   text="publico", timestamp=1700000001, scope=SHARED)
+
+        assert set(log.scopes()) == {"dm:aaa", SHARED}
+        shared_texts = [m["text"] for m in log.read(SHARED)]
+        assert "segredo" not in shared_texts
+
+    def test_relogging_the_same_message_is_ignored(self, tmp_path):
+        """WAHA replays its backlog freely after a reconnect."""
+        from src.data.message_log import MessageLog
+
+        log = MessageLog(base_dir=str(tmp_path))
+        first = log.append(chat_id=DM_A, message_id="m1", sender="G", text="olá",
+                           timestamp=1700000000, scope="dm:aaa")
+        second = log.append(chat_id=DM_A, message_id="m1", sender="G", text="olá",
+                            timestamp=1700000000, scope="dm:aaa")
+        assert first is True and second is False
+        assert len(list(log.read("dm:aaa"))) == 1
+
+    def test_watermark_advances_and_persists(self, tmp_path):
+        from src.data.ingest import IngestState
+
+        state = IngestState(path=str(tmp_path / "state.json"))
+        assert state.watermark("dm:aaa") == 0
+        state.set_watermark("dm:aaa", 1700000100, ingested=3)
+        assert state.watermark("dm:aaa") == 1700000100
+        # survives a reload
+        assert IngestState(path=str(tmp_path / "state.json")).watermark("dm:aaa") == 1700000100

@@ -15,6 +15,7 @@ Routing rules (matching the chosen behaviour):
     **replies to one of the bot's own messages**. Never reply to itself.
 """
 
+import datetime
 import json
 import logging
 import os
@@ -25,6 +26,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
+from src.chat.scope import scope_for_chat
+from src.data.message_log import MessageLog
 from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
@@ -214,6 +217,7 @@ class WhatsAppAdapter:
         config: Dict[str, Any],
         session_store: Optional[KeyedSessionMemory] = None,
         prefs: Optional[ChatPreferences] = None,
+        message_log: Optional[MessageLog] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -245,6 +249,16 @@ class WhatsAppAdapter:
             _phone_from_alt(n) for n in (whitelist_cfg.get("allowed", []) or []) if n
         }
         self.clear_commands = {"/clear", "/limpar"}
+        # Chat ids whose content is group-wide memory (the Kaya group). Everything
+        # else is private to its own chat — see src/chat/scope.py.
+        self.shared_chats = set(wcfg.get("shared_chats", []) or [])
+        # Durable log of every message SEEN (not just replied to) — the group's
+        # ordinary chatter is the most valuable thing to remember, and the bot
+        # only replies when addressed. Consumed by src/data/ingest.py.
+        self.message_log = message_log or MessageLog(
+            wcfg.get("message_log_dir", "data/live_messages")
+        )
+        self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
         self.send_seen = bool(wcfg.get("send_seen", True))
         # Messages older than this (unix seconds) are ignored — set on startup so a
@@ -282,6 +296,9 @@ class WhatsAppAdapter:
         # long-running process doesn't grow unbounded; oldest entries drop first.
         self.sent_messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.sent_messages_max = 500
+        # chat_id -> recent message unix times, so we know where the verbatim
+        # session window begins (used to stop retrieval duplicating it).
+        self._session_times: Dict[str, List[int]] = {}
 
     # ── decision ────────────────────────────────────────────────────────────
     def should_respond(self, msg: InboundMessage) -> bool:
@@ -303,6 +320,34 @@ class WhatsAppAdapter:
             and msg.reply_to_participant in self.bot_jids
         )
         return bool(mentioned or replied)
+
+    def _note_message_time(self, chat_id: str, ts: Optional[int]) -> None:
+        """Track message times so we know where this chat's verbatim window starts.
+
+        Kept in memory only. After a restart the window start is unknown until the
+        chat is active again, which costs nothing: the ingester runs periodically,
+        so the newest messages are not in the vector store yet either.
+        """
+        if not ts:
+            return
+        window = self._session_times.setdefault(chat_id, [])
+        window.append(int(ts))
+        # The session store keeps `history_turns` turns; keep matching timestamps.
+        del window[: max(0, len(window) - self.history_turns)]
+
+    def _session_window_start(self, chat_id: str) -> Optional[str]:
+        """ISO timestamp of the oldest message still held verbatim in this chat.
+
+        Retrieval drops chunks at or after this, so the session store owns recent
+        history and the vector DB owns everything older — the two can never inject
+        the same text. None when this chat has not been active since startup.
+        """
+        window = self._session_times.get(chat_id)
+        if not window:
+            return None
+        return datetime.datetime.fromtimestamp(
+            window[0], tz=datetime.timezone.utc
+        ).replace(tzinfo=None).isoformat()
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
@@ -427,7 +472,23 @@ class WhatsAppAdapter:
                     self.bot_jid = normalized
 
         msg = parse_waha_message(event)
-        if msg is None or not self.should_respond(msg):
+        if msg is None:
+            return None
+
+        # Log every message the bot SEES, before deciding whether to reply. Group
+        # conversation the bot was not addressed in is exactly the memory worth
+        # keeping, and it would otherwise be dropped by the gate below.
+        if self.log_messages and not msg.from_me and msg.text.strip():
+            self.message_log.append(
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                sender=self.resolve_speaker(msg),
+                text=msg.text,
+                timestamp=msg.timestamp,
+                scope=scope_for_chat(msg.chat_id, self.shared_chats),
+            )
+
+        if not self.should_respond(msg):
             return None
 
         speaker = self.resolve_speaker(msg)
@@ -448,8 +509,16 @@ class WhatsAppAdapter:
             self.waha_client.start_typing(msg.chat_id)
 
         recent = self.session_store.recent(msg.chat_id, self.history_turns)
+        # What long-term memory may this chat see, and from when. `recent` already
+        # holds the last turns verbatim, so retrieval is told to skip anything
+        # covering the same window rather than inject it twice.
+        self._note_message_time(msg.chat_id, msg.timestamp)
+        scope = scope_for_chat(msg.chat_id, self.shared_chats)
+        exclude_from = self._session_window_start(msg.chat_id)
         try:
-            result = self.responder(text, speaker, recent)
+            result = self.responder(
+                text, speaker, recent, scope=scope, exclude_from=exclude_from
+            )
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
