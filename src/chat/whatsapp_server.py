@@ -173,8 +173,13 @@ def _stt(url: str, mimetype: str):
 
     if not stt.is_available(config):
         return None
-    return stt.transcribe_url(url, mimetype, config,
-                              api_key=os.environ.get("KAYA_WAHA_API_KEY", ""))
+    return stt.transcribe_url(
+        url, mimetype, config,
+        api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
+        # WAHA reports its files as localhost:3000, which is unreachable from
+        # this container; rewrite to the address we actually talk to it on.
+        waha_base_url=os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""),
+    )
 
 
 adapter = WhatsAppAdapter(_responder, waha_client, config,

@@ -209,3 +209,33 @@ class TestMediaIngest:
         # the photo's own line is excluded; the chatter around it is what gives it meaning
         assert "olha esta" in ctx and "brutal" in ctx
         assert "IMG-1.jpg" not in ctx
+
+
+class TestVoiceNoteFetching:
+    """WAHA reports media at its OWN localhost, which is unreachable from ours."""
+
+    def test_localhost_is_rewritten_to_the_reachable_waha_host(self):
+        from src.chat.stt import rewrite_media_url
+
+        got = rewrite_media_url(
+            "http://localhost:3000/api/files/default/AC05.oga", "http://waha:3000")
+        assert got == "http://waha:3000/api/files/default/AC05.oga"
+
+    def test_path_and_query_are_preserved(self):
+        from src.chat.stt import rewrite_media_url
+
+        got = rewrite_media_url(
+            "http://localhost:3000/api/files/x.oga?token=abc", "http://waha:3000")
+        assert got == "http://waha:3000/api/files/x.oga?token=abc"
+
+    def test_already_correct_url_is_untouched(self):
+        from src.chat.stt import rewrite_media_url
+
+        url = "http://waha:3000/api/files/x.oga"
+        assert rewrite_media_url(url, "http://waha:3000") == url
+
+    def test_missing_inputs_are_safe(self):
+        from src.chat.stt import rewrite_media_url
+
+        assert rewrite_media_url("", "http://waha:3000") == ""
+        assert rewrite_media_url("http://localhost:3000/x", "") == "http://localhost:3000/x"

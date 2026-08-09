@@ -77,11 +77,36 @@ def transcribe_file(path: str, config: Dict[str, Any]) -> Optional[str]:
         return None
 
 
+def rewrite_media_url(url: str, waha_base_url: str) -> str:
+    """Point a WAHA-reported media URL at a host this process can actually reach.
+
+    WAHA describes its own files as ``http://localhost:3000/api/files/...`` —
+    correct inside the WAHA container, useless from ours, where ``localhost`` is
+    this process. Swapping in the configured base URL (``http://waha:3000`` on the
+    compose network) is what makes the download work; without it every voice note
+    fails with "Connection refused" and is silently dropped.
+    """
+    if not url or not waha_base_url:
+        return url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        want = urlsplit(waha_base_url.rstrip("/"))
+        have = urlsplit(url)
+        if not want.netloc or have.netloc == want.netloc:
+            return url
+        return urlunsplit((want.scheme or have.scheme, want.netloc,
+                           have.path, have.query, have.fragment))
+    except ValueError:
+        return url
+
+
 def transcribe_url(url: str, mimetype: str, config: Dict[str, Any],
-                   api_key: str = "") -> Optional[str]:
+                   api_key: str = "", waha_base_url: str = "") -> Optional[str]:
     """Fetch a voice note from WAHA and transcribe it."""
     if not url:
         return None
+    url = rewrite_media_url(url, waha_base_url)
     try:
         import httpx
 
