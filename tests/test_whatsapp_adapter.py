@@ -356,6 +356,7 @@ def make_routed_adapter(tmp_path, reply, **overrides):
 
 def test_audio_command_sets_sticky_preference(tmp_path):
     adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    adapter.audio_reply_enabled = True   # TTS present (Phase 4)
     assert adapter.output_mode(ALICE) == "text"
 
     result = adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
@@ -368,6 +369,7 @@ def test_output_preference_is_per_chat_and_survives_restart(tmp_path):
     from src.chat.memory import ChatPreferences
 
     adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    adapter.audio_reply_enabled = True   # TTS present (Phase 4)
     adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
 
     # a different chat keeps the default
@@ -379,6 +381,7 @@ def test_output_preference_is_per_chat_and_survives_restart(tmp_path):
 
 def test_text_command_switches_back(tmp_path):
     adapter = make_routed_adapter(tmp_path, RoutedReply(command="audio"))
+    adapter.audio_reply_enabled = True   # TTS present (Phase 4)
     adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
 
     adapter.responder = lambda message, speaker, recent: RoutedReply(command="text")
@@ -390,6 +393,7 @@ def test_text_command_switches_back(tmp_path):
 def test_command_confirmation_is_not_model_generated(tmp_path):
     """Confirmations come from code, so they cannot drift or be refused."""
     adapter = make_routed_adapter(tmp_path, RoutedReply(text="", command="audio"))
+    adapter.audio_reply_enabled = True   # TTS present (Phase 4)
     result = adapter.handle_event(dm_event("só áudio"), system_prompt="")
     assert result["reply"] == adapter.command_replies["audio"]
 
@@ -429,3 +433,40 @@ def test_unknown_pushname_falls_back_to_pushname(tmp_path):
     )
     msg = parse_waha_message(dm_event("olá", sender="351999000222@c.us", name="Estranho"))
     assert adapter.resolve_speaker(msg) == "Estranho"
+
+
+def test_audio_command_is_honest_when_tts_missing(tmp_path):
+    """Confirming voice replies we cannot produce is worse than declining.
+
+    Without TTS the command must NOT store a preference either — a stored mode
+    that changes nothing is how "it said yes and then kept typing" happens.
+    """
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(command="audio"),
+    )
+    assert adapter.audio_reply_enabled is False
+
+    result = adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
+
+    assert result["reply"] == adapter.command_replies["audio_unavailable"]
+    assert adapter.output_mode(ALICE) == "text"   # not stored
+
+
+def test_audio_command_works_once_tts_is_enabled(tmp_path):
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(command="audio"),
+    )
+    adapter.audio_reply_enabled = True
+
+    result = adapter.handle_event(dm_event("responde só em áudio"), system_prompt="")
+
+    assert result["reply"] == adapter.command_replies["audio"]
+    assert adapter.output_mode(ALICE) == "audio"
+
+
+def test_text_command_still_works_without_tts(tmp_path):
+    """Going back to text is always honourable, TTS or not."""
+    adapter = make_routed_adapter(tmp_path, RoutedReply(command="text"))
+    result = adapter.handle_event(dm_event("volta a texto"), system_prompt="")
+    assert result["reply"] == adapter.command_replies["text"]
+    assert adapter.output_mode(ALICE) == "text"

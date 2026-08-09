@@ -55,9 +55,16 @@ _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer
 BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me".
 MIXED — chat that references a person or event but is not really asking to be informed. Examples: "o Rafa outra vez a fazer disso", "ainda me lembro daquele jantar".
 FACTUAL — a genuine request for information, memory or detail about the group, its members, events, or the world. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?".
-CMD_AUDIO — asking the bot to reply with voice/audio from now on.
-CMD_TEXT — asking the bot to go back to replying with text.
+CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
+CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
+
+A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
+  "o áudio estava mau" -> BANTER (an opinion about a recording)
+  "não gosto de áudios" -> BANTER (a preference, not an instruction)
+  "ouvi o teu áudio ontem" -> MIXED (talking about a past message)
+  "manda um áudio a explicar isso" -> FACTUAL (a one-off request, not a standing rule)
+  "audio" -> BANTER (a bare word, not an instruction)
 
 Reply with the token only."""
 

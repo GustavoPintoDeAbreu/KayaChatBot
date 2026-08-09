@@ -288,6 +288,16 @@ chat:
       max_new_tokens: 256
       system_prompt: null   # null = use data.system_prompt (the detailed one)
 
+  # ── Audio (Phase 4) ─────────────────────────────────────────────────────────
+  # Capability gates. While these are false the bot must NOT promise voice
+  # replies: confirming "passo a responder-te por áudio" and then answering in
+  # text forever is worse than saying it cannot do it yet. The routed CMD_AUDIO
+  # is still recognised — it just answers honestly and does not store a
+  # preference that would silently do nothing.
+  audio:
+    reply_enabled: false        # TTS (Piper pt_PT) — Phase 4
+    transcribe_enabled: false   # STT (faster-whisper) — Phase 4
+
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.
   # Toggle to false to revert to default (filtered) behavior instantly.

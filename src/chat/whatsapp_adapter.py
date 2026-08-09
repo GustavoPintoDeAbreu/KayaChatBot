@@ -265,7 +265,15 @@ class WhatsAppAdapter:
             "audio": "Feito — passo a responder-te por áudio.",
             "text": "Feito — volto a responder por texto.",
             "clear": "Contexto limpo — esqueci as mensagens recentes desta conversa.",
+            # Until TTS exists, saying yes and then answering in text forever is
+            # worse than saying no. See chat.audio.reply_enabled.
+            "audio_unavailable": "Ainda não sei responder por áudio — o Gustavo está a tratar disso. Por agora continuo a escrever.",
         }
+        # Capability gate: the routed command is still recognised, but without TTS
+        # the preference is NOT stored, because it would silently do nothing.
+        self.audio_reply_enabled = bool(
+            ((config.get("chat", {}) or {}).get("audio", {}) or {}).get("reply_enabled", False)
+        )
         # Whether to attribute 👍/👎 emoji reactions on the bot's own replies as
         # feedback. The actual logging happens in the server; the adapter only tracks
         # which sent message ids are the bot's and resolves a reaction back to them.
@@ -298,6 +306,11 @@ class WhatsAppAdapter:
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
+        if command == ChatPreferences.OUTPUT_AUDIO and not self.audio_reply_enabled:
+            # Don't confirm a mode we cannot honour, and don't persist it either —
+            # a stored preference that changes nothing is how "it said yes and
+            # then kept typing" happens.
+            return self.command_replies["audio_unavailable"]
         if command in (ChatPreferences.OUTPUT_AUDIO, ChatPreferences.OUTPUT_TEXT):
             self.prefs.set_output_mode(chat_id, command)
         elif command == "clear":
