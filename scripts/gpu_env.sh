@@ -35,8 +35,16 @@ _gpu_env_resolve() {
   local uuid_key="KAYA_GPU_${role}_UUID" idx_key="KAYA_GPU_${role}"
   local uuid idx recorded
 
-  uuid="$(grep -E "^${uuid_key}=" "$envfile" 2>/dev/null | tail -1 | cut -d= -f2-)"
-  recorded="$(grep -E "^${idx_key}=" "$envfile" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  # `|| true` matters: callers run with `set -e`, and a grep miss returns 1,
+  # which would abort the whole deploy at the assignment.
+  uuid="$(grep -E "^${uuid_key}=" "$envfile" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+  recorded="$(grep -E "^${idx_key}=" "$envfile" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+
+  # Back-compat with the first iteration of this pinning, where the index slot
+  # itself held a UUID. Treat that as the authoritative UUID.
+  if [[ -z "$uuid" && "$recorded" == GPU-* ]]; then
+    uuid="$recorded"; recorded=""
+  fi
 
   if [[ -z "$uuid" ]]; then
     # No UUID pinned — leave whatever .env says (possibly empty -> `all`).
@@ -53,7 +61,7 @@ _gpu_env_resolve() {
 
   if [[ "$idx" != "$recorded" ]]; then
     echo "ℹ️  ${role}: GPU index moved ${recorded:-<unset>} → ${idx} (UUID unchanged); updating .env"
-    if grep -qE "^${idx_key}=" "$envfile"; then
+    if grep -qE "^${idx_key}=" "$envfile" 2>/dev/null; then
       sed -i -E "s|^${idx_key}=.*|${idx_key}=${idx}|" "$envfile"
     else
       printf '%s=%s\n' "$idx_key" "$idx" >> "$envfile"
