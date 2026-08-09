@@ -57,6 +57,16 @@ echo "🔖 Deploying commit $KAYA_VERSION"
 echo "🛑 Releasing conflicting container names/ports ..."
 docker rm -f kaya-whatsapp kaya-waha 2>/dev/null || true
 
+# WAHA tracks WhatsApp's protocol, which moves fast, and the compose file pins the
+# floating `:latest` tag — which only advances when something actually pulls it.
+# A stale image cannot complete the handshake and fails as an endless
+# "Connection Failure" login loop that looks exactly like an expired login,
+# tempting a needless QR re-scan. Refresh it on every deploy.
+echo "🔄 Refreshing the WAHA image (stale WAHA looks like a broken login) ..."
+docker pull devlikeapro/waha:latest >/dev/null 2>&1 \
+  && echo "   ✓ WAHA image up to date" \
+  || echo "   ⚠️  pull failed — continuing with the cached image" >&2
+
 echo "🔨 Building image ..."
 docker compose build kaya-prod
 

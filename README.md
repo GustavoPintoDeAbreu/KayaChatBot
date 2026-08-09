@@ -1,6 +1,18 @@
 # KayaChatBot
 
-An AI assistant bot for the **Kaya** Portuguese friend group chat, trained on real WhatsApp conversations using LoRA fine-tuning. Supports multiple model profiles; production currently runs Gemma 4 E4B (heretic base) trained at 4096 context, with Qwen3-14B available as an alternative profile. All of the app runs on a single RTX 3090 GPU.
+An AI assistant bot for the **Kaya** Portuguese friend group chat. It answers from
+the group's collective memory via always-on RAG over real WhatsApp history.
+
+**Production runs a stock `gemma-4-12b-it` at Q6_K with no fine-tune**, served by
+llama.cpp with a 32K context window (RAG budget 14,000 tokens). An August 2026
+bake-off across 14 serving configurations found the stock 12B beat the previously
+fine-tuned Gemma 4 E4B on every judged dimension, and that the WhatsApp LoRA added
+nothing on an identical base — so the adapter was retired from the live path. The
+fine-tuning pipeline remains fully intact for re-evaluation.
+
+The box has **2× RTX 3090 (24 GB each, no NVLink)**: prod owns one card, and the
+other stays free for dev, training and other projects. They are two independent
+devices, not a 48 GB pool — see `CLAUDE.md` for what that does and does not allow.
 
 ## 🎯 Overview
 
@@ -13,7 +25,7 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
 - **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
-- Fine-tunes the active model profile (Gemma 4 E4B by default) using LoRA with 4-bit quantization
+- Fine-tunes a chosen model profile using LoRA with 4-bit quantization (not used by the live model)
 - Efficient training on consumer GPUs (RTX 3090 24 GB; ~11 GB VRAM for gemma4-e4b, ~15 GB for qwen3-14b)
 
 ## 🤖 RAG & Knowledge System
@@ -95,7 +107,7 @@ KayaChatBot/
 │   ├── all_messages_cleaned.jsonl    # Cleaned message history
 │   ├── rag_db/                       # ChromaDB persistent storage
 │   └── wpp/                          # Raw WhatsApp exports
-├── models/                           # Trained LoRA adapters (gitignored)
+├── models/                           # Adapters, tokenizers + GGUFs (gitignored)
 ├── config.yaml                       # Central configuration
 ├── run_full_pipeline.py              # Pipeline orchestrator
 ├── Dockerfile

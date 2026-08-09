@@ -40,7 +40,16 @@ RAG (GPU) ──► generation backend
 - Serving a model larger than 24 GB: set `KAYA_PROD_GGUF` (and `KAYA_PROD_CTX`) so
   the `llama` service loads it; verify with `docker exec kaya-llama nvidia-smi -L`
   (must list both cards) and check VRAM lands on both.
-- **Inference backend:** prod runs the `gguf` backend (`KAYA_INFERENCE_BACKEND=gguf` on `kaya-prod`), so generation happens in the `llama` compose service (`gguf` profile) serving `models/gguf/kaya-wpp-Q6_K.gguf`. `deploy_prod.sh` starts it automatically. Roll back with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Dev defaults to `hf` (in-process) — no `llama` service needed.
+- **Inference backend:** both prod and dev run `gguf`. Prod generates in the `llama`
+  compose service (`gguf` profile) serving `models/gguf/gemma-4-12b-it-Q6_K.gguf`
+  at `-c 32768`; `deploy_prod.sh` starts it automatically. Dev uses its own
+  `llama-bench` server (`bench` profile) on the dev card, so the two never share a
+  model. `hf` is no longer a usable fallback for the live profile — it has no
+  adapter to load; roll back to `gemma4-e4b-seq4096-wpp` first if you need it.
+- **Live model:** stock `gemma-4-12b-it` Q6_K, no LoRA (see CLAUDE.md for why).
+  Selected by `KAYA_PROD_GGUF` / `KAYA_PROD_CTX` in `~/kaya-prod/.env`.
+  **Rollback:** set `active_model_profile: gemma4-e4b-seq4096-wpp` and
+  `KAYA_PROD_GGUF=kaya-wpp-Q6_K.gguf`; both old artifacts are retained.
 
 ---
 
@@ -221,5 +230,5 @@ scripts/app_up.sh dev
   isn't up. `deploy_prod.sh` starts it, or manually
   `docker compose --profile gguf up -d llama`; check `docker logs kaya-llama` for
   `model loaded`. The app reaches it at `http://llama:8080` on the compose network.
-  Requires `models/gguf/kaya-wpp-Q6_K.gguf` to exist (shared via the `models`
+  Requires `models/gguf/gemma-4-12b-it-Q6_K.gguf` to exist (shared via the `models`
   symlink). To bypass entirely, redeploy with `KAYA_INFERENCE_BACKEND=hf`.

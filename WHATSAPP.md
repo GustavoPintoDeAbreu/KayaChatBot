@@ -4,7 +4,7 @@ Make the Kaya bot reachable on WhatsApp as a **DM bot** and as a **group
 participant** (replies only when @-mentioned or replied to). Self-hosted: a
 **WAHA** container links a dedicated number and forwards messages over a webhook
 to a Python bridge that runs in the same process as the existing Gradio UI, so
-the model is loaded **once** on the single GPU.
+the model is loaded **once**, on the prod GPU.
 
 ```
 WhatsApp ⇄ WAHA container (Node, Docker)  ──webhook POST──▶  whatsapp_server.py
@@ -91,3 +91,65 @@ curl -s localhost:7860/whatsapp/outbox
 - **Privacy:** in a group, every member's messages pass through the bot and are
   logged to `data/feedback/` + stored as per-chat history. Tell the group.
 ```
+
+
+## Troubleshooting
+
+### The bot answers on the web UI but not on WhatsApp
+
+Check these in order — the first two look identical from the outside but have
+completely different fixes.
+
+**1. Is the WAHA image stale?** This is the most likely cause and the least
+obvious. `docker-compose.yml` pins the floating `devlikeapro/waha:latest` tag,
+which only advances when something actually pulls it. WAHA tracks WhatsApp's
+protocol, which changes often, so an image left alone for a month or two stops
+being able to complete the handshake. The symptom is a session that never leaves
+`STARTING` and logs a loop of:
+
+```
+session:default - connected to WA
+session:default - logging in...
+session:default - connection errored  Error: Connection Failure
+session:default - Session stuck in STARTING status, force stopping the session.
+```
+
+That reads exactly like an expired login and tempts a pointless QR re-scan. It is
+not — the stored credentials are fine. Fix:
+
+```bash
+docker pull devlikeapro/waha:latest
+cd ~/kaya-prod && docker compose --profile prod up -d --force-recreate waha
+```
+
+`deploy_prod.sh` now pulls on every deploy so this cannot silently rot again.
+
+**2. Is it still replaying history?** After any reconnect, WAHA re-syncs and can
+push *thousands* of old messages through the webhook at ~10/second. New messages
+queue behind that flood, so the bot looks dead for minutes. `adapter.ignore_before_ts`
+(set to process start in `whatsapp_server.py`) makes the bot skip all of them
+rather than spam the group with days-old replies. Watch it drain:
+
+```bash
+docker logs kaya-waha 2>&1 | grep -c WebhookSender   # rising fast = still syncing
+curl -s -H "X-Api-Key: $KEY" http://127.0.0.1:3000/api/sessions   # want status WORKING
+```
+
+**3. Is the sender whitelisted?** DMs are answered only for numbers in
+`data/whatsapp_whitelist.json`. Note that prod has its **own** `data/` directory
+(not a symlink — it holds the WAHA session), so its whitelist can drift from the
+dev copy. Compare them.
+
+**4. Still nothing?** Turn on raw event logging, send one message, then turn it
+back off — it logs full message bodies, so do not leave it running:
+
+```bash
+echo 'KAYA_WHATSAPP_DEBUG=1' >> ~/kaya-prod/.env
+cd ~/kaya-prod && docker compose --profile prod up -d --force-recreate kaya-prod
+docker logs kaya-prod 2>&1 | grep wpp-debug | tail -2
+```
+
+Useful detail when reading those events: senders now arrive **@lid-addressed**
+(`64622145081581@lid`) rather than as a phone number. The whitelist still matches
+because NOWEB also sends the real phone in `_data.key.participantAlt` — so grep
+for the `@lid`, not the phone, when tracing one person's messages.

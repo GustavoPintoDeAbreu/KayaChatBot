@@ -6,7 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
 
-**Core invariant**: RAG is always-on. The model must never answer from fine-tuned weights alone — every message retrieves context first.
+**Core invariant**: RAG is always-on. Every message retrieves context first — the
+model must never answer from weights alone.
+
+**Live model (since 2026-08-08): a STOCK `gemma-4-12b-it` at Q6_K, with no LoRA.**
+A 14-config bake-off found the stock 12B beat the fine-tuned E4B on every judged
+dimension (xai-judged golden 3.846 vs 3.068, knowledge 2.94 vs 1.84, refusals 0%
+vs 15%), and a control run — same base, same quant, with and without the WhatsApp
+LoRA — showed the fine-tune contributes nothing (−0.045, inside the ±0.07 noise
+band). RAG supplies the group facts; a capable base supplies the voice. Treat "we
+must fine-tune" as a claim needing evidence, not a given. Full results:
+`reports/benchmarks/bakeoff_20260808T013135Z.json`.
 
 **Privacy invariant**: No group data leaves the box. Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles).
 
@@ -90,7 +100,12 @@ Raw chat data (data/wpp/)
     → format_direct_training.py and/or generate_local_synthetic.py (local teacher) → data/synthetic_local.jsonl
     → merge_datasets.py → data/train_synthetic.jsonl, data/val_synthetic.jsonl
     → train.py → models/kaya_<version>/  (LoRA adapter)
-    → chat.py (loads adapter + RAG at runtime)
+    → scripts/export_gguf.py → models/gguf/<name>.gguf  (merge + quantize)
+    → chat.py / web_app.py (tokenizer + RAG at runtime; weights in llama.cpp)
+
+NOTE: the live path no longer uses this pipeline. Prod serves a stock GGUF with
+no adapter — the training branch above is only exercised when evaluating whether
+a fine-tune helps (it currently does not).
 ```
 
 ### RAG System (`src/chat/retriever.py`)
@@ -104,7 +119,7 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 | `both` | Both of the above |
 | `none` | Baseline — conversation history only |
 
-`ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.60`, tuned for Portuguese subword inflation).
+`ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` (**14000** since 2026-08-08, up from 2500) by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.60`, tuned for Portuguese subword inflation).
 
 **Date-aware facts (mixed rule).** Knowledge facts carry optional date metadata: `event_date_hint` (an explicit temporal phrase pulled from the source text), `source_date_start`/`source_date_end` (the timestamp range of the source messages), and `last_updated`. These are populated by `generate_knowledge_base.py` and embedded into ChromaDB metadata by `build_vector_db.py`. The retriever only surfaces dates when `_has_temporal_intent(query)` matches a timing question (PT/EN keywords); otherwise normal answers stay date-free. When surfacing, an explicit `event_date_hint` wins over the message timestamps (relative age rendered by `_relative_age`). `chat.py`/`web_app.py` also append `Hoje é <date>.` to the runtime system prompt so the model can reason about recency.
 
@@ -152,13 +167,13 @@ traffic stages through system RAM.
 | Backend | What runs |
 |---|---|
 | `hf` | Unsloth `FastModel` / PEFT model **in-process** on the GPU (default). |
-| `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/kaya-wpp-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model at parity quality. This is the only backend that can serve a model larger than one card. |
+| `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/gemma-4-12b-it-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model. This is the only backend that can serve a model larger than one card, and the only one that works with the live profile at all (it has no adapter). |
 
 `KAYA_LLAMA_URL` overrides `inference.gguf.server_url` (env wins), which is how a
 benchmark run targets the `llama-bench` candidate server on `127.0.0.1:8081`
 while leaving what prod resolves untouched.
 
-Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (default `hf`). **Prod runs `gguf`** (env set on the `kaya-prod` compose service); local dev stays `hf`. The gguf file is gitignored — rebuild it by merging the active adapter → GGUF (`convert_hf_to_gguf.py`, run under the venv's transformers) → `llama-quantize Q6_K`. `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS. The CLI `chat.py` is hf-only (dev tool).
+Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (**default `gguf` since 2026-08-08**). Both prod and dev run `gguf`; `hf` only works with a profile that owns an adapter directory, and the live profile does not. GGUF files are gitignored — build one from a fine-tuned adapter with `scripts/export_gguf.py` (merge → `convert_hf_to_gguf.py` → `llama-quantize`). `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS. The CLI `chat.py` is hf-only (dev tool).
 
 ### Config System (`src/config_loader.py`)
 
