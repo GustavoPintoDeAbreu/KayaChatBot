@@ -228,6 +228,8 @@ class WhatsAppAdapter:
         message_log: Optional[MessageLog] = None,
         tts_synthesize: Optional[Callable[[str], Optional[bytes]]] = None,
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
+        image_generate: Optional[Callable[..., Optional[bytes]]] = None,
+        fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -259,6 +261,16 @@ class WhatsAppAdapter:
             _phone_from_alt(n) for n in (whitelist_cfg.get("allowed", []) or []) if n
         }
         self.clear_commands = {"/clear", "/limpar"}
+        # Making a picture takes minutes, so it never happens on the webhook
+        # thread: the bot acknowledges, works in the background and sends the
+        # result when it exists. None disables the feature entirely.
+        self.image_generate = image_generate
+        self.fetch_media = fetch_media
+        self.config = config
+        # An edit needs a photo. Usually it is attached to the request, but "põe-lhe
+        # uma coroa" right after someone posts a picture is just as natural, so the
+        # last photo seen in each chat is remembered as the implicit subject.
+        self._last_photo: Dict[str, Dict[str, str]] = {}
         # Chat ids whose content is group-wide memory (the Kaya group). Everything
         # else is private to its own chat — see src/chat/scope.py.
         self.shared_chats = set(wcfg.get("shared_chats", []) or [])
@@ -292,6 +304,13 @@ class WhatsAppAdapter:
             # Until TTS exists, saying yes and then answering in text forever is
             # worse than saying no. See chat.audio.reply_enabled.
             "audio_unavailable": "Ainda não sei responder por áudio — o Gustavo está a tratar disso. Por agora continuo a escrever.",
+            # An edit takes minutes, so the acknowledgement has to set the
+            # expectation — silence for five minutes reads as a broken bot.
+            "image_editing": "Dá-me uns minutos que isto demora — já mando.",
+            "image_generating": "Vou fazer isso, dá-me um bocado.",
+            "image_busy": "Estou já a fazer outra imagem — manda daqui a bocado.",
+            "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
+            "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -386,6 +405,88 @@ class WhatsAppAdapter:
         return datetime.datetime.fromtimestamp(
             window[0], tz=datetime.timezone.utc
         ).replace(tzinfo=None).isoformat()
+
+    def _note_photo(self, msg: "InboundMessage") -> None:
+        """Remember the last photo seen in a chat, as the implicit edit subject."""
+        if msg.media_url and (msg.media_mimetype or "").startswith("image/"):
+            self._last_photo[msg.chat_id] = {
+                "url": msg.media_url, "mimetype": msg.media_mimetype,
+                "sender": msg.sender_name or msg.sender_phone,
+            }
+
+    def _handle_image_request(self, msg: "InboundMessage", speaker: str,
+                              text: str) -> Dict[str, Any]:
+        """Acknowledge now, make the picture on a background thread, send it later.
+
+        Generation takes minutes. Holding the webhook open for that would stall
+        every other message in the group, so the only thing that happens inline is
+        the acknowledgement.
+        """
+        import threading
+
+        from src.chat import imagegen
+
+        scope = scope_for_chat(msg.chat_id, self.shared_chats)
+        # Declining is better than promising. A chat that may not ask, or a box
+        # with the feature switched off, gets told so rather than left waiting for
+        # a picture that is never coming.
+        if self.image_generate is None or not imagegen.allowed_here(self.config, scope):
+            reply = self.command_replies.get("image_not_allowed", "")
+            if reply:
+                self._deliver(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "command": "image", "image": "not_allowed"}
+
+        if imagegen.is_busy():
+            reply = self.command_replies.get("image_busy", "")
+            if reply:
+                self._deliver(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "command": "image", "image": "busy"}
+
+        # An attached photo wins over the last one seen; with neither, the request
+        # is a text-to-image one.
+        source = None
+        if msg.media_url and (msg.media_mimetype or "").startswith("image/"):
+            source = {"url": msg.media_url, "mimetype": msg.media_mimetype}
+        elif msg.chat_id in self._last_photo:
+            source = self._last_photo[msg.chat_id]
+        if source and self.fetch_media is None:
+            source = None
+        mode = "edit" if source else "generate"
+
+        reply = self.command_replies.get(
+            "image_editing" if mode == "edit" else "image_generating", "")
+        if reply:
+            self._deliver(msg.chat_id, reply)
+
+        def work() -> None:
+            path = None
+            try:
+                if source:
+                    path = self.fetch_media(source["url"], source.get("mimetype", ""))
+                    if not path:
+                        self._deliver(msg.chat_id,
+                                      self.command_replies.get("image_failed", ""))
+                        return
+                image = self.image_generate(mode=mode, prompt=text, image_path=path)
+                if not image:
+                    self._deliver(msg.chat_id,
+                                  self.command_replies.get("image_failed", ""))
+                    return
+                self.waha_client.send_image(
+                    msg.chat_id, image,
+                    reply_to=msg.message_id if msg.is_group else None)
+            except Exception as exc:  # noqa: BLE001 — a worker crash must not kill the thread pool
+                logger.warning("image job failed: %s", exc)
+                self._deliver(msg.chat_id, self.command_replies.get("image_failed", ""))
+            finally:
+                if path:
+                    Path(path).unlink(missing_ok=True)
+
+        threading.Thread(target=work, name="kaya-imagegen", daemon=True).start()
+        return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                "command": "image", "image": mode}
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
@@ -535,6 +636,8 @@ class WhatsAppAdapter:
                 scope=scope_for_chat(msg.chat_id, self.shared_chats),
             )
 
+        self._note_photo(msg)
+
         if not self.should_respond(msg):
             return None
 
@@ -584,6 +687,9 @@ class WhatsAppAdapter:
         deliver_as_voice_once = command == "audio_once"
         if deliver_as_voice_once:
             command = None
+
+        if command == "image":
+            return self._handle_image_request(msg, speaker, text)
 
         if command:
             reply = self._apply_command(msg.chat_id, command)

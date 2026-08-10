@@ -40,6 +40,7 @@ CMD_AUDIO = "audio"
 CMD_AUDIO_ONCE = "audio_once"
 CMD_TEXT = "text"
 CMD_CLEAR = "clear"
+CMD_IMAGE = "image"
 
 # The router answers with one of these bare tokens.
 _LABELS = {
@@ -50,6 +51,7 @@ _LABELS = {
     "CMD_AUDIO_ONCE": (None, CMD_AUDIO_ONCE),
     "CMD_TEXT": (None, CMD_TEXT),
     "CMD_CLEAR": (None, CMD_CLEAR),
+    "CMD_IMAGE": (None, CMD_IMAGE),
 }
 
 _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens and nothing else:
@@ -61,6 +63,7 @@ CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, 
 CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
 CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing the default. Examples: "explica isso num áudio", "manda um áudio a explicar", "responde a esta por voz".
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
+CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
 
 A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
   "o áudio estava mau" -> BANTER (an opinion about a recording)
@@ -68,6 +71,12 @@ A command must be an instruction about how the bot should reply FROM NOW ON. Mer
   "ouvi o teu áudio ontem" -> MIXED (talking about a past message)
   "manda um áudio a explicar isso" -> CMD_AUDIO_ONCE (answer THIS one by voice, without changing the default)
   "audio" -> BANTER (a bare word, not an instruction)
+
+The same rule applies to pictures. Only an actual request to produce or alter one is CMD_IMAGE:
+  "que foto marada" -> BANTER (a reaction to an image)
+  "quem está nesta foto?" -> FACTUAL (a question ABOUT an image, not a request to change it)
+  "manda a foto do jantar" -> FACTUAL (asking for an existing photo, not a new one)
+  "põe-me a andar de camelo" -> CMD_IMAGE (asking for an edit)
 
 Reply with the token only."""
 

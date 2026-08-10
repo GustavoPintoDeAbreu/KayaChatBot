@@ -182,8 +182,45 @@ def _stt(url: str, mimetype: str):
     )
 
 
+def _fetch_media(url: str, mimetype: str):
+    """Download an inbound photo to a temp path, or None. Same localhost rewrite
+    as voice notes: WAHA describes its files by its own hostname."""
+    import tempfile
+
+    import httpx
+
+    from src.chat.stt import rewrite_media_url
+
+    url = rewrite_media_url(
+        url, os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""))
+    api_key = os.environ.get("KAYA_WAHA_API_KEY", "")
+    try:
+        headers = {"X-Api-Key": api_key} if api_key else {}
+        with httpx.Client(timeout=60.0, headers=headers, follow_redirects=True) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            payload = response.content
+    except Exception as exc:  # noqa: BLE001 — a failed fetch must not raise
+        print(f"⚠️  could not fetch image {url}: {exc}")
+        return None
+
+    suffix = ".png" if "png" in (mimetype or "") else ".jpg"
+    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    handle.write(payload)
+    handle.close()
+    return handle.name
+
+
+def _imagegen(mode: str, prompt: str, image_path=None):
+    """Make one image, or None. Blocking — the adapter calls it off-thread."""
+    from src.chat import imagegen
+
+    return imagegen.run(config, prompt, mode=mode, image_path=image_path)
+
+
 adapter = WhatsAppAdapter(_responder, waha_client, config,
-                          tts_synthesize=_tts, transcribe=_stt)
+                          tts_synthesize=_tts, transcribe=_stt,
+                          image_generate=_imagegen, fetch_media=_fetch_media)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 

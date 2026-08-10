@@ -635,3 +635,151 @@ def test_voice_paths_fall_back_to_the_portuguese_voice(tmp_path):
                                  "voices": {"en": str(tmp_path / "missing.onnx")}}}}
     assert tts.is_available(config) is True
     assert tts._voice_paths(config)["pt"] == tts.DEFAULT_VOICES["pt"]
+
+
+# ── image generation / editing (Phase 5) ─────────────────────────────────────
+# Making a picture takes minutes, so the webhook must return immediately and the
+# image arrive later. These pin the acknowledgement, the choice of subject, and
+# the refusals — a bot that promises a picture it will never send is worse than
+# one that says no.
+def make_image_adapter(tmp_path, reply, imagegen_result=b"PNGDATA", **overrides):
+    from src.chat.memory import ChatPreferences
+
+    config = {
+        "whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                     "shared_chats": [GROUP], **overrides},
+        "chat": {"imagegen": {"enabled": True, "allowed_scopes": ["shared"]}},
+    }
+    calls = []
+
+    def fake_imagegen(mode, prompt, image_path=None):
+        calls.append({"mode": mode, "prompt": prompt, "image_path": image_path})
+        return imagegen_result
+
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: reply,
+        waha_client=MockWahaClient(echo=False),
+        config=config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        image_generate=fake_imagegen,
+        fetch_media=lambda url, mimetype: str(tmp_path / "photo.jpg"),
+    )
+    adapter.imagegen_calls = calls
+    return adapter
+
+
+def _wait_for_image(adapter, timeout=5.0):
+    """The image is produced on a background thread; wait for it to land."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any("image_bytes" in s for s in adapter.waha_client.sent):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def image_group_event(text, media_url="", mimetype=""):
+    event = group_event(text, mention=True)
+    if media_url:
+        event["payload"]["media"] = {"url": media_url, "mimetype": mimetype}
+    return event
+
+
+def test_image_request_acknowledges_immediately(tmp_path):
+    """Five minutes of silence reads as a broken bot."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    result = adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                                  system_prompt="")
+
+    assert result["command"] == "image"
+    assert result["reply"], "the request must be acknowledged before the work starts"
+    assert _wait_for_image(adapter)
+
+
+def test_request_without_a_photo_generates_from_text(tmp_path):
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                         system_prompt="")
+
+    assert _wait_for_image(adapter)
+    assert adapter.imagegen_calls[0]["mode"] == "generate"
+    assert adapter.imagegen_calls[0]["image_path"] is None
+
+
+def test_attached_photo_is_edited(tmp_path):
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    assert _wait_for_image(adapter)
+    assert adapter.imagegen_calls[0]["mode"] == "edit"
+    assert adapter.imagegen_calls[0]["image_path"]
+
+
+def test_the_last_photo_in_the_chat_is_the_implicit_subject(tmp_path):
+    """"põe-lhe uma coroa" right after someone posts a picture must edit it."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    # A photo posted to the group without addressing the bot: not replied to, but
+    # seen — and it is what the next request refers to.
+    adapter.handle_event(image_group_event("olhem esta", media_url="http://waha:3000/f.jpg",
+                                           mimetype="image/jpeg"),
+                         system_prompt="")
+    adapter.handle_event(image_group_event("põe-lhe uma coroa"), system_prompt="")
+
+    assert _wait_for_image(adapter)
+    assert adapter.imagegen_calls[-1]["mode"] == "edit"
+
+
+def test_a_dm_may_not_ask_for_an_edit(tmp_path):
+    """Editing puts a real member's face in an invented scene; the group opted in
+    to having the bot in the room, a random DM did not."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    result = adapter.handle_event(dm_event("põe o Rafa de rei"), system_prompt="")
+
+    assert result["image"] == "not_allowed"
+    assert not adapter.imagegen_calls
+    assert "só faço imagens no grupo" in adapter.waha_client.sent[-1]["text"].lower()
+
+
+def test_failed_generation_says_so(tmp_path):
+    """Silence after a promise is the failure mode to avoid."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
+
+    import time
+    deadline = time.time() + 5.0
+    while time.time() < deadline and len(adapter.waha_client.sent) < 2:
+        time.sleep(0.02)
+    assert "não consegui" in adapter.waha_client.sent[-1]["text"].lower()
+
+
+def test_without_a_worker_the_bot_declines(tmp_path):
+    """image_generate=None (feature off) must decline, not hang."""
+    from src.chat.memory import ChatPreferences
+
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: RoutedReply(
+            command="image", mode="factual"),
+        waha_client=MockWahaClient(echo=False),
+        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                             "shared_chats": [GROUP]},
+                "chat": {"imagegen": {"enabled": True, "allowed_scopes": ["shared"]}}},
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+    )
+
+    result = adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
+
+    assert result["image"] == "not_allowed"

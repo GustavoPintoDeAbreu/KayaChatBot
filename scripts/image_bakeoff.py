@@ -173,19 +173,22 @@ def fit_source(path: str, longest: int = 1024):
 # residual stream, so their error lands directly in pixel space rather than being
 # averaged over many layers. Keeping them in bf16 costs a few hundred MB.
 _KEEP_BF16 = ["img_in", "txt_in", "proj_out", "norm_out", "time_text_embed"]
+# The same layers under FLUX's naming.
+_FLUX_KEEP_BF16 = ["x_embedder", "context_embedder", "proj_out", "norm_out",
+                   "time_text_embed"]
 
 
-def _bnb_diffusers_config(bits: int):
+def _bnb_diffusers_config(bits: int, keep: Optional[List[str]] = None):
     """bitsandbytes config for a diffusers component (transformer, VAE)."""
     import torch
     from diffusers import BitsAndBytesConfig
 
+    keep = keep if keep is not None else _KEEP_BF16
     if bits == 8:
-        return BitsAndBytesConfig(load_in_8bit=True,
-                                  llm_int8_skip_modules=_KEEP_BF16)
+        return BitsAndBytesConfig(load_in_8bit=True, llm_int8_skip_modules=keep)
     return BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                               bnb_4bit_compute_dtype=torch.bfloat16,
-                              llm_int8_skip_modules=_KEEP_BF16)
+                              llm_int8_skip_modules=keep)
 
 
 def _bnb_transformers_config(bits: int):
@@ -363,14 +366,21 @@ def build_qwen_image_edit(photos, edits, seed):
     repo = "Qwen/Qwen-Image-Edit-2509"
     cache = _qwen_embeddings(repo, photos, edits)
 
+    # Deliberately single-card. bf16 does not fit even on both — 40.9GB of weights
+    # against 47.1GB of VRAM, and reserving activation headroom spills the
+    # remainder to disk — and spreading the 8-bit weights with
+    # device_map="balanced" measured *slower*, not faster: it put 23.5GB on GPU0
+    # and left GPU1 idle at 0% while the layers ran in sequence, every boundary
+    # crossing staged through host RAM because this box has no P2P. Two cards buy
+    # parallelism across photos (one process per card), not within one image.
     transformer = QwenImageTransformer2DModel.from_pretrained(
         repo, subfolder="transformer", torch_dtype=torch.bfloat16,
         quantization_config=_bnb_diffusers_config(8))
     pipe = QwenImageEditPlusPipeline.from_pretrained(
         repo, transformer=transformer, text_encoder=None, torch_dtype=torch.bfloat16)
     pipe.to("cuda")
-    # Tiling the VAE and slicing attention buy back the ~1GB the 8-bit
-    # transformer does not leave for activations. Both are exact, not lossy.
+    # Buys back the last gigabyte the 8-bit transformer does not leave for
+    # activations. Both are exact, not lossy.
     pipe.vae.enable_tiling()
     pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
@@ -394,20 +404,21 @@ def build_qwen_image_edit(photos, edits, seed):
 def build_flux_kontext(photos, edits, seed):
     """FLUX.1 Kontext dev — built for instruction editing, gated on HF.
 
-    4-bit for the same reason as Qwen: 12B bf16 is 24GB of transformer before the
-    T5 encoder is loaded at all.
+    8-bit, not 4-bit, on the evidence from Qwen: NF4 turned that transformer's
+    output into a mosaic, and there is no reason to expect this one to survive it
+    either. At 12B it can afford the better quant — 8-bit puts the transformer at
+    ~12GB and the T5 encoder at ~5GB, which fits one card with room to spare,
+    where Qwen at 20B did not. bf16 would be 24GB of transformer before T5 is
+    loaded at all.
     """
     import torch
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
 
-    quant = PipelineQuantizationConfig(
-        quant_backend="bitsandbytes_4bit",
-        quant_kwargs={"load_in_4bit": True,
-                      "bnb_4bit_quant_type": "nf4",
-                      "bnb_4bit_compute_dtype": torch.bfloat16},
-        components_to_quantize=["transformer", "text_encoder_2"],
-    )
+    quant = PipelineQuantizationConfig(quant_mapping={
+        "transformer": _bnb_diffusers_config(8, keep=_FLUX_KEEP_BF16),
+        "text_encoder_2": _bnb_transformers_config(8),
+    })
     pipe = FluxKontextPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
         quantization_config=quant)
@@ -700,6 +711,9 @@ def main() -> None:
     parser.add_argument("--photos", default="data/bench_photos")
     parser.add_argument("--run", default=None, help="existing run dir (resume / score / report)")
     parser.add_argument("--limit-photos", type=int, default=0)
+    parser.add_argument("--skip-photos", type=int, default=0,
+                        help="drop the first N photos; with --limit-photos this "
+                             "slices the set so one process per GPU shares the work")
     parser.add_argument("--limit-edits", type=int, default=0)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--judge-url",
@@ -718,6 +732,8 @@ def main() -> None:
     if args.stage == "generate":
         photos = load_photos(photo_dir)
         edits = EDITS
+        if args.skip_photos:
+            photos = photos[args.skip_photos:]
         if args.limit_photos:
             photos = photos[: args.limit_photos]
         if args.limit_edits:

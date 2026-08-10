@@ -315,6 +315,28 @@ chat:
     whisper_compute: "int8_float16"
     language: "pt"
 
+  # Image generation and editing. Runs out of process (scripts/imagegen_worker.py)
+  # so the 20GB pipeline is freed the moment it is done and the card is not held
+  # between requests — see src/chat/imagegen.py.
+  imagegen:
+    enabled: true
+    # Which editor answers "põe-me de rei medieval". Chosen by the bake-off in
+    # reports/image_bakeoff/ — see the scorecard before changing it.
+    editor: "flux-kontext"          # flux-kontext | qwen-image-edit
+    edit_steps: 28
+    # Generation from scratch is a different job and uses Z-Image Turbo, a 6B
+    # text-to-image model — it loses badly at *editing* (it returns a stranger)
+    # but is fast and competent at inventing a picture.
+    generate_steps: 12
+    seed: 1234
+    # The card the LLM is NOT on. Serving holds one card; this takes the other.
+    device: "0"
+    timeout_seconds: 1800
+    # Editing puts a real member's face into an invented scene. Only chats whose
+    # members chose to have the bot in the room may ask; an arbitrary DM may not.
+    # Empty list = everywhere (not recommended).
+    allowed_scopes: ["shared"]
+
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.
   # Toggle to false to revert to default (filtered) behavior instantly.
