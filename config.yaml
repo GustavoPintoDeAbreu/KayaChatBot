@@ -315,6 +315,14 @@ chat:
     whisper_compute: "int8_float16"
     language: "pt"
 
+  # Reading inbound photos. The serving model is multimodal, so this needs no
+  # second model — only --mmproj on the llama service. A described photo becomes
+  # ordinary text: logged as memory, ingested, and recallable later.
+  vision:
+    enabled: true
+    max_tokens: 160
+    timeout: 120
+
   # Image generation and editing. Runs out of process (scripts/imagegen_worker.py)
   # so the 20GB pipeline is freed the moment it is done and the card is not held
   # between requests — see src/chat/imagegen.py.

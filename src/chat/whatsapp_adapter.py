@@ -54,6 +54,8 @@ class InboundMessage:
     # transcribed before the message means anything.
     media_url: str = ""
     media_mimetype: str = ""
+    # Filled in once a photo has been read by the vision model.
+    image_description: str = ""
 
 
 def _normalize_jid(value: Optional[str]) -> str:
@@ -230,6 +232,7 @@ class WhatsAppAdapter:
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
         image_generate: Optional[Callable[..., Optional[bytes]]] = None,
         fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
+        describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -266,6 +269,7 @@ class WhatsAppAdapter:
         # result when it exists. None disables the feature entirely.
         self.image_generate = image_generate
         self.fetch_media = fetch_media
+        self.describe_image = describe_image
         self.config = config
         # An edit needs a photo. Usually it is attached to the request, but "põe-lhe
         # uma coroa" right after someone posts a picture is just as natural, so the
@@ -617,11 +621,27 @@ class WhatsAppAdapter:
         # A voice note arrives with empty text. Transcribe it first so it becomes
         # an ordinary message — logged as memory, routed, and answered like any
         # other. Without this it is silently dropped by the empty-text gate.
-        if not msg.text.strip() and msg.media_url and self.transcribe is not None:
+        if not msg.text.strip() and msg.media_url and self.transcribe is not None \
+                and not (msg.media_mimetype or "").startswith("image/"):
             transcript = self.transcribe(msg.media_url, msg.media_mimetype)
             if transcript:
                 msg.text = transcript
                 print(f"🎤 transcribed voice note ({len(transcript)} chars)")
+
+        # A photo is the same problem as a voice note: the message means nothing
+        # until its content is turned into text. Described here, it becomes
+        # memory, is ingested, and is answerable a week later — and a caption is
+        # kept, since "quem é este?" is the question and the description is the
+        # evidence.
+        if msg.media_url and (msg.media_mimetype or "").startswith("image/") \
+                and self.describe_image is not None:
+            description = self.describe_image(msg.media_url, msg.media_mimetype)
+            if description:
+                msg.image_description = description
+                caption = msg.text.strip()
+                msg.text = (f"{caption}\n[Imagem: {description}]" if caption
+                            else f"[Imagem: {description}]")
+                print(f"🖼️  described image ({len(description)} chars)")
 
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth

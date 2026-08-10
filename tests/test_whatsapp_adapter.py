@@ -783,3 +783,111 @@ def test_without_a_worker_the_bot_declines(tmp_path):
     result = adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
 
     assert result["image"] == "not_allowed"
+
+
+# ── reading inbound photos ───────────────────────────────────────────────────
+# A photo carries no text. Without a description the message is either dropped or
+# answered as though nothing were attached — "não recebi nenhuma imagem" while
+# the picture sits in the chat. Described, it becomes ordinary text and
+# everything downstream (memory, ingestion, routing) works unchanged.
+def make_vision_adapter(tmp_path, description="dois homens num barco com cervejas"):
+    from src.chat.memory import ChatPreferences
+
+    seen = []
+
+    def describe(url, mimetype):
+        seen.append({"url": url, "mimetype": mimetype})
+        return description
+
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: f"vi: {message}",
+        waha_client=MockWahaClient(echo=False),
+        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                             "shared_chats": [GROUP]}},
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        describe_image=describe,
+    )
+    adapter.described = seen
+    return adapter
+
+
+def photo_event(caption="", mimetype="image/jpeg", timestamp=1700000000):
+    event = group_event(caption, mention=True)
+    event["payload"]["media"] = {"url": "http://waha:3000/photo.jpg", "mimetype": mimetype}
+    # MessageLog.read() only yields records newer than its cutoff, so a message
+    # with no timestamp is written and never read back.
+    event["payload"]["timestamp"] = timestamp
+    return event
+
+
+def test_photo_without_a_caption_is_still_understood(tmp_path):
+    adapter = make_vision_adapter(tmp_path)
+
+    result = adapter.handle_event(photo_event(), system_prompt="")
+
+    assert result is not None, "a photo with no caption must not be dropped"
+    assert "barco" in result["reply"]
+
+
+def test_caption_is_kept_alongside_the_description(tmp_path):
+    """"quem é este?" is the question; the description is the evidence."""
+    adapter = make_vision_adapter(tmp_path)
+
+    result = adapter.handle_event(photo_event("quem é este?"), system_prompt="")
+
+    assert "quem é este?" in result["reply"]
+    assert "barco" in result["reply"]
+
+
+def test_a_photo_is_not_sent_to_the_transcriber(tmp_path):
+    """Whisper on a JPEG wastes a GPU load and returns nothing useful."""
+    from src.chat.memory import ChatPreferences
+
+    transcribed = []
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: "ok",
+        waha_client=MockWahaClient(echo=False),
+        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False}},
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        transcribe=lambda url, mimetype: transcribed.append(url) or "nope",
+        describe_image=lambda url, mimetype: "uma foto",
+    )
+
+    adapter.handle_event(photo_event(), system_prompt="")
+
+    assert transcribed == []
+
+
+def test_described_photo_is_logged_as_memory(tmp_path):
+    """This is what makes "aquela foto do barco" findable a week later."""
+    from src.chat.memory import ChatPreferences
+    from src.data.message_log import MessageLog
+
+    log = MessageLog(base_dir=str(tmp_path / "log"))
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: "ok",
+        waha_client=MockWahaClient(echo=False),
+        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                             "log_messages": True, "shared_chats": [GROUP]}},
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        message_log=log,
+        describe_image=lambda url, mimetype: "dois homens num barco",
+    )
+
+    adapter.handle_event(photo_event(), system_prompt="")
+
+    logged = [m["text"] for m in log.read("shared")]
+    assert any("barco" in text for text in logged)
+
+
+def test_vision_failure_falls_back_to_the_old_behaviour(tmp_path):
+    """A dead vision server must not start dropping every photo message."""
+    adapter = make_vision_adapter(tmp_path, description=None)
+
+    result = adapter.handle_event(photo_event("olhem isto"), system_prompt="")
+
+    assert result is not None
+    assert "olhem isto" in result["reply"]

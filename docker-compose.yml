@@ -231,6 +231,9 @@ services:
     # -sm none keeps the whole model on the single pinned card. If a future model
     # needs both, use -sm layer (never -sm row: no P2P on this box, so row split
     # stages every step through host RAM).
+    # --mmproj loads the vision projector (~180MB) so the SAME model can read the
+    # photos people send. Without it an inbound image is invisible to the bot and
+    # it answers as though nothing was attached.
     # -c 32768 gives ~2x headroom over rag.max_context_tokens (14000) so a deep
     # prompt plus system prompt and history cannot overflow the window.
     # --parallel 1 so the whole KV budget serves one request rather than being
@@ -238,6 +241,7 @@ services:
     command: >
       -m /models/${KAYA_PROD_GGUF:-gemma-4-12b-it-Q6_K.gguf} -ngl 999 -fa off --jinja
       -sm ${KAYA_PROD_SM:-none} --parallel 1
+      --mmproj /models/${KAYA_PROD_MMPROJ:-mmproj-F16.gguf}
       --host 0.0.0.0 --port 8080 -c ${KAYA_PROD_CTX:-32768}
       ${KAYA_PROD_EXTRA:-}
     expose:

@@ -211,6 +211,19 @@ def _fetch_media(url: str, mimetype: str):
     return handle.name
 
 
+def _describe(url: str, mimetype: str):
+    """Read an inbound photo with the serving model, or None if vision is off."""
+    from src.chat import vision
+
+    if not vision.is_available(config):
+        return None
+    return vision.describe_url(
+        url, mimetype, config,
+        api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
+        waha_base_url=os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""),
+    )
+
+
 def _imagegen(mode: str, prompt: str, image_path=None):
     """Make one image, or None. Blocking — the adapter calls it off-thread."""
     from src.chat import imagegen
@@ -220,7 +233,8 @@ def _imagegen(mode: str, prompt: str, image_path=None):
 
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, transcribe=_stt,
-                          image_generate=_imagegen, fetch_media=_fetch_media)
+                          image_generate=_imagegen, fetch_media=_fetch_media,
+                          describe_image=_describe)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
