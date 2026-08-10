@@ -26,6 +26,10 @@ services:
       - ./data/rag_db:/app/data/rag_db
       - ./models:/app/models
       - ./src:/app/src:ro
+      # scripts/ is not in the image but src/chat/imagegen.py spawns
+      # scripts/imagegen_worker.py, so without this the bot accepts an image
+      # request and the worker is simply not there.
+      - ./scripts:/app/scripts:ro
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro
@@ -132,6 +136,7 @@ services:
       - ./data/rag_db:/app/data/rag_db   # see kaya-base: symlink must be the mount source
       - ./models:/app/models
       - ./src:/app/src
+      - ./scripts:/app/scripts:ro
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro

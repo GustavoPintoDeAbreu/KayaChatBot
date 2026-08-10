@@ -73,7 +73,6 @@ def edit_with_flux(image_path: str, prompt: str, out_path: str,
     import torch
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
-
     from transformers import BitsAndBytesConfig as TfBnb
 
     quant = PipelineQuantizationConfig(quant_mapping={
