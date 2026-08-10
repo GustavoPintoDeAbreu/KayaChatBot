@@ -178,6 +178,17 @@ _FLUX_KEEP_BF16 = ["x_embedder", "context_embedder", "proj_out", "norm_out",
                    "time_text_embed"]
 
 
+def _rescale(image, longest: int):
+    """Resize to a long side of `longest`, keeping a multiple of 16."""
+    if max(image.size) <= longest:
+        return image
+    scale = longest / max(image.size)
+    resized = image.resize((max(int(image.width * scale), 16),
+                            max(int(image.height * scale), 16)))
+    return resized.crop((0, 0, max(resized.width // 16 * 16, 16),
+                         max(resized.height // 16 * 16, 16)))
+
+
 def _bnb_diffusers_config(bits: int, keep: Optional[List[str]] = None):
     """bitsandbytes config for a diffusers component (transformer, VAE)."""
     import torch
@@ -415,14 +426,26 @@ def build_flux_kontext(photos, edits, seed):
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
 
+    # Both quantized, and both therefore pinned: bitsandbytes weights cannot be
+    # moved back to CPU, so enable_model_cpu_offload cannot evict them and an
+    # unquantized T5 simply adds its 9.5GB on top rather than taking turns. 8-bit
+    # for both is ~17GB resident; the remaining ~6GB of activations at 1024px is
+    # what tiling and slicing below buy back.
     quant = PipelineQuantizationConfig(quant_mapping={
-        "transformer": _bnb_diffusers_config(8, keep=_FLUX_KEEP_BF16),
+        "transformer": _bnb_diffusers_config(8, keep=[]),
         "text_encoder_2": _bnb_transformers_config(8),
     })
     pipe = FluxKontextPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
         quantization_config=quant)
-    pipe.enable_model_cpu_offload()
+    # Fully resident, NOT enable_model_cpu_offload(). The offload hooks duplicate
+    # bitsandbytes weights rather than moving them — measured: 14.5GB after load
+    # growing to 22.4GB and OOMing, and identically so at 704px, which is what
+    # gave it away as a weights problem rather than an activations one. Resident
+    # it runs in 62s against Qwen's 447s.
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
     def generate(source, edit, seed, photo_id=None):

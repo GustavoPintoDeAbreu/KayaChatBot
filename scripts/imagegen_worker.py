@@ -69,20 +69,27 @@ def bnb_8bit(keep):
 
 def edit_with_flux(image_path: str, prompt: str, out_path: str,
                    steps: int, seed: int) -> None:
-    """FLUX.1 Kontext — single pass, 8-bit, ~17GB with offload."""
+    """FLUX.1 Kontext — single pass, 8-bit, ~15GB resident, ~90s an image."""
     import torch
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
+
     from transformers import BitsAndBytesConfig as TfBnb
 
     quant = PipelineQuantizationConfig(quant_mapping={
-        "transformer": bnb_8bit(KEEP_BF16["flux"]),
+        "transformer": bnb_8bit([]),
         "text_encoder_2": TfBnb(load_in_8bit=True),
     })
     pipe = FluxKontextPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
         quantization_config=quant)
-    pipe.enable_model_cpu_offload()
+    # Fully resident, NOT enable_model_cpu_offload(): the offload hooks duplicate
+    # bitsandbytes weights instead of moving them, which pushed a 14.5GB pipeline
+    # to 22.4GB and OOMed — identically at 704px, which is what identified it as
+    # weights rather than activations.
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
     result = pipe(image=load_image(image_path), prompt=prompt,
