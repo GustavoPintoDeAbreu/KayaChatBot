@@ -177,11 +177,14 @@ services:
     ports:
       - "7860:7860"
     environment:
-      # MUST be set explicitly: `extends` merges kaya-base's environment, and the
-      # base points at the DEV card. Without this line prod would land on the
-      # wrong GPU and contend with dev/training.
-      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-all}
-      - CUDA_VISIBLE_DEVICES=0
+      # Both cards are visible, but the app itself is pinned to the PROD one by
+      # CUDA_VISIBLE_DEVICES — `extends` merges kaya-base's environment, which
+      # points at the DEV card, so this line is what keeps the live model off
+      # dev/training. The second card is exposed solely so the image worker
+      # (src/chat/imagegen.py, chat.imagegen.device) has somewhere to run that is
+      # not on top of the LLM; a 20GB pipeline on the serving card would OOM it.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-0}
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
@@ -195,6 +198,15 @@ services:
       - KAYA_WAHA_URL=http://waha:3000
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+      # Where the image models live. HF_HOME above points at models/.cache for the
+      # LLM tokenizer; the diffusion weights (~120GB) stay in the host cache and
+      # are mounted read-only rather than copied.
+      - KAYA_IMAGE_HF_HOME=/app/hf-cache
+    volumes:
+      # NOT ${HOME}: docker is installed as a snap here and resolves HOME to its
+      # own sandbox (…/snap/docker/<rev>/), which contains no models. The real
+      # path is set in .env.
+      - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
 

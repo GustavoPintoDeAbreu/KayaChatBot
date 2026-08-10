@@ -17,7 +17,9 @@ know the number.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -80,8 +82,10 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
         started = time.time()
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "out.png"
+            # sys.executable, not the venv path: in the container there is no
+            # kaya_chatbot_env and the interpreter is /usr/bin/python.
             command = [
-                str(BASE_DIR / "kaya_chatbot_env" / "bin" / "python"), str(WORKER),
+                sys.executable, str(WORKER),
                 "--mode", mode, "--prompt", prompt, "--out", str(out_path),
             ]
             if image_path:
@@ -89,12 +93,17 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
             if icfg.get("editor"):
                 command += ["--editor", str(icfg["editor"])]
 
-            import os
-
             env = dict(os.environ)
             if env_device:
                 # The LLM holds the other card; pinning keeps the two apart.
                 env["CUDA_VISIBLE_DEVICES"] = env_device
+            # The diffusion weights are ~120GB and live outside the app's HF_HOME
+            # (which holds only the tokenizer). In the container they arrive as a
+            # read-only mount of the host cache.
+            image_home = os.environ.get("KAYA_IMAGE_HF_HOME") or icfg.get("hf_home")
+            if image_home:
+                env["HF_HOME"] = str(image_home)
+                env["HF_HUB_OFFLINE"] = "1"
 
             try:
                 result = subprocess.run(command, cwd=str(BASE_DIR), env=env,
