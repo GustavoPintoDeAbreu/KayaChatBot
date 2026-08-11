@@ -65,13 +65,52 @@ def fingerprint(root: Path) -> Dict[str, str]:
     return out
 
 
+def _container_running(name: str = "kaya-sim") -> bool:
+    import subprocess
+
+    proc = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
+                          capture_output=True, text=True)
+    return proc.stdout.strip() == "true"
+
+
+def _remove_tree(target: Path) -> None:
+    """Delete the sim data dir, including anything the container made as root.
+
+    The app runs as root inside the container and writes into this bind mount, so
+    a plain rmtree dies with PermissionError partway through — which once left the
+    directory without its whitelist, and every simulated DM was silently dropped.
+    A one-shot container of the same image does the deletion with the same
+    ownership that created the files.
+    """
+    import subprocess
+
+    try:
+        shutil.rmtree(target)
+        return
+    except PermissionError:
+        print("  (root-owned files present — removing via a one-shot container)")
+
+    subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{target}:/target", "kaya-chatbot:2.0.0",
+         "sh", "-c", "rm -rf /target/..?* /target/.[!.]* /target/*"],
+        check=True, capture_output=True)
+    # The directory itself survives, which is what we want: replacing the inode
+    # would orphan any running container's mount.
+
+
 def seed(force: bool = False) -> None:
     if SIM.exists() and not force:
         print(f"{SIM} already exists — pass --force to rebuild it")
     else:
         if SIM.exists():
-            shutil.rmtree(SIM)
-        SIM.mkdir(parents=True)
+            if _container_running():
+                raise SystemExit(
+                    "kaya-sim is running. Stop it before reseeding:\n"
+                    "  docker stop kaya-sim\n"
+                    "Replacing a bind-mounted directory under a live container "
+                    "leaves it reading the old, deleted one.")
+            _remove_tree(SIM)
+        SIM.mkdir(parents=True, exist_ok=True)
 
         for name in COPY_DIRS:
             source = REAL / name
