@@ -287,10 +287,14 @@ services:
     env_file:
       - .env
     environment:
-      # Both cards visible; the app sits on the DEV card so it does not contend
-      # with the live model, and the image worker takes the same card.
+      # Mirrors prod's arrangement, and for the same reason. The app (Whisper +
+      # the embedder, ~4.6GB) sits on the card the LLM is on; the image worker
+      # gets the OTHER card to itself. Putting the app on the worker's card left
+      # FLUX ~19GB instead of 23.5GB and every EDIT died of OOM while the smaller
+      # generation model still fitted — which reads as "edits are broken" when it
+      # is really "the test rig was arranged differently from production".
       - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_DEV:-0}
+      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-1}
       - HF_HOME=/app/models/.cache
       - KAYA_IMAGE_HF_HOME=/app/hf-cache
       - PYTHONUNBUFFERED=1
