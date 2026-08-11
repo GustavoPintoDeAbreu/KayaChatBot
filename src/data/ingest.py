@@ -31,6 +31,10 @@ from src.data.message_log import MessageLog
 logger = logging.getLogger(__name__)
 
 COLLECTION = "kaya_conversations"
+# How far ahead of now a message timestamp may be before it is treated as bogus.
+# Generous: clock skew between phones is real, deliberate time travel is not.
+_FUTURE_TOLERANCE_S = 3600
+
 DEFAULT_STATE = "data/ingest_state.json"
 
 
@@ -202,7 +206,24 @@ class Ingester:
                 embeddings=embeddings,
             )
 
-        newest = max(int(m.get("timestamp") or 0) for m in messages)
+        # Clamp to now. The watermark is a high-water mark, so a single message
+        # with a clock-skewed or bogus future timestamp pins it ahead of real
+        # time and every later message is silently skipped — memory stops
+        # updating with no error anywhere. A simulator run hit exactly this: one
+        # event dated in the future froze `shared` ingestion, and a fact planted
+        # afterwards was logged but never became retrievable.
+        horizon = int(time.time()) + _FUTURE_TOLERANCE_S
+        timestamps = [int(m.get("timestamp") or 0) for m in messages]
+        newest = max((t for t in timestamps if t <= horizon), default=0)
+        skipped = [t for t in timestamps if t > horizon]
+        if skipped:
+            logger.warning(
+                "%s: %d message(s) dated in the future (max %s); watermark held at %s",
+                scope, len(skipped), max(skipped), newest)
+        if newest <= since:
+            # Nothing legitimately newer — leave the watermark alone rather than
+            # moving it backwards.
+            newest = since
         self.state.set_watermark(scope, newest, len(chunks))
         return {
             "scope": scope, "messages": len(messages), "chunks": len(chunks),

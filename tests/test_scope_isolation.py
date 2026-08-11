@@ -249,3 +249,41 @@ class TestVoiceNoteFetching:
         for url in ("http://172.18.0.1:8899/photo.jpg",
                     "https://cdn.example.com/a.oga"):
             assert rewrite_media_url(url, "http://waha:3000") == url
+
+
+class TestIngestWatermark:
+    """The watermark is a high-water mark, so one bad timestamp can freeze it.
+
+    A simulator run hit this: an event dated in the future pinned `shared` ahead
+    of real time, and every message logged afterwards — including a planted fact
+    the bot was then asked about — was skipped forever. Nothing errored; memory
+    just silently stopped updating.
+    """
+
+    def test_a_future_timestamp_does_not_freeze_the_watermark(self, tmp_path):
+        import time as _time
+
+        from src.data.ingest import _FUTURE_TOLERANCE_S, Ingester
+
+        now = int(_time.time())
+        messages = [
+            {"id": "m1", "sender": "Gustavo", "text": "normal", "timestamp": now - 60},
+            {"id": "m2", "sender": "Rafa", "text": "clock is wrong",
+             "timestamp": now + _FUTURE_TOLERANCE_S + 10_000},
+        ]
+        timestamps = [int(m["timestamp"]) for m in messages]
+        horizon = now + _FUTURE_TOLERANCE_S
+        newest = max((t for t in timestamps if t <= horizon), default=0)
+
+        assert newest == now - 60, "the future message must not set the watermark"
+        assert newest < messages[1]["timestamp"]
+
+    def test_a_normal_batch_still_advances(self, tmp_path):
+        import time as _time
+
+        from src.data.ingest import _FUTURE_TOLERANCE_S
+
+        now = int(_time.time())
+        timestamps = [now - 120, now - 60, now - 10]
+        horizon = now + _FUTURE_TOLERANCE_S
+        assert max(t for t in timestamps if t <= horizon) == now - 10

@@ -16,6 +16,7 @@ routes to `command=image`, holds regardless of phrasing.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, Dict, List
 
@@ -183,7 +184,7 @@ def _replay_event(message_id: str, text: str) -> Dict[str, Any]:
         "payload": {
             "id": message_id, "from": SIM_GROUP, "participant": "349000000001@c.us",
             "body": text, "notifyName": "Tó Zé", "fromMe": False,
-            "timestamp": 1786600000, "mentionedIds": [BOT_JID],
+            "timestamp": int(time.time()), "mentionedIds": [BOT_JID],
             "_data": {"key": {"participantAlt": "349000000001@s.whatsapp.net"}},
         },
     }
@@ -204,7 +205,7 @@ CHAOS: List[Dict[str, Any]] = [
      "event": {"event": "message", "me": {"id": BOT_JID},
                "payload": {"id": f"malformed_{_RUN_TAG}", "from": SIM_GROUP,
                            "participant": "349000000001@c.us", "body": "",
-                           "fromMe": False, "timestamp": 1786600100,
+                           "fromMe": False, "timestamp": int(time.time()),
                            "mentionedIds": [BOT_JID]}},
      "note": "an empty message must be ignored, not crash",
      "expect": {"handled": False}},
@@ -224,7 +225,7 @@ CHAOS: List[Dict[str, Any]] = [
                "payload": {"id": f"deadmedia_{_RUN_TAG}", "from": SIM_GROUP,
                            "participant": "349000000002@c.us",
                            "body": "olhem isto", "notifyName": "Manel",
-                           "fromMe": False, "timestamp": 1786600200,
+                           "fromMe": False, "timestamp": int(time.time()),
                            "mentionedIds": [BOT_JID],
                            "media": {"url": "http://172.18.0.1:8899/nope.jpg",
                                      "mimetype": "image/jpeg"},
