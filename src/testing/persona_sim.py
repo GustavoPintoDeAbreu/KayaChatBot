@@ -32,6 +32,7 @@ import json
 import random
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -51,11 +52,16 @@ class SimClient:
         self.timeout = timeout
         self._seq = 0
         self._lock = threading.Lock()
+        # Unique per run. A plain counter restarts at 1 every run while the sim
+        # container outlives runs, so the adapter's replay guard — which is
+        # correct, real WhatsApp ids are globally unique — saw the second run's
+        # messages as the first run's backlog and ignored every one of them.
+        self._run = uuid.uuid4().hex[:8]
 
     def _next_id(self, prefix: str = "sim") -> str:
         with self._lock:
             self._seq += 1
-            return f"{prefix}_{self._seq:05d}"
+            return f"{prefix}_{self._run}_{self._seq:05d}"
 
     def health(self) -> Dict[str, Any]:
         import requests
