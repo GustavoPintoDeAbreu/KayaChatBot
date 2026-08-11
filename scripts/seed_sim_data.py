@@ -115,6 +115,48 @@ def seed(force: bool = False) -> None:
     print(f"✓ manifest of the real data written to {MANIFEST}")
 
 
+def check_identities() -> int:
+    """The direct question: did anything the simulator invented reach the real data?
+
+    This is the check that matters, and unlike the manifest it is immune to prod
+    running at the same time. Prod legitimately writes to live_messages/ and
+    rag_db/ whenever it answers a message or runs its periodic ingest, so a
+    timestamp diff cries wolf; a sim phone number or the sim group id appearing in
+    the real store would be an actual leak.
+    """
+    sys.path.insert(0, str(BASE_DIR))
+    from src.testing import sim_world
+
+    needles = ([p.phone for p in sim_world.PERSONAS]
+               + [p.name for p in sim_world.PERSONAS]
+               + [sim_world.SIM_GROUP.split("@")[0]])
+
+    hits = []
+    for path in (REAL / "live_messages").rglob("*.jsonl"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for needle in needles:
+            if needle in text:
+                hits.append(f"{path.name}: {needle}")
+
+    state = REAL / "ingest_state.json"
+    if state.exists():
+        text = state.read_text(encoding="utf-8", errors="ignore")
+        for needle in needles:
+            if needle in text:
+                hits.append(f"ingest_state.json: {needle}")
+
+    if hits:
+        print("!! SIM DATA FOUND IN THE REAL STORE — isolation is broken")
+        for hit in hits[:15]:
+            print(f"   {hit}")
+        return 1
+    print(f"✓ no sim identity appears in {REAL} (checked {len(needles)} markers)")
+    return 0
+
+
 def check() -> int:
     if not MANIFEST.exists():
         print(f"no manifest at {MANIFEST} — run without --check first")
@@ -130,7 +172,9 @@ def check() -> int:
         print(f"✓ real data untouched ({len(after)} files across {', '.join(WATCHED)})")
         return 0
 
-    print("!! REAL DATA CHANGED — the simulator was not isolated")
+    print("note: real data changed since the manifest was taken. If kaya-prod is")
+    print("running this is expected — it logs messages and ingests on a timer.")
+    print("What matters is the identity check above; this is only a hint.")
     for label, items in (("added", added), ("removed", removed), ("changed", changed)):
         for item in items[:10]:
             print(f"   {label}: {item}")
@@ -147,7 +191,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.check:
-        sys.exit(check())
+        # Identity first: it is the one that can actually fail meaningfully.
+        code = check_identities()
+        check()
+        sys.exit(code)
     seed(force=args.force)
 
 
