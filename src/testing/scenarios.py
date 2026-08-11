@@ -187,7 +187,8 @@ CHAOS: List[Dict[str, Any]] = [
      "note": "first delivery", "expect": {"handled": True}},
     {"kind": "raw", "label": "replay #2 (same id)",
      "event": _replay_event("replay_1", "quem é o Peter?"),
-     "note": "a replayed id must not be answered twice"},
+     "note": "a replayed id must not be answered twice",
+     "expect": {"handled": False}},
 
     {"kind": "raw", "label": "empty body",
      "event": {"event": "message", "me": {"id": BOT_JID},

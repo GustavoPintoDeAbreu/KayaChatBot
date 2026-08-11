@@ -132,12 +132,22 @@ class MediaServer:
         self._thread = None
 
     def start(self) -> None:
-        import functools
         from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-        handler = functools.partial(SimpleHTTPRequestHandler, directory=str(self.directory))
-        # Quiet: one log line per media fetch would drown the run output.
-        handler.log_message = lambda *args, **kwargs: None  # type: ignore[assignment]
+        directory = str(self.directory)
+
+        class QuietHandler(SimpleHTTPRequestHandler):
+            """Subclass, not functools.partial: log_message has to be overridden on
+            the class, and setting it on a partial silently does nothing — one
+            access-log line per media fetch then drowns the run output."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=directory, **kwargs)
+
+            def log_message(self, *args, **kwargs):
+                pass
+
+        handler = QuietHandler
         self._server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -370,6 +380,9 @@ class SimRunner:
         self.history: List[str] = []
         self._by_name = {p.name: p for p in people}
         self._aliases: Dict[str, Persona] = {}
+        # Outbox length at the last request that kicks off async work, so a
+        # following `wait` beat only counts deliveries caused by THAT request.
+        self._pending_mark = 0
 
     # -- helpers ----------------------------------------------------------
     def _persona(self, who: Optional[str]) -> Persona:
@@ -462,6 +475,7 @@ class SimRunner:
             message_id=beat.get("message_id"),
         )
         mark = self._outbox_len()
+        self._pending_mark = mark
         payload, seconds = self.client.send(event)
         self._record(result, "say", persona, chat, beat.get("text", ""), payload,
                      seconds, beat.get("expect", {}), self._outbox_since(mark),
@@ -536,11 +550,18 @@ class SimRunner:
                  f"{len(senders) - answered} dropped")
 
     def _beat_wait(self, beat: Dict[str, Any], result: SimResult) -> None:
-        """Wait for an async delivery (an image takes ~90s) or just pause."""
+        """Wait for an async delivery (an image takes ~90s) or just pause.
+
+        The mark is the outbox length recorded when the *request* was made, not 0:
+        looking at the whole outbox finds an image from an earlier beat and
+        returns immediately, so the wait silently passes and the next beat runs
+        while the render is still going. That is what made the "implicit subject"
+        beat come back busy instead of editing.
+        """
         seconds = float(beat.get("seconds", 5))
         want = beat.get("for")
         deadline = time.time() + seconds
-        mark = int(beat.get("_mark", 0)) or 0
+        mark = self._pending_mark if want else 0
         started = time.time()
 
         while time.time() < deadline:

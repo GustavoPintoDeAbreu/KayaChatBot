@@ -160,6 +160,35 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
     )
 
 
+# Words that make an image request point at a picture already in the chat rather
+# than describe a new one from scratch. "põe-LHE uma coroa" and "edita ESTA foto"
+# refer; "faz uma imagem de um gato astronauta" does not. Without this test every
+# request became an edit of whatever photo was last posted.
+# Only *referring* words count. A bare "imagem" or "foto" does not refer to
+# anything — "faz uma imagem de um gato astronauta" describes a new picture — so
+# matching those nouns is what turned every request into an edit.
+_REFERS_TO_IMAGE = re.compile(
+    r"\b(lhe|lhes|nele|nela|dele|dela|isto|isso|est[ae]s?|aquel[ae]s?)\b"
+    r"|\b(nesta|nessa|naquela|desta|dessa)\s+(foto|imagem|fotografia)\b"
+    r"|\b(this|that|him|her)\b"
+    r"|\bthe\s+(photo|picture|image)\b",
+    re.IGNORECASE,
+)
+
+
+def refers_to_existing_image(text: str) -> bool:
+    """Whether an image request points at a picture already in the conversation.
+
+    Deliberately conservative, because the two mistakes are not symmetric:
+    wrongly generating gives someone a picture they did not ask for, while
+    wrongly editing puts a real person's face into an invented scene nobody
+    requested. So an ambiguous request generates, and anyone who genuinely wants
+    an edit can attach the photo — which skips this test entirely, being
+    unambiguous.
+    """
+    return bool(_REFERS_TO_IMAGE.search(text or ""))
+
+
 # Thumbs reactions we treat as quality signal. Skin-tone modifiers and variation
 # selectors trail the base codepoint, so a substring test catches every variant.
 _THUMBS_UP = "\U0001F44D"  # 👍
@@ -290,6 +319,9 @@ class WhatsAppAdapter:
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
         self.ignore_before_ts = 0
+        # Message ids already answered, so a replay is not answered twice.
+        self._answered_ids: "OrderedDict[str, bool]" = OrderedDict()
+        self._answered_max = 2000
         self.session_store = session_store or KeyedSessionMemory(
             base_dir=wcfg.get("sessions_dir", "data/whatsapp_sessions"),
             max_lines=max(2 * self.history_turns, 20),
@@ -345,6 +377,18 @@ class WhatsAppAdapter:
             return False
         if self.ignore_before_ts and msg.timestamp and msg.timestamp < self.ignore_before_ts:
             return False
+        # WAHA replays its backlog after a reconnect — which the DNS drop that
+        # killed the session in production would cause — and the same message id
+        # then arrives twice. `ignore_before_ts` only covers a restart, so without
+        # this the bot answers the same question again. Bounded, because the
+        # process is long-lived.
+        if msg.message_id:
+            if msg.message_id in self._answered_ids:
+                logger.info("ignoring replayed message %s", msg.message_id)
+                return False
+            self._answered_ids[msg.message_id] = True
+            while len(self._answered_ids) > self._answered_max:
+                self._answered_ids.popitem(last=False)
         if not msg.is_group:
             return self._dm_allowed(msg)  # DM: gated by whitelist when enabled
         mentioned = (
@@ -448,12 +492,16 @@ class WhatsAppAdapter:
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                     "command": "image", "image": "busy"}
 
-        # An attached photo wins over the last one seen; with neither, the request
-        # is a text-to-image one.
+        # An attached photo is unambiguous — that is the subject. Without one, the
+        # last photo seen counts ONLY if the request actually points at something
+        # ("põe-LHE uma coroa", "edita ESTA"). Treating every request as an edit
+        # of the last photo meant "faz uma imagem de um gato astronauta" edited
+        # somebody's holiday snap instead of drawing a cat, for as long as a photo
+        # sat in the chat's history.
         source = None
         if msg.media_url and (msg.media_mimetype or "").startswith("image/"):
             source = {"url": msg.media_url, "mimetype": msg.media_mimetype}
-        elif msg.chat_id in self._last_photo:
+        elif msg.chat_id in self._last_photo and refers_to_existing_image(text):
             source = self._last_photo[msg.chat_id]
         if source and self.fetch_media is None:
             source = None

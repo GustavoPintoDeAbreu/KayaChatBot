@@ -4,6 +4,7 @@ No GPU/model/network: the engine is replaced by a stub ``responder`` and WAHA by
 ``MockWahaClient``, so this exercises the full inbound→reply logic the same way
 ``scripts/whatsapp_simulator.py`` does, against a temp session dir.
 """
+import itertools
 import sys
 from pathlib import Path
 
@@ -41,16 +42,24 @@ def make_adapter(tmp_path, **overrides):
     return adapter, client
 
 
-def dm_event(text, sender=ALICE, name="Alice", from_me=False):
+# Real WhatsApp ids are unique per message, and the adapter now relies on that to
+# ignore WAHA's post-reconnect replays. A fixture that reused one id made every
+# second message in a test look like a replay.
+_event_seq = itertools.count(1)
+
+
+def dm_event(text, sender=ALICE, name="Alice", from_me=False, message_id=None):
     return {
         "event": "message",
-        "payload": {"id": "x", "from": sender, "body": text, "notifyName": name, "fromMe": from_me},
+        "payload": {"id": message_id or f"dm{next(_event_seq)}", "from": sender,
+                    "body": text, "notifyName": name, "fromMe": from_me},
     }
 
 
-def group_event(text, sender=ALICE, name="Alice", mention=False, reply=False):
+def group_event(text, sender=ALICE, name="Alice", mention=False, reply=False,
+                message_id=None):
     payload = {
-        "id": "g1",
+        "id": message_id or f"g{next(_event_seq)}",
         "from": GROUP,
         "participant": sender,
         "body": text,
@@ -106,10 +115,13 @@ def test_group_silent_without_mention(tmp_path):
 
 def test_group_responds_on_mention(tmp_path):
     adapter, client = make_adapter(tmp_path)
-    result = adapter.handle_event(group_event("@bot quem é o Rui?", mention=True))
+    event = group_event("@bot quem é o Rui?", mention=True)
+    result = adapter.handle_event(event)
     assert result is not None
     assert len(client.sent) == 1
-    assert client.sent[0]["reply_to"] == "g1"  # group replies quote the asker
+    # group replies quote the asker — compare to the event's own id, which is
+    # generated per message rather than fixed
+    assert client.sent[0]["reply_to"] == event["payload"]["id"]
 
 
 def test_group_responds_on_reply_to_bot(tmp_path):
@@ -165,7 +177,7 @@ def noweb_dm(text):
         "event": "message",
         "me": {"id": BOT_JID, "lid": BOT_LID},
         "payload": {
-            "id": f"false_{USER_LID}_ABC",
+            "id": f"false_{USER_LID}_ABC{next(_event_seq)}",
             "from": USER_LID,
             "fromMe": False,
             "body": text,
@@ -189,7 +201,7 @@ def noweb_group(text, mention_lid=None, reply_to_lid=None):
         "event": "message",
         "me": {"id": BOT_JID, "lid": BOT_LID},
         "payload": {
-            "id": f"false_{GROUP}_XYZ_{USER_LID}",
+            "id": f"false_{GROUP}_XYZ{next(_event_seq)}_{USER_LID}",
             "from": GROUP,
             "participant": USER_LID,
             "fromMe": False,
@@ -891,3 +903,81 @@ def test_vision_failure_falls_back_to_the_old_behaviour(tmp_path):
 
     assert result is not None
     assert "olhem isto" in result["reply"]
+
+
+# ── which picture an image request is about ──────────────────────────────────
+# The last photo in a chat is a good implicit subject for "põe-lhe uma coroa" and
+# a terrible one for "faz uma imagem de um gato astronauta". Treating every
+# request as an edit meant any image request after any photo silently edited
+# somebody's holiday snap instead of drawing what was asked for.
+def test_a_request_describing_something_new_generates():
+    from src.chat.whatsapp_adapter import refers_to_existing_image
+
+    for text in ("faz uma imagem de um gato astronauta",
+                 "gera uma imagem de um cão a conduzir",
+                 "desenha um robot gigante",
+                 "make me a picture of a dragon"):
+        assert refers_to_existing_image(text) is False, text
+
+
+def test_a_request_pointing_at_a_photo_edits():
+    from src.chat.whatsapp_adapter import refers_to_existing_image
+
+    for text in ("põe-lhe uma coroa",
+                 "edita esta foto e mete-lhe um chapéu",
+                 "põe este gajo de rei medieval",
+                 "nesta foto mete-lhe óculos",
+                 "put a crown on him"):
+        assert refers_to_existing_image(text) is True, text
+
+
+def test_last_photo_is_only_used_when_the_request_refers_to_it(tmp_path):
+    """End to end: a generate-style request must not consume the last photo."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    adapter.handle_event(image_group_event("olhem esta", media_url="http://waha:3000/f.jpg",
+                                           mimetype="image/jpeg"), system_prompt="")
+    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                         system_prompt="")
+
+    assert _wait_for_image(adapter)
+    assert adapter.imagegen_calls[-1]["mode"] == "generate"
+    assert adapter.imagegen_calls[-1]["image_path"] is None
+
+
+def test_an_attached_photo_still_edits_regardless_of_wording(tmp_path):
+    """An attachment is unambiguous and never consults the wording."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    adapter.handle_event(
+        image_group_event("faz uma imagem gira", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    assert _wait_for_image(adapter)
+    assert adapter.imagegen_calls[-1]["mode"] == "edit"
+
+
+def test_a_replayed_message_is_answered_only_once(tmp_path):
+    """WAHA replays its backlog after a reconnect. Answering twice is visible to
+    everyone in the group and was what the simulator caught."""
+    adapter, client = make_adapter(tmp_path)
+    event = dm_event("quem é o Peter?")
+    event["payload"]["id"] = "replayed-1"
+
+    first = adapter.handle_event(event)
+    second = adapter.handle_event(event)
+
+    assert first is not None
+    assert second is None, "the replay should have been ignored"
+    assert len(client.sent) == 1
+
+
+def test_different_messages_are_both_answered(tmp_path):
+    """The dedup must key on the id, not suppress everything after the first."""
+    adapter, client = make_adapter(tmp_path)
+    for index, text in enumerate(("olá", "tudo bem?")):
+        event = dm_event(text)
+        event["payload"]["id"] = f"distinct-{index}"
+        assert adapter.handle_event(event) is not None
+    assert len(client.sent) == 2
