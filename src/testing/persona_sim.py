@@ -602,21 +602,24 @@ class SimRunner:
         """Fold what has been said into the sim's vector store.
 
         Mock mode skips the ingest scheduler, so recall of something said earlier
-        in this very run only works if it is ingested on purpose. This is what
-        makes "aquela foto que o Manel mandou" answerable later.
+        in this very run only works if it is ingested on purpose.
+
+        Through the app's own endpoint, NOT a separate process: ChromaDB clients
+        keep their own view, so ingesting elsewhere leaves the running app still
+        answering "não tenho essa informação" about a fact that is now in the
+        store. That cost a whole debugging session — the needle was ingested,
+        retrievable at rank 1, and the bot still denied it.
         """
-        import subprocess
+        import requests
 
         self.log("  ~ ingesting the conversation so far …")
-        proc = subprocess.run(
-            ["docker", "exec", beat.get("container", "kaya-sim"), "python", "-c",
-             "import sys; sys.path.insert(0,'.');"
-             "from src.config_loader import load_config;"
-             "from src.data.ingest import run_ingest;"
-             "r=run_ingest(load_config('config.yaml'));"
-             "print('ingested scopes:', len(r), 'chunks:', sum(x.get('chunks',0) for x in r))"],
-            capture_output=True, text=True, timeout=600)
-        output = (proc.stdout or proc.stderr or "").strip().splitlines()
-        self.log(f"    {output[-1] if output else '(no output)'}")
-        result.metrics.setdefault("ingests", []).append(
-            {"ok": proc.returncode == 0, "output": output[-1] if output else ""})
+        try:
+            response = requests.post(f"{self.client.base_url}/whatsapp/ingest", timeout=600)
+            response.raise_for_status()
+            payload = response.json()
+            self.log(f"    {payload.get('messages')} message(s) -> "
+                     f"{payload.get('chunks')} chunk(s) across {payload.get('scopes')} scope(s)")
+            result.metrics.setdefault("ingests", []).append({"ok": True, **payload})
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"    ! ingest failed: {exc}")
+            result.metrics.setdefault("ingests", []).append({"ok": False, "error": str(exc)})

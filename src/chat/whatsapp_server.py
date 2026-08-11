@@ -246,6 +246,27 @@ def health():
     return {"status": "ok", "mock": MOCK_MODE, "bot_jid": adapter.bot_jid}
 
 
+@app.post("/whatsapp/ingest")
+def ingest_now():
+    """Fold logged messages into the vector store, in THIS process. Mock only.
+
+    The simulator needs recall of something said earlier in the same run, and mock
+    mode deliberately skips the ingest scheduler. Running the ingester as a
+    separate process does not work: this process's ChromaDB client keeps its own
+    view, so the app goes on answering "não tenho essa informação" about a fact
+    that is sitting in the store. Production never has this problem — its
+    scheduler runs in-process, against the same client.
+    """
+    if not MOCK_MODE:
+        raise HTTPException(status_code=404, detail="ingest is only available in mock mode")
+    from src.data.ingest import run_ingest
+
+    results = run_ingest(config)
+    return {"scopes": len(results),
+            "chunks": sum(r.get("chunks", 0) for r in results),
+            "messages": sum(r.get("messages", 0) for r in results)}
+
+
 @app.get("/whatsapp/outbox")
 def outbox():
     """In mock mode, return everything the bot 'sent' (for the simulator/tests)."""
