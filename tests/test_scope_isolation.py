@@ -239,3 +239,13 @@ class TestVoiceNoteFetching:
 
         assert rewrite_media_url("", "http://waha:3000") == ""
         assert rewrite_media_url("http://localhost:3000/x", "") == "http://localhost:3000/x"
+
+    def test_a_url_that_is_not_loopback_is_left_alone(self):
+        """Only WAHA's self-reported localhost is wrong from here. Rewriting any
+        other host sent the simulator's own media server to WAHA, which answered
+        401 and the photo was silently dropped."""
+        from src.chat.stt import rewrite_media_url
+
+        for url in ("http://172.18.0.1:8899/photo.jpg",
+                    "https://cdn.example.com/a.oga"):
+            assert rewrite_media_url(url, "http://waha:3000") == url

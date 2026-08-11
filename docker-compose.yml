@@ -265,6 +265,60 @@ services:
       - "8080"
 
   # ──────────────────────────────────────────────────────────────
+  # kaya-sim  [profile: sim]
+  # The conversation simulator's target. Runs the REAL webhook path in mock mode
+  # (KAYA_WHATSAPP_MOCK=1): replies are captured in /whatsapp/outbox instead of
+  # being sent, and the webhook awaits generation so the harness sees the result.
+  #
+  # Deliberately NOT `extends: kaya-base`. The base hard-mounts ./data, and the
+  # whole point of this service is that it must never touch it: the simulator
+  # invents conversations, and those would otherwise be logged as group memory
+  # and ingested into the real vector store. It gets ./data_sim instead, seeded
+  # by scripts/seed_sim_data.py.
+  #
+  #   kaya_chatbot_env/bin/python scripts/seed_sim_data.py
+  #   docker compose --profile sim up -d kaya-sim
+  # ──────────────────────────────────────────────────────────────
+  kaya-sim:
+    image: kaya-chatbot:2.0.0
+    container_name: kaya-sim
+    profiles: [sim]
+    runtime: nvidia
+    env_file:
+      - .env
+    environment:
+      # Both cards visible; the app sits on the DEV card so it does not contend
+      # with the live model, and the image worker takes the same card.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_DEV:-0}
+      - HF_HOME=/app/models/.cache
+      - KAYA_IMAGE_HF_HOME=/app/hf-cache
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - KAYA_WEB_PORT=7862
+      - KAYA_ENV=sim
+      - KAYA_VERSION=${KAYA_VERSION:-sim}
+      - KAYA_INFERENCE_BACKEND=gguf
+      # Mock: no WAHA, no real messages. Also skips the ingest scheduler, so the
+      # harness controls when (and whether) anything is ingested.
+      - KAYA_WHATSAPP_MOCK=1
+      # No webhook token in mock mode — the harness posts directly.
+      - KAYA_WHATSAPP_WEBHOOK_TOKEN=
+    volumes:
+      - ./data_sim:/app/data
+      - ./data_sim/rag_db:/app/data/rag_db
+      - ./models:/app/models
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./configs:/app/configs:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
+    ports:
+      - "127.0.0.1:7862:7862"
+    command: python -m src.chat.whatsapp_server
+
+  # ──────────────────────────────────────────────────────────────
   # llama-bench  [profile: bench]
   # A second llama.cpp server used to score CANDIDATE models. Published on
   # 127.0.0.1:8081 so host-side harnesses running under kaya_chatbot_env/ can

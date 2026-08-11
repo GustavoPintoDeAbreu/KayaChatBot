@@ -171,3 +171,7 @@ models/piper/
 # images exactly as it covers chat history.
 reports/image_bakeoff/
 data/bench_photos/
+
+# Simulator working data — a copy of the real store plus whatever a run invents.
+data_sim/
+reports/sim/

@@ -85,6 +85,13 @@ def rewrite_media_url(url: str, waha_base_url: str) -> str:
     this process. Swapping in the configured base URL (``http://waha:3000`` on the
     compose network) is what makes the download work; without it every voice note
     fails with "Connection refused" and is silently dropped.
+
+    **Only a loopback host is rewritten.** Rewriting any host that merely differed
+    from WAHA's was too broad: a media URL served from somewhere else entirely —
+    a CDN, or the simulator's own file server — was rewritten to point at WAHA,
+    which then answered 401 and the media was dropped. Loopback is precisely the
+    case that is wrong from this process's point of view; everything else is
+    already an address we can reach.
     """
     if not url or not waha_base_url:
         return url
@@ -94,6 +101,8 @@ def rewrite_media_url(url: str, waha_base_url: str) -> str:
         want = urlsplit(waha_base_url.rstrip("/"))
         have = urlsplit(url)
         if not want.netloc or have.netloc == want.netloc:
+            return url
+        if have.hostname not in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
             return url
         return urlunsplit((want.scheme or have.scheme, want.netloc,
                            have.path, have.query, have.fragment))
