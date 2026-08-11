@@ -344,7 +344,7 @@ class WhatsAppAdapter:
             # expectation — silence for five minutes reads as a broken bot.
             "image_editing": "Dá-me uns minutos que isto demora — já mando.",
             "image_generating": "Vou fazer isso, dá-me um bocado.",
-            "image_queued": "Fica em fila, tenho {position} pela frente — mando assim que estiver.",
+            "image_queued": "Fica em fila, tenho {ahead} à frente — mando assim que estiver.",
             "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
             "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
@@ -543,7 +543,10 @@ class WhatsAppAdapter:
                     "command": "image", "image": "queue_full"}
 
         if position > 1:
-            reply = self.command_replies.get("image_queued", "").format(position=position)
+            # position is 1-based, so the number of jobs AHEAD is one less —
+            # saying "2 pela frente" at position 2 reads as one picture too many.
+            reply = self.command_replies.get("image_queued", "").format(
+                ahead=position - 1, position=position)
         else:
             reply = self.command_replies.get(
                 "image_editing" if mode == "edit" else "image_generating", "")

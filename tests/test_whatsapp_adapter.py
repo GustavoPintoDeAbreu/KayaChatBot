@@ -1023,6 +1023,8 @@ def test_a_second_image_request_is_queued_not_refused(tmp_path):
     assert first["queue_position"] == 1
     assert second["queue_position"] == 2, "the second request must wait, not be dropped"
     assert "fila" in second["reply"].lower()
+    # position 2 means ONE job ahead, not two
+    assert "1 à frente" in second["reply"]
     release.set()
 
 
