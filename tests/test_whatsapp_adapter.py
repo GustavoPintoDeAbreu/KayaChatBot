@@ -16,6 +16,18 @@ from src.chat.memory import KeyedSessionMemory
 from src.chat.waha_client import MockWahaClient
 from src.chat.whatsapp_adapter import WhatsAppAdapter, parse_waha_message
 
+@pytest.fixture(autouse=True)
+def _fresh_image_queue():
+    """The image queue is process-wide, so one test's leftovers change the next
+    test's behaviour — a full queue from one case silently refused another's job."""
+    from src.chat import imagegen
+
+    previous = imagegen._default_queue
+    imagegen._default_queue = imagegen.ImageQueue()
+    yield
+    imagegen._default_queue = previous
+
+
 BOT_JID = "351900000000@c.us"
 GROUP = "12036300000000@g.us"
 ALICE = "351911111111@c.us"
@@ -981,3 +993,69 @@ def test_different_messages_are_both_answered(tmp_path):
         event["payload"]["id"] = f"distinct-{index}"
         assert adapter.handle_event(event) is not None
     assert len(client.sent) == 2
+
+
+# ── the image queue ──────────────────────────────────────────────────────────
+# One GPU means one render at a time, but refusing the second request loses it:
+# a long simulator run had two edits asked for, told "estou ocupado", and never
+# made. They queue now. The queue is separate from the text path — generation
+# runs on the other card — so conversation continues at full speed meanwhile.
+def test_a_second_image_request_is_queued_not_refused(tmp_path):
+    import threading
+
+    from src.chat import imagegen
+
+    release = threading.Event()
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+
+    def slow_imagegen(mode, prompt, image_path=None):
+        release.wait(timeout=5)
+        return b"PNGDATA"
+
+    adapter.image_generate = slow_imagegen
+    imagegen._default_queue = imagegen.ImageQueue()
+
+    first = adapter.handle_event(image_group_event("faz uma imagem de um gato"),
+                                 system_prompt="")
+    second = adapter.handle_event(image_group_event("faz uma imagem de um cão"),
+                                  system_prompt="")
+
+    assert first["queue_position"] == 1
+    assert second["queue_position"] == 2, "the second request must wait, not be dropped"
+    assert "fila" in second["reply"].lower()
+    release.set()
+
+
+def test_a_full_queue_declines_rather_than_promising(tmp_path):
+    import threading
+
+    from src.chat import imagegen
+
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+    imagegen._default_queue = imagegen.ImageQueue(maxsize=1)
+    # The job must still be occupying the slot when the second request arrives,
+    # otherwise the first finishes instantly and the queue is empty again.
+    release = threading.Event()
+    adapter.image_generate = lambda mode, prompt, image_path=None: (
+        release.wait(timeout=5) and b"PNG")
+
+    adapter.handle_event(image_group_event("faz uma imagem 1"), system_prompt="")
+    result = adapter.handle_event(image_group_event("faz uma imagem 2"), system_prompt="")
+    release.set()
+
+    assert result["image"] == "queue_full"
+
+
+def test_a_pending_image_is_visible_in_the_conversation(tmp_path):
+    """Asked "então e a foto?" two turns later, the bot must know one is coming."""
+    from src.chat import imagegen
+
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+    imagegen._default_queue = imagegen.ImageQueue()
+
+    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                         system_prompt="")
+
+    history = adapter.session_store.recent(GROUP, 10)
+    assert any("a preparar uma imagem" in line for line in history)
+    assert any("gato astronauta" in line for line in history)

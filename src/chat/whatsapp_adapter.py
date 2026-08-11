@@ -344,7 +344,8 @@ class WhatsAppAdapter:
             # expectation — silence for five minutes reads as a broken bot.
             "image_editing": "Dá-me uns minutos que isto demora — já mando.",
             "image_generating": "Vou fazer isso, dá-me um bocado.",
-            "image_busy": "Estou já a fazer outra imagem — manda daqui a bocado.",
+            "image_queued": "Fica em fila, tenho {position} pela frente — mando assim que estiver.",
+            "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
             "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
         }
@@ -485,12 +486,6 @@ class WhatsAppAdapter:
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                     "command": "image", "image": "not_allowed"}
 
-        if imagegen.is_busy():
-            reply = self.command_replies.get("image_busy", "")
-            if reply:
-                self._deliver(msg.chat_id, reply)
-            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "command": "image", "image": "busy"}
 
         # An attached photo is unambiguous — that is the subject. Without one, the
         # last photo seen counts ONLY if the request actually points at something
@@ -506,11 +501,6 @@ class WhatsAppAdapter:
         if source and self.fetch_media is None:
             source = None
         mode = "edit" if source else "generate"
-
-        reply = self.command_replies.get(
-            "image_editing" if mode == "edit" else "image_generating", "")
-        if reply:
-            self._deliver(msg.chat_id, reply)
 
         def work() -> None:
             path = None
@@ -529,6 +519,9 @@ class WhatsAppAdapter:
                 self.waha_client.send_image(
                     msg.chat_id, image,
                     reply_to=msg.message_id if msg.is_group else None)
+                # Close the loop in the history, so the bot stops saying a
+                # picture is still coming once it has arrived.
+                self.session_store.append(msg.chat_id, "Kaya Bot: (imagem enviada)")
             except Exception as exc:  # noqa: BLE001 — a worker crash must not kill the thread pool
                 logger.warning("image job failed: %s", exc)
                 self._deliver(msg.chat_id, self.command_replies.get("image_failed", ""))
@@ -536,9 +529,36 @@ class WhatsAppAdapter:
                 if path:
                     Path(path).unlink(missing_ok=True)
 
-        threading.Thread(target=work, name="kaya-imagegen", daemon=True).start()
+        # Queued rather than refused. Telling someone "estou ocupado, tenta
+        # depois" loses the request — a long simulator run had two edits asked
+        # for, refused, and never made. The queue is separate from the text path:
+        # generation runs on the other GPU, so the bot keeps answering questions
+        # at full speed while a picture renders.
+        position = imagegen.get_queue().submit(work)
+        if position is None:
+            reply = self.command_replies.get("image_queue_full", "")
+            if reply:
+                self._deliver(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "command": "image", "image": "queue_full"}
+
+        if position > 1:
+            reply = self.command_replies.get("image_queued", "").format(position=position)
+        else:
+            reply = self.command_replies.get(
+                "image_editing" if mode == "edit" else "image_generating", "")
+        if reply:
+            self._deliver(msg.chat_id, reply)
+
+        # So the conversation knows a picture is on the way. Without this the bot
+        # is asked "então e a foto?" two turns later and has no idea what it
+        # agreed to make; the pending request has to be in the history it reads.
+        self.session_store.append(
+            msg.chat_id,
+            f"Kaya Bot: (a preparar uma imagem, ainda não enviada — pedido: {text[:120]})")
+
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                "command": "image", "image": mode}
+                "command": "image", "image": mode, "queue_position": position}
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""

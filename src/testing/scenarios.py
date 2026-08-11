@@ -16,6 +16,7 @@ routes to `command=image`, holds regardless of phrasing.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, List
 
 from src.testing.sim_world import BOT_JID, SIM_GROUP
@@ -166,8 +167,17 @@ AUDIO: List[Dict[str, Any]] = [
 
 # ── resilience ───────────────────────────────────────────────────────────────
 
+_RUN_TAG = uuid.uuid4().hex[:8]
+
+
 def _replay_event(message_id: str, text: str) -> Dict[str, Any]:
-    """The same message twice — WAHA replays its backlog after a reconnect."""
+    """The same message twice — WAHA replays its backlog after a reconnect.
+
+    The id is unique per *process* but identical between the two beats, which is
+    exactly the shape of a replay. A literal constant here collided across runs
+    and the adapter's replay guard ignored the first delivery too.
+    """
+    message_id = f"{message_id}_{_RUN_TAG}"
     return {
         "event": "message", "me": {"id": BOT_JID},
         "payload": {
@@ -192,7 +202,7 @@ CHAOS: List[Dict[str, Any]] = [
 
     {"kind": "raw", "label": "empty body",
      "event": {"event": "message", "me": {"id": BOT_JID},
-               "payload": {"id": "malformed_1", "from": SIM_GROUP,
+               "payload": {"id": f"malformed_{_RUN_TAG}", "from": SIM_GROUP,
                            "participant": "349000000001@c.us", "body": "",
                            "fromMe": False, "timestamp": 1786600100,
                            "mentionedIds": [BOT_JID]}},
@@ -211,7 +221,7 @@ CHAOS: List[Dict[str, Any]] = [
 
     {"kind": "raw", "label": "media URL that 404s",
      "event": {"event": "message", "me": {"id": BOT_JID},
-               "payload": {"id": "deadmedia_1", "from": SIM_GROUP,
+               "payload": {"id": f"deadmedia_{_RUN_TAG}", "from": SIM_GROUP,
                            "participant": "349000000002@c.us",
                            "body": "olhem isto", "notifyName": "Manel",
                            "fromMe": False, "timestamp": 1786600200,
@@ -229,8 +239,8 @@ CHAOS: List[Dict[str, Any]] = [
      "expect": {"handled": True, "command": "image"}},
     {"kind": "say", "who": "Nuno", "chat": "group",
      "text": "faz uma imagem de um peixe de bicicleta", "mention": True,
-     "note": "an image job is already running — expect the busy reply",
-     "expect": {"handled": True, "command": "image", "image": "busy"}},
+     "note": "a second request queues behind the first rather than being refused",
+     "expect": {"handled": True, "command": "image"}},
     {"kind": "say", "who": "Chico", "chat": "group",
      "text": "entretanto, quem é o Peter?", "mention": True,
      "note": "conversation must keep flowing while a picture renders",

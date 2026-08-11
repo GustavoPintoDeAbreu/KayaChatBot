@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,79 @@ WORKER = BASE_DIR / "scripts" / "imagegen_worker.py"
 # and lose both images. Held for the whole subprocess, which is why every caller
 # runs it off the webhook thread.
 _job_lock = threading.Lock()
+
+
+class ImageQueue:
+    """Serialises image jobs without blocking anything else.
+
+    One card, one job — but "come back later" loses the request, which is what
+    happened in a long simulator run: two edits were refused as busy and simply
+    never got made. So requests wait their turn instead.
+
+    This queue is entirely separate from the text path. Generation runs in a
+    subprocess on the *other* GPU from the LLM, so the bot keeps answering
+    questions at full speed while a picture renders — measured at 6s replies
+    during a 90s render.
+
+    Bounded, because an unbounded queue in a lively group means someone gets a
+    picture twenty minutes after they stopped caring; past the limit the bot says
+    no, which is honest.
+    """
+
+    def __init__(self, maxsize: int = 5):
+        self._queue: "queue.Queue[Any]" = queue.Queue()
+        self.maxsize = maxsize
+        self._worker: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._depth = 0
+
+    @property
+    def depth(self) -> int:
+        """Jobs waiting or running. Reported to whoever asks for a picture."""
+        return self._depth
+
+    def submit(self, job: Any) -> Optional[int]:
+        """Queue one job. Returns its 1-based position, or None if the queue is full."""
+        with self._lock:
+            if self._depth >= self.maxsize:
+                return None
+            self._depth += 1
+            position = self._depth
+            self._queue.put(job)
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._run, name="kaya-imagegen",
+                                                daemon=True)
+                self._worker.start()
+        return position
+
+    def _run(self) -> None:
+        while True:
+            try:
+                job = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                with self._lock:
+                    # Re-check under the lock so a job submitted in the gap is
+                    # not stranded with no worker to pick it up.
+                    if self._queue.empty():
+                        self._worker = None
+                        return
+                continue
+            try:
+                job()
+            except Exception as exc:  # noqa: BLE001 — one bad job must not kill the worker
+                logger.warning("image job raised: %s", exc)
+            finally:
+                with self._lock:
+                    self._depth = max(0, self._depth - 1)
+                self._queue.task_done()
+
+
+_default_queue = ImageQueue()
+
+
+def get_queue() -> ImageQueue:
+    """The process-wide image queue."""
+    return _default_queue
 
 
 def _config(config: Dict[str, Any]) -> Dict[str, Any]:
