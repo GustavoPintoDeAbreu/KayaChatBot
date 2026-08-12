@@ -28,6 +28,7 @@ import json
 import statistics
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -53,6 +54,36 @@ JUDGE_MODEL = "grok-4.20-0309-reasoning"
 
 def log(message: str) -> None:
     print(message, flush=True)
+
+
+def _check_generation_reachable(client, url: str) -> None:
+    """Fail fast if the sim cannot actually generate.
+
+    A sim that cannot reach its llama.cpp server does not error — it answers
+    every beat with an empty string, and the run reports "0/6 turns answered, 6
+    beats failed" as though the bot had misbehaved. The real cause was one line
+    buried in the container log: `Failed to resolve 'llama'`, because kaya-sim
+    runs in THIS compose project while the llama service belongs to the prod one
+    (~/kaya-prod), so the two are on different networks and the service name does
+    not resolve. One probe up front turns an hour of confusion into a message.
+    """
+    probe = {
+        "event": "message",
+        "payload": {"id": f"preflight_{uuid.uuid4().hex[:10]}",
+                    "from": "349000000001@c.us", "body": "olá",
+                    "notifyName": "preflight", "fromMe": False,
+                    "timestamp": int(time.time())},
+    }
+    result, _elapsed = client.send(probe)
+    if ((result or {}).get("reply") or "").strip():
+        return
+    log("!! the sim accepted a message but produced an empty reply.")
+    log("   It usually means the app cannot reach its llama.cpp server. Check:")
+    log("     docker logs kaya-sim 2>&1 | tail -20")
+    log("   If it says \"Failed to resolve 'llama'\", kaya-sim is on this compose")
+    log("   project's network while llama belongs to the prod one. Join them:")
+    log("     docker network connect kaya-prod_default kaya-sim && docker restart kaya-sim")
+    sys.exit(2)
 
 
 def make_provider(config: Dict[str, Any], model: str):
@@ -199,6 +230,7 @@ def main() -> None:
         log("!! the target is NOT in mock mode — refusing to run.")
         log("   A non-mock target would send these messages to real people.")
         sys.exit(2)
+    _check_generation_reachable(client, args.url)
     log(f"target {args.url} — mock={health.get('mock')}")
 
     only = [s.strip() for s in args.only.split(",") if s.strip()] or None
