@@ -502,8 +502,13 @@ def build_flux_kontext_prod(photos, edits, seed):
         # of their own; keeping both would compare a prompt nobody ever sends.
         instruction = edit["instruction"].replace("Keep the face exactly the same.", "").strip()
         instruction = f"{instruction.rstrip().rstrip('.')}. {DEFAULT_IDENTITY_CLAUSE}"
+        # KAYA_BENCH_CANDIDATES isolates the two halves of the change: the
+        # identity clause and the best-of-N selection. Selecting on face
+        # similarity alone can prefer the take that pasted the original face in
+        # most literally, which is also the take most likely to have a composite
+        # body, so the two need to be measurable apart.
         candidates = []
-        for index in range(2):
+        for index in range(int(os.environ.get("KAYA_BENCH_CANDIDATES", "2"))):
             take = seed + index
             candidates.append((pipe(
                 image=source, prompt=instruction,
