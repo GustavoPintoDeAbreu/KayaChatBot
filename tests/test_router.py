@@ -124,3 +124,32 @@ class TestRoutingBehaviour:
         assert router.mode_config(cfg, router.BANTER)["retrieval"] is False
         assert router.mode_config(cfg, router.MIXED)["top_k"] == 3
         assert router.mode_config(cfg, "nonexistent") == {}
+
+
+class TestGeneralMode:
+    """`general` is what stops a question about the world being answered as a
+    report about the group. "quem é melhor, Ronaldo ou Messi?" used to route
+    FACTUAL, which retrieved group context and every member profile."""
+
+    def test_general_label_is_parsed(self):
+        backend = StubBackend("GENERAL")
+        route = router.classify(backend, _config(), "quem é melhor, Ronaldo ou Messi?")
+        assert route.mode == router.GENERAL
+        assert route.command is None
+        assert route.fallback is False
+
+    def test_general_disables_retrieval(self):
+        assert router.Route(mode=router.GENERAL).retrieval_enabled is False
+
+    def test_general_is_a_known_mode(self):
+        assert router.GENERAL in router.MODES
+
+    def test_factual_is_not_shadowed_by_general(self):
+        backend = StubBackend("FACTUAL")
+        assert router.classify(backend, _config(), "quem é o Peter?").mode == router.FACTUAL
+
+    def test_router_prompt_offers_general(self):
+        backend = StubBackend("GENERAL")
+        router.classify(backend, _config(), "explica-me a inflação")
+        system = backend.calls[0]["messages"][0]["content"]
+        assert "GENERAL" in system

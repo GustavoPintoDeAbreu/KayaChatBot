@@ -41,9 +41,13 @@ rag_config = config.get("rag", {})
 knowledge_approach = _engine.knowledge_approach
 
 # ── System prompt ────────────────────────────────────────────────────────────
-# The web UI keeps its historical behaviour (no uncensored preamble); the
-# WhatsApp bridge builds its own prompt via build_system_prompt() at startup.
-system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
+# Same posture as the WhatsApp bridge. The web UI used to pin this to False, which
+# made the same model behave like two different bots depending on the door you
+# came in through — the browser got refusals the group never saw on their phones.
+system_prompt = build_system_prompt(
+    config, config_path,
+    include_uncensored=bool(config.get("chat", {}).get("uncensored_mode", False)),
+)
 
 # Interaction logging now lives in src/chat/metrics.py (shared with the WhatsApp
 # bridge), which writes the same data/feedback/live_interactions.jsonl plus
@@ -74,12 +78,12 @@ _BUSY_MESSAGE = (
 )
 
 
-def _build_user_turn(message: str, history: list) -> tuple:
+def _build_user_turn(message: str, history: list, web_context: str = "") -> tuple:
     """Return (user_message_full, context) for one local-model turn.
 
     ``history`` is the prior chat (list of {"role","content"} dicts) excluding the
-    current message. Web search is handled separately in ``bot_stream`` (it answers
-    directly via Grok and bypasses the local model), so it is not injected here.
+    current message. ``web_context`` is a finished web-search answer, injected as
+    context so the local model still writes the reply in its own voice.
     """
     context = ""
     if rag_enabled and retriever:
@@ -89,6 +93,8 @@ def _build_user_turn(message: str, history: list) -> tuple:
             print(f"⚠️  RAG retrieval failed: {exc}")
 
     parts = []
+    if web_context:
+        parts.append(web_context)
     if context:
         parts.append(context)
     if history:
@@ -120,24 +126,32 @@ def bot_stream(history: list):
     prior = history[:-1]
     _t0 = time.perf_counter()
 
-    # Off-topic / current-events questions are answered directly by Grok's web search
-    # (factually grounded, EU-PT) and bypass the local model + the GPU lock entirely.
+    # Off-topic / current-events questions get their facts from Grok's web search.
+    # The answer is CONTEXT, not the reply: returning it verbatim bypassed the
+    # persona and produced replies that disclaimed half the question. See
+    # engine.respond for the same change on the WhatsApp path.
     web_result = WebSearchResult()
     if retriever:
         web_result = maybe_web_search(message, retriever, config)
+    web_context = ""
+    citation = ""
     if web_result.used and web_result.answer:
-        cleaned = web_result.answer
         citation = web_result.citation_line()
-        if citation:
-            cleaned = f"{cleaned}\n\n{citation}"
-        history = history + [{"role": "assistant", "content": cleaned}]
-        yield history, "", ""
-        interaction_id = metrics.log_interaction(
-            source="web", user_message=message, assistant_response=cleaned,
-            latency_ms=(time.perf_counter() - _t0) * 1000.0, web_search_used=True,
-        )
-        yield history, "", interaction_id
-        return
+        if config.get("web_search", {}).get("synthesize_locally", True):
+            web_context = (
+                "Resultados de pesquisa web (informação atual e fiável):\n"
+                f"{web_result.answer}"
+            )
+        else:
+            cleaned = f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
+            history = history + [{"role": "assistant", "content": cleaned}]
+            yield history, "", ""
+            interaction_id = metrics.log_interaction(
+                source="web", user_message=message, assistant_response=cleaned,
+                latency_ms=(time.perf_counter() - _t0) * 1000.0, web_search_used=True,
+            )
+            yield history, "", interaction_id
+            return
 
     # Serialize all GPU work (RAG retrieval + streaming generation) behind the
     # shared lock so concurrent users don't race on CUDA. Held for the whole
@@ -145,7 +159,8 @@ def bot_stream(history: list):
     # past the timeout, degrade to a friendly busy message instead of hanging.
     try:
         with gpu_section(config):
-            user_message_full, context = _build_user_turn(message, prior)
+            user_message_full, context = _build_user_turn(
+                message, prior, web_context=web_context)
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -163,6 +178,8 @@ def bot_stream(history: list):
                 yield history, context, ""
 
             cleaned = clean_response(partial, user_name="User", bot_name="Kaya Bot")
+            if citation:
+                cleaned = f"{cleaned}\n\n{citation}"
             history[-1]["content"] = cleaned
             yield history, context, ""
         interaction_id = metrics.log_interaction(
@@ -170,7 +187,7 @@ def bot_stream(history: list):
             user_message=message,
             assistant_response=cleaned,
             latency_ms=(time.perf_counter() - _t0) * 1000.0,
-            web_search_used=False,
+            web_search_used=bool(citation),
         )
         # Final yield carries the interaction_id so a 👍/👎 on this answer links to it.
         yield history, context, interaction_id

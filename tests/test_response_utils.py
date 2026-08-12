@@ -9,6 +9,7 @@ from src.chat.response_utils import (
     clean_response,
     coerce_text,
     detect_language,
+    strip_clause_dashes,
     truncate_history_line,
     wants_long_answer,
 )
@@ -186,3 +187,46 @@ class TestCoerceText:
     def test_none_and_empty(self):
         assert coerce_text(None) == ""
         assert coerce_text([]) == ""
+
+
+class TestStripClauseDashes:
+    """The group asked for no dashes, commas at most. The risk is over-reach:
+    Portuguese is full of intra-word hyphens and stripping those would mangle
+    every clitic pronoun in a reply."""
+
+    def test_em_dash_between_clauses_becomes_a_comma(self):
+        assert strip_clause_dashes(
+            "Dá-me uns minutos que isto demora — já mando."
+        ) == "Dá-me uns minutos que isto demora, já mando."
+
+    def test_en_dash_and_double_hyphen_too(self):
+        assert strip_clause_dashes("fixe – mas chato") == "fixe, mas chato"
+        assert strip_clause_dashes("isto -- ou aquilo") == "isto, ou aquilo"
+        assert strip_clause_dashes("a - b") == "a, b"
+
+    def test_clitic_pronouns_survive(self):
+        for text in ("Dá-me isso", "não-sei", "manda-o embora", "põe-te a andar"):
+            assert strip_clause_dashes(text) == text
+
+    def test_filenames_and_model_names_survive(self):
+        text = "O ficheiro pt_PT-tugão-medium.onnx é o bom."
+        assert strip_clause_dashes(text) == text
+
+    def test_bullet_markers_survive(self):
+        assert strip_clause_dashes("Coisas:\n- uma\n- outra") == "Coisas:\n- uma\n- outra"
+
+    def test_bullet_content_is_still_cleaned(self):
+        assert strip_clause_dashes("- outra — e mais") == "- outra, e mais"
+
+    def test_trailing_dash_is_dropped_not_commafied(self):
+        assert strip_clause_dashes("fim —") == "fim"
+
+    def test_empty_and_none_safe(self):
+        assert strip_clause_dashes("") == ""
+
+    def test_applied_by_clean_response(self):
+        cleaned = clean_response(
+            "O Peter tem um cão — chama-se Kobe.", user_name="Sofia"
+        )
+        assert "—" not in cleaned
+        assert "chama-se Kobe" in cleaned

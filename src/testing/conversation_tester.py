@@ -11,6 +11,7 @@ CLI usage:
 """
 
 import argparse
+import inspect
 import json
 import os
 import random
@@ -530,13 +531,27 @@ class LLMJudgeTester:
         return parse_scores(raw)
 
     def _model_response(self, conversation_history: List[Dict[str, str]]) -> str:
-        """Generate a response from the local model.
+        """Generate a response from the local model, with the turns before it.
 
-        Uses the last user message as the prompt (straightforward v1 approach).
+        This used to send only the last user message and throw the accumulated
+        history away, which made the "multi-turn" scenario single-turn: the
+        follow-up ("Can you tell me more about that?") arrived with nothing to
+        refer back to, and was scored as though the model had lost the thread.
+        Prior turns are prepended in the same "Conversa recente:" shape the engine
+        uses, so the two paths ask the model the same question.
         """
-        user_messages = [m for m in conversation_history if m["role"] == "user"]
-        last_question = user_messages[-1]["content"] if user_messages else ""
-        return self.local_model.generate(last_question)
+        if not conversation_history:
+            return self.local_model.generate("")
+        prior = conversation_history[:-1]
+        last_question = conversation_history[-1]["content"]
+        if not prior:
+            return self.local_model.generate(last_question)
+        lines = [
+            f"{'User' if turn['role'] == 'user' else 'Kaya Bot'}: {turn['content']}"
+            for turn in prior
+        ]
+        prompt = "Conversa recente:\n" + "\n".join(lines) + f"\n\nUser: {last_question}"
+        return self.local_model.generate(prompt)
 
     # ------------------------------------------------------------------
     # Scenario runner
@@ -752,12 +767,41 @@ class GoldenTestRunner:
             data = json.load(fh)
         return data.get("tests", data) if isinstance(data, dict) else data
 
-    def _get_model_response(self, question: str) -> str:
-        """Get response from local model (or mock)."""
+    @staticmethod
+    def _accepts_history_impl(fn: Callable) -> bool:
+        try:
+            params = inspect.signature(fn).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        positional = [
+            p for p in params
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)
+        ]
+        return any(p.kind == p.VAR_POSITIONAL for p in positional) or len(positional) >= 2
+
+    def _get_model_response(self, question: str, history: Optional[List[str]] = None) -> str:
+        """Get response from local model (or mock), with any preceding turns.
+
+        ``history`` is a list of already-formatted ``"<who>: <text>"`` lines, the
+        same shape the engine takes. It was previously ignored, so the dataset's
+        own ``multithread`` cases — a bare pronoun question that only resolves
+        against the turns before it — were asked with no turns before them, and
+        the model was marked down for an answer nobody could have given.
+        """
         if self._response_fn is not None:
+            # Older harnesses (benchmark.py, the keyword tester) pass a
+            # question-only callable. Ask the signature rather than catching
+            # TypeError, which would swallow a real one raised inside the call.
+            if self._accepts_history_impl(self._response_fn):
+                return self._response_fn(question, history or [])
             return self._response_fn(question)
         if self.local_model is not None and self.local_model.available:
-            return self.local_model.generate(question)
+            prompt = question
+            if history:
+                prompt = (
+                    "Conversa recente:\n" + "\n".join(history) + f"\n\nUser: {question}"
+                )
+            return self.local_model.generate(prompt)
         # Mock response for when no GPU model is loaded
         return f"[MOCK] Response to: {question}"
 
@@ -853,11 +897,12 @@ class GoldenTestRunner:
             reference = tc.get("reference", "")
             forbidden_patterns = tc.get("forbidden_patterns", [])
             min_score = tc.get("min_score", 3.0)
+            history = tc.get("history", []) or []
 
             if verbose:
                 print(f"  [{test_id}] {category}: {question[:60]}...")
 
-            response = self._get_model_response(question)
+            response = self._get_model_response(question, history)
             leaked = check_identity_leaks(response)
             if forbidden_patterns:
                 for pat in forbidden_patterns:

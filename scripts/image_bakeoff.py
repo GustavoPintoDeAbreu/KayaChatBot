@@ -459,11 +459,112 @@ def build_flux_kontext(photos, edits, seed):
     return generate, pipe
 
 
+def build_flux_kontext_prod(photos, edits, seed):
+    """The pipeline production actually runs, so the change is measured not assumed.
+
+    Same weights as ``flux-kontext``. What differs is everything around them, and
+    all of it was missing from the live path when the group started complaining:
+    the identity clause the benchmark instructions always carried, a single
+    resample straight to a Kontext bucket instead of two, framing tightened around
+    small faces, and two takes scored against the source face instead of whichever
+    seed came up.
+    """
+    import torch
+    from diffusers import FluxKontextPipeline
+    from diffusers.quantizers import PipelineQuantizationConfig
+
+    from scripts.imagegen_worker import DEFAULT_IDENTITY_CLAUSE
+    from src.chat import face_utils
+
+    quant = PipelineQuantizationConfig(quant_mapping={
+        "transformer": _bnb_diffusers_config(8, keep=[]),
+        "text_encoder_2": _bnb_transformers_config(8),
+    })
+    pipe = FluxKontextPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
+        quantization_config=quant)
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
+    pipe.set_progress_bar_config(disable=True)
+
+    prepared: Dict[str, Any] = {}
+
+    def prepare(photo):
+        if photo["id"] not in prepared:
+            prepared[photo["id"]] = face_utils.prepare_source(photo["path"])
+        return prepared[photo["id"]][0]
+
+    def generate(source, edit, seed, photo_id=None):
+        reference = prepared.get(photo_id, (None, None))[1]
+        # Build the prompt the way prod builds it: the request as the user phrased
+        # it, plus prod's own clause. The bench instructions carry a shorter clause
+        # of their own; keeping both would compare a prompt nobody ever sends.
+        instruction = edit["instruction"].replace("Keep the face exactly the same.", "").strip()
+        instruction = f"{instruction.rstrip().rstrip('.')}. {DEFAULT_IDENTITY_CLAUSE}"
+        candidates = []
+        for index in range(2):
+            take = seed + index
+            candidates.append((pipe(
+                image=source, prompt=instruction,
+                height=source.height, width=source.width, _auto_resize=False,
+                guidance_scale=2.5, num_inference_steps=28,
+                generator=torch.Generator("cpu").manual_seed(take),
+            ).images[0], take))
+        best, _, _ = face_utils.pick_best(reference, candidates)
+        return best
+
+    return generate, pipe, prepare
+
+
+def build_qwen_image_edit_2511(photos, edits, seed):
+    """Qwen-Image-Edit-2511, the release that targets exactly our failure mode.
+
+    Same two-pass 8-bit shape as 2509 (see ``build_qwen_image_edit`` for why the
+    encoder cannot sit beside the transformer on a 24GB card). It is worth its own
+    arm because 2509 scored 0.138 here while adhering best of anything tested —
+    it understood the instruction and returned a stranger — and 2511's stated
+    change is character consistency and multi-person handling, which is where the
+    group photos in this bench live.
+    """
+    import torch
+    from diffusers import QwenImageEditPlusPipeline, QwenImageTransformer2DModel
+
+    repo = "Qwen/Qwen-Image-Edit-2511"
+    cache = _qwen_embeddings(repo, photos, edits)
+
+    transformer = QwenImageTransformer2DModel.from_pretrained(
+        repo, subfolder="transformer", torch_dtype=torch.bfloat16,
+        quantization_config=_bnb_diffusers_config(8))
+    pipe = QwenImageEditPlusPipeline.from_pretrained(
+        repo, transformer=transformer, text_encoder=None, torch_dtype=torch.bfloat16)
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
+    pipe.set_progress_bar_config(disable=True)
+
+    def generate(source, edit, seed, photo_id=None):
+        embeds, mask = cache[f"{photo_id}|{edit['id']}"]
+        negative, negative_mask = cache[f"{photo_id}|__negative__"]
+        return pipe(
+            image=[source],
+            prompt_embeds=embeds.to("cuda"), prompt_embeds_mask=mask.to("cuda"),
+            negative_prompt_embeds=negative.to("cuda"),
+            negative_prompt_embeds_mask=negative_mask.to("cuda"),
+            true_cfg_scale=4.0, num_inference_steps=40,
+            generator=torch.Generator("cpu").manual_seed(seed),
+        ).images[0]
+
+    return generate, pipe
+
+
 ARMS: Dict[str, Callable] = {
     "sdxl-ipadapter": build_sdxl_ipadapter,
     "z-image-turbo": build_z_image_turbo,
     "qwen-image-edit": build_qwen_image_edit,
+    "qwen-image-edit-2511": build_qwen_image_edit_2511,
     "flux-kontext": build_flux_kontext,
+    "flux-kontext-prod": build_flux_kontext_prod,
 }
 
 
@@ -484,7 +585,12 @@ def stage_generate(run_dir: Path, arms: List[str], photos: List[Dict[str, Any]],
         print(f"\n=== {arm}")
         free_gpu()
         try:
-            generate, pipe = ARMS[arm](photos, edits, seed)
+            # An arm may return a third element: its own source preparation. The
+            # prod arm needs it, because how the photo is framed and resized
+            # before the model sees it is part of what is being measured.
+            built = ARMS[arm](photos, edits, seed)
+            generate, pipe = built[0], built[1]
+            prepare = built[2] if len(built) > 2 else None
         except Exception as exc:  # noqa: BLE001 — one broken arm must not end the run
             print(f"!! {arm} failed to load: {type(exc).__name__}: {exc}")
             results["cells"].append({"arm": arm, "photo": None, "edit": None,
@@ -497,7 +603,7 @@ def stage_generate(run_dir: Path, arms: List[str], photos: List[Dict[str, Any]],
         torch.cuda.reset_peak_memory_stats()
 
         for photo in photos:
-            source = fit_source(photo["path"])
+            source = prepare(photo) if prepare else fit_source(photo["path"])
             for edit in edits:
                 if (arm, photo["id"], edit["id"]) in done:
                     continue
@@ -520,13 +626,14 @@ def stage_generate(run_dir: Path, arms: List[str], photos: List[Dict[str, Any]],
                 print(f"  {photo['id']}/{edit['id']}  {elapsed:.0f}s")
                 results_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-        del generate, pipe
+        del generate, pipe, built, prepare
         free_gpu()
 
     print(f"\n✓ generation done → {results_path}")
 
 
-def face_embedding(app, path: Path):
+def face_embeddings(app, path: Path):
+    """Every face in the image, largest first. None if the image is unreadable."""
     import cv2
     import numpy as np
 
@@ -535,9 +642,26 @@ def face_embedding(app, path: Path):
         return None
     faces = app.get(image)
     if not faces:
-        return None
+        return []
     faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
-    return np.asarray(faces[0].normed_embedding, dtype=np.float32)
+    return [np.asarray(f.normed_embedding, dtype=np.float32) for f in faces]
+
+
+def best_likeness(reference, embeddings):
+    """Similarity to the CLOSEST face in the output, not simply the biggest one.
+
+    Half the bench photos are group shots, deliberately. Comparing the largest
+    face in the output against the largest in the source compares two different
+    people whenever the edit reorders who dominates the frame, and scores that as
+    an identity failure. Three of the eight photos sat at 0.03-0.18 under the old
+    rule while their faces occupied 33-44% of the frame, which is not what a
+    genuine likeness collapse looks like.
+    """
+    import numpy as np
+
+    if reference is None or not embeddings:
+        return None
+    return max(float(np.dot(reference, emb)) for emb in embeddings)
 
 
 def judge_image(url: str, path: Path, instruction: str,
@@ -606,15 +730,17 @@ def stage_score(run_dir: Path, photo_dir: Path, judge_url: str) -> None:
 
         if "likeness" not in cell:
             reference = references.get(cell["photo"])
-            embedding = face_embedding(app, path)
-            if reference is None or embedding is None:
+            embeddings = face_embeddings(app, path)
+            score = best_likeness(reference, embeddings)
+            if score is None:
                 # No face in the output is not a missing measurement — it is the
                 # worst possible result for an edit meant to keep someone's face.
                 cell["likeness"] = 0.0
-                cell["face_found"] = embedding is not None
+                cell["face_found"] = bool(embeddings)
             else:
-                cell["likeness"] = round(float(np.dot(reference, embedding)), 4)
+                cell["likeness"] = round(score, 4)
                 cell["face_found"] = True
+            cell["faces_in_output"] = 0 if not embeddings else len(embeddings)
 
         if "adherence" not in cell:
             verdict = judge_image(judge_url, path, edits[cell["edit"]]["instruction"])

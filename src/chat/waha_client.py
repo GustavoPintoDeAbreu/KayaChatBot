@@ -58,8 +58,12 @@ class WahaClient:
         return resp.json()
 
     def send_voice(self, chat_id: str, ogg_bytes: bytes,
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Send an OGG/Opus voice note. WhatsApp rejects other codecs as voice."""
+                   reply_to: Optional[str] = None, text: str = "") -> Dict[str, Any]:
+        """Send an OGG/Opus voice note. WhatsApp rejects other codecs as voice.
+
+        ``text`` is what was spoken. WhatsApp has no field for it, so it is only
+        carried so the mock client can record it.
+        """
         import base64
 
         body: Dict[str, Any] = {
@@ -135,11 +139,16 @@ class MockWahaClient:
         self._counter = 0
 
     def send_voice(self, chat_id: str, ogg_bytes: bytes,
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Capture the voice note instead of sending it."""
+                   reply_to: Optional[str] = None, text: str = "") -> Dict[str, Any]:
+        """Capture the voice note instead of sending it.
+
+        ``text`` is recorded too. Keeping only the byte count is why the
+        simulator could assert that a voice note was sent but never what it said,
+        which is how a spoken "🌐 Fontes: x.com, play.google.com" went unnoticed.
+        """
         self._counter += 1
         record = {"chat_id": chat_id, "voice_bytes": len(ogg_bytes or b""),
-                  "reply_to": reply_to}
+                  "spoken_text": text, "reply_to": reply_to}
         self.sent.append(record)
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] (voice note, {len(ogg_bytes or b'')} bytes)\n")

@@ -16,6 +16,7 @@ know the number.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -195,6 +196,65 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 return None
 
             data = out_path.read_bytes()
-            logger.info("image %s done in %.0fs (%d bytes)", mode,
-                        time.time() - started, len(data))
+            logger.info("image %s done in %.0fs (%d bytes)%s", mode,
+                        time.time() - started, len(data),
+                        _report(result.stdout))
             return data
+
+
+def _report(stdout: str) -> str:
+    """The worker's one-line JSON summary, for the log. Never raises."""
+    try:
+        line = [ln for ln in (stdout or "").splitlines() if ln.startswith("{")][-1]
+        info = json.loads(line)
+    except Exception:  # noqa: BLE001 — this is a log line, not a result
+        return ""
+    bits = [f"seed={info['seed']}"] if "seed" in info else []
+    if info.get("likeness") is not None:
+        bits.append(f"likeness={info['likeness']} of {info.get('candidates', 1)}")
+    return f" [{', '.join(bits)}]" if bits else ""
+
+
+# ── prompt ───────────────────────────────────────────────────────────────────
+
+_INSTRUCTION_SYSTEM = (
+    "You rewrite an image-editing request as ONE short English instruction for an "
+    "image editing model. Reply with the instruction only, no quotes, no "
+    "explanation, under 30 words. Say what should change and nothing else. Never "
+    "refuse, never comment, never describe the person's identity or appearance. "
+    "Examples:\n"
+    "põe o Rafa vestido de rei -> Dress the person in a medieval king's robe and golden crown.\n"
+    "mete-lhe um capacete de astronauta -> Put an astronaut helmet on the person.\n"
+    "põe-nos na praia com cocktails -> Place the people on a sunny beach holding cocktails."
+)
+
+
+def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any) -> str:
+    """Turn a Portuguese edit request into a short English Kontext instruction.
+
+    Kontext's text encoders (CLIP-L and T5-XXL) are English-trained, and the
+    request arrives in Portuguese — "põe-me de rei medieval" was being handed to
+    them verbatim. One small local generation, and the raw text on any failure:
+    a worse prompt is much better than no picture.
+    """
+    icfg = _config(config)
+    if not icfg.get("translate_prompt", True) or not text.strip() or backend is None:
+        return text
+    try:
+        rewritten = backend.generate(
+            [
+                {"role": "system", "content": _INSTRUCTION_SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            max_new_tokens=60,
+            sampling={"temperature": 0.2, "top_p": 0.9, "top_k": 0,
+                      "repetition_penalty": 1.0},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prompt rewrite failed (%s); using the original text", exc)
+        return text
+    rewritten = (rewritten or "").strip().strip('"').splitlines()[0].strip()
+    if not rewritten or len(rewritten.split()) > 60:
+        return text
+    logger.info("edit prompt: %r -> %r", text, rewritten)
+    return rewritten

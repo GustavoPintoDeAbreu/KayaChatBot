@@ -312,6 +312,20 @@ def check_expectations(result: Dict[str, Any], expect: Dict[str, Any],
         if not any("voice_bytes" in item for item in outbox_delta):
             failures.append("no voice note reached the outbox")
 
+    # What was actually SPOKEN, which is not the same string as the written reply:
+    # a web-grounded answer used to end with Piper reading "🌐 Fontes: x.com,
+    # play.google.com" out loud. Only assertable because the mock outbox records
+    # the spoken text and no longer just its byte count.
+    spoken = " ".join(
+        item.get("spoken_text", "") for item in outbox_delta if "voice_bytes" in item
+    ).lower()
+    for needle in expect.get("spoken_not_contains", []):
+        if needle.lower() in spoken:
+            failures.append(f"the voice note said {needle!r}")
+    spoken_any = expect.get("spoken_contains_any", [])
+    if spoken_any and not any(n.lower() in spoken for n in spoken_any):
+        failures.append(f"the voice note said none of {spoken_any}")
+
     if expect.get("text_only"):
         if any("voice_bytes" in item or "image_bytes" in item for item in outbox_delta):
             failures.append("expected a text reply, got media")

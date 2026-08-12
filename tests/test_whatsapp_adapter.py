@@ -351,9 +351,14 @@ def test_clear_command_not_generated_as_reply(tmp_path):
 class RoutedReply:
     """Mimics ``engine.Reply``: reply text plus how the message was routed."""
 
-    def __init__(self, text="", command=None, mode="banter"):
+    def __init__(self, text="", command=None, mode="banter", citation=""):
         self.text = text
+        self.citation = citation
         self.route = type("Route", (), {"mode": mode, "command": command})()
+
+    @property
+    def text_with_citation(self):
+        return f"{self.text}\n\n{self.citation}" if self.citation else self.text
 
 
 def make_routed_adapter(tmp_path, reply, **overrides):
@@ -1061,3 +1066,103 @@ def test_a_pending_image_is_visible_in_the_conversation(tmp_path):
     history = adapter.session_store.recent(GROUP, 10)
     assert any("a preparar uma imagem" in line for line in history)
     assert any("gato astronauta" in line for line in history)
+
+
+# ── what is SPOKEN vs what is WRITTEN ────────────────────────────────────────
+# Every voice test above stubs TTS as `lambda text: b"OGG"` and asserts on byte
+# counts, so nothing noticed that a web-grounded reply was handing Piper its
+# "🌐 Fontes: x.com, play.google.com" line to read out domain by domain.
+
+def _capture_tts(adapter):
+    """Record the exact string handed to the synthesiser."""
+    seen = {}
+
+    def tts(text):
+        seen["text"] = text
+        return b"OGG"
+
+    adapter.tts_synthesize = tts
+    return seen
+
+
+def test_voice_note_never_speaks_the_sources_line(tmp_path):
+    from src.chat.tts import sanitize_for_speech
+
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br, pt.uefa.com"),
+    )
+    adapter.audio_reply_enabled = True
+    adapter.speech_text = sanitize_for_speech
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    spoken = _capture_tts(adapter)
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    assert spoken["text"] == "O Benfica ganhou 6-1."
+    assert "Fontes" not in spoken["text"]
+    assert "espn" not in spoken["text"]
+
+
+def test_sources_follow_the_voice_note_as_text(tmp_path):
+    from src.chat.tts import sanitize_for_speech
+
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br"),
+    )
+    adapter.audio_reply_enabled = True
+    adapter.speech_text = sanitize_for_speech
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    _capture_tts(adapter)
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    sent = adapter.waha_client.sent
+    assert any("voice_bytes" in item for item in sent)
+    assert any(item.get("text") == "🌐 Fontes: espn.com.br" for item in sent)
+
+
+def test_written_reply_still_carries_the_sources_line(tmp_path):
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br"),
+    )
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    assert adapter.waha_client.sent[-1]["text"] == (
+        "O Benfica ganhou 6-1.\n\n🌐 Fontes: espn.com.br"
+    )
+
+
+def test_spoken_text_is_recorded_for_the_voice_note(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.audio_reply_enabled = True
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    adapter.tts_synthesize = lambda text: b"OGG"
+
+    result = adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert result["delivered_as"] == "voice"
+    assert result["spoken_text"] == "Olá!"
+    assert adapter.waha_client.sent[-1]["spoken_text"] == "Olá!"
+
+
+def test_text_delivery_is_reported_as_text(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+
+    result = adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert result["delivered_as"] == "text"
+    assert result["spoken_text"] == ""
+
+
+def test_image_acknowledgements_carry_no_dashes(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+    for key, reply in adapter.command_replies.items():
+        assert "—" not in reply and "–" not in reply, key
+        assert " - " not in reply, key

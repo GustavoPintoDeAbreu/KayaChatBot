@@ -27,6 +27,7 @@ imagem de um gato astronauta" needs.
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -41,17 +42,33 @@ BASE_DIR = Path(__file__).parent.parent
 NEGATIVE = ("deformed, distorted face, disfigured, extra fingers, blurry, low quality, "
             "watermark, text, cartoon, doll, plastic skin")
 
+# Kontext has to be told what to KEEP, not only what to change: "make him a
+# medieval king" is read as licence to return a different medieval king. Every
+# instruction in the bake-off ended with a clause like this — the 0.409 likeness
+# was measured with it, and production was shipping without it.
+DEFAULT_IDENTITY_CLAUSE = (
+    "Keep the person's face, facial features, hairline, skin tone and identity "
+    "exactly the same as in the original photo. Do not change who they are."
+)
+
 KEEP_BF16 = {
     "qwen": ["img_in", "txt_in", "proj_out", "norm_out", "time_text_embed"],
     "flux": ["x_embedder", "context_embedder", "proj_out", "norm_out", "time_text_embed"],
 }
 
 
-def load_image(path: str, longest: int = 1024):
-    """Load a photo scaled so the long side is `longest`, on a multiple of 16."""
+def open_photo(path: str):
+    """The photo at full resolution, upright. No scaling: that comes later, once."""
     from PIL import Image, ImageOps
 
-    image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+
+
+def load_image(path: str, longest: int = 1024):
+    """Legacy loader, kept for the Qwen path which does its own bucketing."""
+    from PIL import Image
+
+    image = open_photo(path)
     scale = longest / max(image.size)
     if scale < 1.0:
         image = image.resize((max(int(image.width * scale), 16),
@@ -68,12 +85,23 @@ def bnb_8bit(keep):
 
 
 def edit_with_flux(image_path: str, prompt: str, out_path: str,
-                   steps: int, seed: int) -> None:
+                   steps: int, seed: int, options: Dict[str, Any] = None) -> Dict[str, Any]:
     """FLUX.1 Kontext — single pass, 8-bit, ~15GB resident, ~90s an image."""
     import torch
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
     from transformers import BitsAndBytesConfig as TfBnb
+
+    from src.chat import face_utils
+
+    options = options or {}
+    candidates_wanted = max(1, int(options.get("candidates", 1)))
+    source, reference = face_utils.prepare_source(
+        image_path,
+        face_crop=bool(options.get("face_crop", True)),
+        min_ratio=float(options.get("face_min_ratio", 0.22)),
+        target_ratio=float(options.get("face_target_ratio", 0.32)),
+    )
 
     quant = PipelineQuantizationConfig(quant_mapping={
         "transformer": bnb_8bit([]),
@@ -91,10 +119,28 @@ def edit_with_flux(image_path: str, prompt: str, out_path: str,
     pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
-    result = pipe(image=load_image(image_path), prompt=prompt,
-                  guidance_scale=2.5, num_inference_steps=steps,
-                  generator=torch.Generator("cpu").manual_seed(seed)).images[0]
-    result.save(out_path)
+    # One model load, N takes. Loading the 15GB pipeline is most of the cost, so a
+    # second candidate is far cheaper than a second request would be.
+    candidates = []
+    for index in range(candidates_wanted):
+        take_seed = seed + index
+        image = pipe(
+            image=source, prompt=prompt,
+            height=source.height, width=source.width, _auto_resize=False,
+            guidance_scale=float(options.get("guidance_scale", 2.5)),
+            num_inference_steps=steps,
+            generator=torch.Generator("cpu").manual_seed(take_seed),
+        ).images[0]
+        candidates.append((image, take_seed))
+
+    best, best_seed, score = face_utils.pick_best(reference, candidates)
+    best.save(out_path)
+    return {
+        "seed": best_seed,
+        "likeness": None if score is None else round(score, 4),
+        "candidates": len(candidates),
+        "source_size": [source.width, source.height],
+    }
 
 
 def _qwen_embed(repo: str, image_path: str, prompt: str, out_path: str) -> None:
@@ -126,7 +172,7 @@ def _qwen_embed(repo: str, image_path: str, prompt: str, out_path: str) -> None:
 
 
 def edit_with_qwen(image_path: str, prompt: str, out_path: str,
-                   steps: int, seed: int) -> None:
+                   steps: int, seed: int, options: Dict[str, Any] = None) -> Dict[str, Any]:
     """Qwen-Image-Edit-2509 in two passes.
 
     The 20B transformer needs 8-bit to render cleanly (NF4 turns it into a
@@ -165,6 +211,7 @@ def edit_with_qwen(image_path: str, prompt: str, out_path: str,
         true_cfg_scale=4.0, num_inference_steps=steps,
         generator=torch.Generator("cpu").manual_seed(seed)).images[0]
     result.save(out_path)
+    return {"seed": seed, "likeness": None, "candidates": 1}
 
 
 def generate_from_text(prompt: str, out_path: str, steps: int, seed: int) -> None:
@@ -197,6 +244,9 @@ def main() -> None:
     parser.add_argument("--editor", default=None)
     parser.add_argument("--steps", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--candidates", type=int, default=0)
+    parser.add_argument("--no-face-crop", action="store_true")
+    parser.add_argument("--no-identity-clause", action="store_true")
     args = parser.parse_args()
 
     if args.stage == "embed":
@@ -207,21 +257,39 @@ def main() -> None:
 
     config: Dict[str, Any] = load_config(str(BASE_DIR / "config.yaml"))
     icfg = (config.get("chat", {}) or {}).get("imagegen", {}) or {}
-    seed = args.seed or int(icfg.get("seed", 1234))
+    # A fixed seed makes a bad face reproducible: asking again returns the same
+    # stranger. Random unless one is pinned, for the bench or to reproduce a bug.
+    seed = args.seed or int(icfg.get("seed") or 0) or random.randint(1, 2**31 - 1)
 
     if args.mode == "generate":
         generate_from_text(args.prompt, args.out,
                            args.steps or int(icfg.get("generate_steps", 12)), seed)
-    else:
-        if not args.image:
-            raise SystemExit("--image is required for --mode edit")
-        editor = args.editor or icfg.get("editor", "flux-kontext")
-        if editor not in EDITORS:
-            raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
-        EDITORS[editor](args.image, args.prompt, args.out,
-                        args.steps or int(icfg.get("edit_steps", 28)), seed)
+        print(json.dumps({"ok": True, "out": args.out, "seed": seed}))
+        return
 
-    print(json.dumps({"ok": True, "out": args.out}))
+    if not args.image:
+        raise SystemExit("--image is required for --mode edit")
+    editor = args.editor or icfg.get("editor", "flux-kontext")
+    if editor not in EDITORS:
+        raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
+
+    prompt = args.prompt
+    clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
+    if clause and not args.no_identity_clause:
+        prompt = f"{prompt.rstrip().rstrip('.')}. {clause}"
+
+    options = {
+        "candidates": args.candidates or int(icfg.get("candidates", 1)),
+        "face_crop": not args.no_face_crop and bool(icfg.get("face_crop", True)),
+        "face_min_ratio": float(icfg.get("face_min_ratio", 0.22)),
+        "face_target_ratio": float(icfg.get("face_target_ratio", 0.32)),
+        "guidance_scale": float(icfg.get("guidance_scale", 2.5)),
+    }
+    info = EDITORS[editor](args.image, prompt, args.out,
+                           args.steps or int(icfg.get("edit_steps", 28)),
+                           seed, options) or {}
+
+    print(json.dumps({"ok": True, "out": args.out, "prompt": prompt, **info}))
 
 
 if __name__ == "__main__":

@@ -38,6 +38,52 @@ _voice_lock = threading.Lock()
 # Sentence boundaries, keeping the terminator with its sentence.
 _SENTENCE = re.compile(r"[^.!?…\n]+[.!?…]*\s*", re.UNICODE)
 
+# ── what a reply sounds like is not what it looks like ──────────────────────────
+# A written reply can carry things that only make sense on screen. Spoken, they
+# are noise: the group heard a voice note end with "🌐 Fontes: x.com,
+# play.google.com" read out as two bare domains, because the citation line was
+# glued onto the reply before delivery ever chose text or speech.
+_URL_RE = re.compile(r"https?://\S+|\bwww\.\S+", re.IGNORECASE)
+# A bare domain ("espn.com.br", "play.google.com") — Piper spells these out.
+_BARE_DOMAIN_RE = re.compile(
+    r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|pt|br|uk|io|ai|tv|es|fr|de|co)\b(?:\.[a-z]{2})?",
+    re.IGNORECASE,
+)
+_MARKDOWN_RE = re.compile(r"\*\*|__|`+|^#{1,6}\s*|^\s*[-*+]\s+", re.MULTILINE)
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002190-\U000021FF"
+    "\U0000FE0F\U000020E3\U00002B00-\U00002BFF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def sanitize_for_speech(text: str, citation_prefix: str = "🌐 Fontes:") -> str:
+    """Strip everything that reads fine but does not *speak* fine.
+
+    Drops the sources line entirely (a whole line starting with the citation
+    marker), then emoji, markdown syntax, URLs and bare domains. Applied at the
+    single point where a reply becomes audio, so every surface gets it.
+    """
+    if not text:
+        return ""
+    kept = [
+        line for line in text.split("\n")
+        if not line.strip().startswith(citation_prefix)
+        and not line.strip().lstrip("🌐 ").lower().startswith(("fontes:", "sources:"))
+    ]
+    out = "\n".join(kept)
+    out = _URL_RE.sub(" ", out)
+    out = _BARE_DOMAIN_RE.sub(" ", out)
+    out = _MARKDOWN_RE.sub("", out)
+    out = _EMOJI_RE.sub(" ", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
 
 def _resolve(path: str) -> Path:
     p = Path(path)

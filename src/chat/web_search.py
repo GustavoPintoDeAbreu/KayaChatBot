@@ -34,10 +34,13 @@ CITATION_PREFIX = "🌐 Fontes:"
 # Instruction given to Grok for web-grounded answers: factual, current, European-PT,
 # short. The group's private memory is never included here.
 _GROK_SYSTEM = (
-    "És o assistente do grupo de amigos 'Kaya'. Respondes a esta pergunta com base em "
-    "informação atual e verdadeira da web, em português europeu, de forma directa e "
-    "factual, em 1 a 3 frases. Não inventes números, datas ou nomes; se a informação não "
-    "for clara, di-lo. Não uses emojis."
+    "Devolves factos atuais e verdadeiros da web, em português europeu, de forma directa, "
+    "em 1 a 3 frases. Não inventes números, datas ou nomes; se a informação não for clara, "
+    "di-lo. Não uses emojis. "
+    "A mensagem pode conter outras coisas além da pergunta que precisa de pesquisa. "
+    "Responde APENAS à parte que precisa de informação atual e ignora completamente o "
+    "resto: não comentes essa parte, não a recuses, não digas que não se enquadra e não "
+    "menciones que a ignoraste. Outra pessoa trata dela."
 )
 
 # The user explicitly asks the bot to look something up online → always search.

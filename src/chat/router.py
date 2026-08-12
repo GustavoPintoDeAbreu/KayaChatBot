@@ -11,7 +11,14 @@ So each message is classified first, and the mode selects three things together:
     mode      retrieval        prompt                    length
     banter    none             short, in-voice           ~48 tokens
     mixed     reduced top-k    conversational            ~128 tokens
+    general   none             ordinary assistant        256 tokens
     factual   full (as today)  today's elaborate prompt  256 tokens
+
+`general` exists because `factual` used to swallow every question that was not
+banter, including the ones with nothing to do with the group. "quem é melhor,
+Ronaldo ou Messi?" retrieved group context and every member profile, and came
+back as a sourced report about the Kaya group. A question about the world is
+answered like any assistant would answer it, with no group memory attached.
 
 `command` is not a conversational mode — it is an explicit instruction
 ("responde só em áudio", "/clear") handled in code rather than generated.
@@ -33,8 +40,9 @@ from typing import Any, Dict, List, Optional
 
 BANTER = "banter"
 MIXED = "mixed"
+GENERAL = "general"
 FACTUAL = "factual"
-MODES = (BANTER, MIXED, FACTUAL)
+MODES = (BANTER, MIXED, GENERAL, FACTUAL)
 
 CMD_AUDIO = "audio"
 CMD_AUDIO_ONCE = "audio_once"
@@ -46,6 +54,7 @@ CMD_IMAGE = "image"
 _LABELS = {
     "BANTER": (BANTER, None),
     "MIXED": (MIXED, None),
+    "GENERAL": (GENERAL, None),
     "FACTUAL": (FACTUAL, None),
     "CMD_AUDIO": (None, CMD_AUDIO),
     "CMD_AUDIO_ONCE": (None, CMD_AUDIO_ONCE),
@@ -58,12 +67,18 @@ _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer
 
 BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me".
 MIXED — chat that references a person or event but is not really asking to be informed. Examples: "o Rafa outra vez a fazer disso", "ainda me lembro daquele jantar".
-FACTUAL — a genuine request for information, memory or detail about the group, its members, events, or the world. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?".
+FACTUAL — a request for information, memory or detail about THE GROUP: its members, its history, what was said or shared in it. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?", "quem mandou aquela foto do barco?".
+GENERAL — a question, task or opinion about anything OUTSIDE the group: world knowledge, current events, football, advice, cooking, writing, code, maths. Nobody from the group needs to be looked up to answer it. Examples: "quem é melhor, Ronaldo ou Messi?", "explica-me a inflação", "escreve-me um poema sobre o Porto", "o que faço para o jantar?", "who won the Champions League?", "como é que se muda um pneu?".
 CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
 CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
 CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing the default. Examples: "explica isso num áudio", "manda um áudio a explicar", "responde a esta por voz".
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
+
+FACTUAL and GENERAL differ only in whether the group is the subject. If answering needs the group's own memory it is FACTUAL; otherwise it is GENERAL, even when a group member is mentioned in passing:
+  "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
+  "o Gil joga à bola?" -> FACTUAL (the question is about Gil)
+  "manda o Gil para o caralho, e já agora quem ganhou a Champions?" -> GENERAL (nothing has to be looked up about Gil)
 
 A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
   "o áudio estava mau" -> BANTER (an opinion about a recording)
@@ -92,7 +107,7 @@ class Route:
 
     @property
     def retrieval_enabled(self) -> bool:
-        return self.mode != BANTER
+        return self.mode not in (BANTER, GENERAL)
 
 
 def _router_config(config: Dict[str, Any]) -> Dict[str, Any]:

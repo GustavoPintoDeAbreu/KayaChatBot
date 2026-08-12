@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
-from src.chat.gpu_lock import GpuBusyError
+from src.chat.gpu_lock import GpuBusyError, gpu_section
 from src.chat.whatsapp_adapter import WhatsAppAdapter
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
@@ -167,6 +167,13 @@ def _tts(text: str):
     return tts.synthesize_voice_note(text, config)
 
 
+def _speech_text(text: str) -> str:
+    """The spoken form of a written reply (see tts.sanitize_for_speech)."""
+    from src.chat import tts
+
+    return tts.sanitize_for_speech(text, citation_prefix=CITATION_PREFIX)
+
+
 def _stt(url: str, mimetype: str):
     """Transcribe an incoming voice note, or None if STT is unavailable."""
     from src.chat import stt
@@ -225,14 +232,23 @@ def _describe(url: str, mimetype: str):
 
 
 def _imagegen(mode: str, prompt: str, image_path=None):
-    """Make one image, or None. Blocking — the adapter calls it off-thread."""
+    """Make one image, or None. Blocking — the adapter calls it off-thread.
+
+    An edit request is rewritten into a short English instruction first: Kontext's
+    text encoders are English-trained and the request arrives in Portuguese. The
+    rewrite is one small local generation and falls back to the raw text.
+    """
     from src.chat import imagegen
 
+    if mode == "edit":
+        with gpu_section(config):
+            prompt = imagegen.build_edit_instruction(config, prompt, engine.backend)
     return imagegen.run(config, prompt, mode=mode, image_path=image_path)
 
 
 adapter = WhatsAppAdapter(_responder, waha_client, config,
-                          tts_synthesize=_tts, transcribe=_stt,
+                          tts_synthesize=_tts, speech_text=_speech_text,
+                          transcribe=_stt,
                           image_generate=_imagegen, fetch_media=_fetch_media,
                           describe_image=_describe)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
@@ -306,7 +322,9 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
             assistant_response=result["reply"],
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             is_group=bool(result.get("is_group")),
-            web_search_used=CITATION_PREFIX in result["reply"],
+            web_search_used=bool(result.get("citation")),
+            delivered_as=result.get("delivered_as", "text"),
+            spoken_text=result.get("spoken_text", ""),
         )
 
 

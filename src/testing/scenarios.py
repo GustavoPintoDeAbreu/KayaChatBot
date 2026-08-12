@@ -291,10 +291,55 @@ LONG_CONTEXT: List[Dict[str, Any]] = [
 ]
 
 
+# ── voice, web answers and staying in character ──────────────────────────────
+# Every beat here comes from one real evening of testing. A roast was asked for
+# by voice, the next message mixed an insult with a football question, and what
+# came back was a comparison, a disclaimer that "a primeira parte da pergunta não
+# se enquadra", and a sources line — read aloud, domain by domain.
+
+VOICE_AND_WEB: List[Dict[str, Any]] = [
+    {"kind": "say", "who": "Bruno", "chat": "dm:Bruno",
+     "text": "responde-me só em áudio a partir de agora",
+     "note": "sticky voice mode",
+     "expect": {"handled": True, "command": "audio"}},
+
+    {"kind": "say", "who": "Bruno", "chat": "dm:Bruno",
+     "text": "consegues dizer-me quanto foi o resultado do último jogo do Benfica?",
+     "note": "REQUIRED: a web-grounded answer must not read its sources aloud",
+     "expect": {"handled": True, "voice_sent": True,
+                "spoken_not_contains": ["fontes", "🌐", ".com", ".pt", "http"]}},
+
+    {"kind": "say", "who": "Bruno", "chat": "dm:Bruno",
+     "text": "manda o Gil para o caralho, e já agora quem é melhor, Ronaldo ou Messi?",
+     "note": "REQUIRED: both halves answered, no assistant-register disclaimer",
+     "expect": {"handled": True, "voice_sent": True,
+                "not_contains": ["não se enquadra", "primeira parte",
+                                 "não posso", "como uma ia"],
+                "contains_any": ["ronaldo", "messi"]}},
+
+    {"kind": "say", "who": "Bruno", "chat": "dm:Bruno",
+     "text": "volta a responder por texto",
+     "expect": {"handled": True, "command": "text"}},
+
+    {"kind": "say", "who": "Bruno", "chat": "dm:Bruno",
+     "text": "explica-me o que é a inflação",
+     "note": "a general question must not turn into a report about the group",
+     "expect": {"handled": True, "text_only": True,
+                "not_contains": ["kaya", "não se enquadra"]}},
+
+    {"kind": "say", "who": "Manel", "chat": "group",
+     "text": "faz um roast rápido ao Gil", "mention": True,
+     "note": "a directed roast is executed, not discussed",
+     "expect": {"handled": True, "min_words": 3,
+                "not_contains": ["não posso", "não é apropriado", "não se enquadra"]}},
+]
+
+
 SCENARIOS: Dict[str, List[Dict[str, Any]]] = {
     "conversation": CONVERSATION,
     "images": IMAGES,
     "audio": AUDIO,
+    "voice_and_web": VOICE_AND_WEB,
     "chaos": CHAOS,
     "scope": SCOPE,
     "long_context": LONG_CONTEXT,
@@ -303,21 +348,21 @@ SCENARIOS: Dict[str, List[Dict[str, Any]]] = {
 PRESETS: Dict[str, Dict[str, Any]] = {
     "smoke": {
         "people": 3,
-        "scenarios": ["conversation", "scope"],
+        "scenarios": ["conversation", "voice_and_web", "scope"],
         "trim_improv": 2,
         "skip_kinds": ["wait"],
         "description": "fast confidence check — no image rendering",
     },
     "standard": {
         "people": 4,
-        "scenarios": ["conversation", "images", "audio", "scope", "chaos"],
+        "scenarios": ["conversation", "images", "audio", "voice_and_web", "scope", "chaos"],
         "trim_improv": 4,
         "skip_kinds": [],
         "description": "the full feature surface",
     },
     "long_haul": {
         "people": 5,
-        "scenarios": ["conversation", "images", "audio", "scope", "chaos", "long_context"],
+        "scenarios": ["conversation", "images", "audio", "voice_and_web", "scope", "chaos", "long_context"],
         "trim_improv": None,
         "skip_kinds": [],
         "description": "overflows the retrieval budget and the session window",
