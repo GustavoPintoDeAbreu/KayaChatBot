@@ -474,11 +474,18 @@ whatsapp:
   # from the RETIRED fine-tuned heretic model, which scored 17-25/45.
   #
   # 60 lines x 40 words (inference.history_max_words) is ~4,000 tokens, roughly
-  # 12% of the window, and buys thirty exchanges of exact dialogue. The cost is
-  # latency, not memory: config.yaml records 3.5s at 2k, 12.1s at 14k. Two knock-on
-  # effects are deliberate — the session store grows to 2x this (whatsapp_adapter),
-  # and `exclude_from` moves earlier, so retrieval stops re-injecting chunks that
-  # are now held verbatim.
+  # 12% of the window, and buys thirty exchanges of exact dialogue.
+  #
+  # Measured cost, 2026-08-12: +0.74s per reply against the old 6-line window
+  # (11.28s -> 12.02s median, four runs each, unique history per run so llama.cpp
+  # could not reuse a cached prefix). Far cheaper than the 3.5s->12.1s curve
+  # further down this file would suggest, because that curve is about RAG context
+  # and generation length; prefill of a few thousand extra tokens is quick. Do not
+  # justify a future change from that table — measure it.
+  #
+  # Two knock-on effects are deliberate: the session store grows to 2x this
+  # (whatsapp_adapter), and `exclude_from` moves earlier, so retrieval stops
+  # re-injecting chunks that are now held verbatim.
   history_turns: 60
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"

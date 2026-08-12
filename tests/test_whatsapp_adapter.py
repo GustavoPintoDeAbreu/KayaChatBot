@@ -1209,18 +1209,18 @@ def test_no_window_start_before_anything_has_been_said(tmp_path):
 
 
 def test_the_window_start_follows_history_turns(tmp_path):
-    adapter, seen = _capture_responder(tmp_path, history_turns=3)
+    adapter, seen = _capture_responder(tmp_path, history_turns=6)
     base = 1_700_000_000
-    for i in range(6):
+    for i in range(10):
         adapter.handle_event(_dm_at(f"mensagem {i}", base + i), system_prompt="")
-    # With history_turns=3 the window holds the last three inbound timestamps,
-    # so it starts at the 3rd most recent (base+3), not at the oldest (base).
-    assert seen["exclude_from"].startswith("2023-11-14T"), seen["exclude_from"]
+    # 6 lines is 3 answered turns, so the window covers the last THREE inbound
+    # messages — the 10th, 9th and 8th. It starts at the 8th (base + 7).
     from datetime import datetime, timezone
 
-    expected = datetime.fromtimestamp(base + 3, tz=timezone.utc).replace(
+    expected = datetime.fromtimestamp(base + 7, tz=timezone.utc).replace(
         tzinfo=None).isoformat()
-    assert seen["exclude_from"] == expected
+    assert seen["exclude_from"] == expected, (
+        "the window must be measured in inbound messages, not session lines")
 
 
 def test_a_bigger_window_reaches_further_back(tmp_path):
@@ -1276,3 +1276,33 @@ def test_a_responder_that_takes_no_summary_still_works(tmp_path):
     assert adapter._responder_takes_summary is False
     result = adapter.handle_event(_dm_at("olá", 1_700_000_000), system_prompt="")
     assert result["reply"] == "reply:olá"
+
+
+def test_the_exclusion_window_counts_inbound_messages_not_lines(tmp_path):
+    """The window start must not reach back further than the prompt actually goes.
+
+    Each answered turn writes TWO session lines (the asker's and the bot's), so
+    `history_turns` lines is half that many inbound messages. Measuring the
+    exclusion window in lines pushes its start too far back, and retrieval then
+    drops chunks covering messages that are NOT held verbatim — a hole, not a
+    duplicate, and silent.
+    """
+    adapter, seen = _capture_responder(tmp_path, history_turns=6)
+    base = 1_700_000_000
+    for i in range(12):
+        adapter.handle_event(_dm_at(f"m{i}", base + i), system_prompt="")
+
+    lines = seen["recent"]
+    inbound = [ln for ln in lines if not ln.startswith("Kaya Bot:")]
+    assert len(lines) <= 6
+
+    from datetime import datetime, timezone
+
+    start = seen["exclude_from"]
+    oldest_inbound_ts = base + 12 - len(inbound)
+    earliest_allowed = datetime.fromtimestamp(
+        oldest_inbound_ts, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    assert start >= earliest_allowed, (
+        f"window starts at {start}, earlier than the oldest message actually in "
+        f"the prompt ({earliest_allowed}) — chunks in between would be excluded "
+        f"from retrieval without being carried verbatim")

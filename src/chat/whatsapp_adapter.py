@@ -329,6 +329,11 @@ class WhatsAppAdapter:
         )
         self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
+        # How many INBOUND messages those lines represent. An answered turn writes
+        # two lines (the asker's and the bot's), so it is half — and this is what
+        # the retrieval-exclusion window must be measured in. See
+        # _note_message_time for what goes wrong when the two disagree.
+        self._inbound_window = max(1, self.history_turns // 2)
         self.send_seen = bool(wcfg.get("send_seen", True))
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
@@ -480,8 +485,17 @@ class WhatsAppAdapter:
             return
         window = self._session_times.setdefault(chat_id, [])
         window.append(int(ts))
-        # The session store keeps `history_turns` turns; keep matching timestamps.
-        del window[: max(0, len(window) - self.history_turns)]
+        # Keep one timestamp per INBOUND message actually inside the window, not
+        # one per line. Each answered turn appends two lines to the session store
+        # — the asker's and the bot's — so `history_turns` lines is only half that
+        # many inbound messages.
+        #
+        # Getting this wrong opens a hole rather than a duplicate: the window
+        # start would sit further back than what the prompt actually carries, so
+        # retrieval would drop chunks covering messages that are NOT held
+        # verbatim, and nothing would have them. At history_turns=6 the hole was
+        # three messages wide and easy to miss; at 60 it would be thirty.
+        del window[: max(0, len(window) - self._inbound_window)]
 
     def _session_window_start(self, chat_id: str) -> Optional[str]:
         """ISO timestamp of the oldest message still held verbatim in this chat.
