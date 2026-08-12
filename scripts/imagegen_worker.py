@@ -51,24 +51,24 @@ DEFAULT_IDENTITY_CLAUSE = (
     "exactly the same as in the original photo. Do not change who they are."
 )
 
+# Modules whose 8-bit error lands directly in pixel space, so they stay bf16.
+# Only the Qwen path uses this; FLUX quantizes its transformer whole, having been
+# measured to survive it. A "flux" key lived here for a while looking load-bearing
+# and was never read by anything.
 KEEP_BF16 = {
     "qwen": ["img_in", "txt_in", "proj_out", "norm_out", "time_text_embed"],
-    "flux": ["x_embedder", "context_embedder", "proj_out", "norm_out", "time_text_embed"],
 }
 
 
-def open_photo(path: str):
-    """The photo at full resolution, upright. No scaling: that comes later, once."""
+def load_image(path: str, longest: int = 1024):
+    """Bounded, 16-aligned load for the Qwen path, which does its own bucketing.
+
+    The FLUX path does NOT use this: it goes through face_utils.prepare_source,
+    which frames around the faces and resizes once, straight to a Kontext bucket.
+    """
     from PIL import Image, ImageOps
 
-    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
-
-
-def load_image(path: str, longest: int = 1024):
-    """Legacy loader, kept for the Qwen path which does its own bucketing."""
-    from PIL import Image
-
-    image = open_photo(path)
+    image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
     scale = longest / max(image.size)
     if scale < 1.0:
         image = image.resize((max(int(image.width * scale), 16),
