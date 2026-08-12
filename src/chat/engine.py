@@ -204,6 +204,7 @@ class KayaEngine:
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
         extra_context: str = "",
+        summary: str = "",
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -215,6 +216,8 @@ class KayaEngine:
         essay about someone chosen at random. ``top_k`` narrows retrieval for the
         lighter `mixed` mode. ``extra_context`` carries a block the caller already
         has in hand (today: the web-search result), prepended ahead of RAG.
+        ``summary`` is this chat's rolling summary of what has already scrolled
+        out of the verbatim window (see ``src/chat/summary.py``).
         """
         context = ""
         if retrieval and self.rag_enabled and self.retriever:
@@ -234,10 +237,16 @@ class KayaEngine:
             parts.append(extra_context)
         if context:
             parts.append(context)
+        if summary:
+            # What has already fallen out of the verbatim window, condensed. Sits
+            # above the recent lines so the model reads it as older background
+            # rather than as part of the live exchange.
+            parts.append(f"Resumo da conversa até agora:\n{summary}")
         if recent_lines:
             # Truncate prior turns to a gist so the model can't copy its own long
             # previous answers back verbatim (the repetition / "stuck" bug).
-            trimmed = [truncate_history_line(line) for line in recent_lines]
+            max_words = int(self._inf.get("history_max_words", 40))
+            trimmed = [truncate_history_line(line, max_words) for line in recent_lines]
             parts.append("Conversa recente:\n" + "\n".join(trimmed))
         parts.append(f"{speaker_label}: {message}")
         return "\n\n".join(parts), context
@@ -270,6 +279,7 @@ class KayaEngine:
         max_new_tokens: Optional[int] = None,
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
+        summary: str = "",
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -363,6 +373,9 @@ class KayaEngine:
                 scope=scope,
                 exclude_from=exclude_from,
                 extra_context=web_context,
+                # Banter gets no summary: it retrieves nothing by design, and a
+                # paragraph of background would undo exactly what that mode is for.
+                summary="" if route.mode == router.BANTER else summary,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.

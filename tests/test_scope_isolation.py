@@ -122,7 +122,7 @@ class TestIngestIdempotency:
             {"id": "m1", "sender": "Gustavo", "text": "olá", "timestamp": 1700000000},
             {"id": "m2", "sender": "Rafa", "text": "tudo bem?", "timestamp": 1700000060},
         ]
-        chunks = build_chunks(msgs, scope="dm:abc")
+        chunks, _consumed = build_chunks(msgs, scope="dm:abc")
         assert chunks and all(c["metadata"]["scope"] == "dm:abc" for c in chunks)
         assert all(c["metadata"]["source"] == "live" for c in chunks)
         # timestamps must be present — the recency cutoff depends on them
@@ -251,6 +251,51 @@ class TestVoiceNoteFetching:
             assert rewrite_media_url(url, "http://waha:3000") == url
 
 
+class _FakeCollection:
+    """Captures upserts so a test can look at what was actually written."""
+
+    def __init__(self):
+        self.ids = []
+        self.metadatas = []
+
+    def upsert(self, ids, documents, metadatas, embeddings):
+        self.ids.extend(ids)
+        self.metadatas.extend(metadatas)
+
+
+class _FakeEncoder:
+    """Deterministic vectors — this suite is about chunking, not embeddings."""
+
+    def encode(self, texts, **kwargs):
+        import numpy as np
+
+        return np.zeros((len(texts), 8), dtype="float32")
+
+
+def _fake_ingester(tmp_path, settle_minutes=0):
+    """A real Ingester with the GPU and the vector store stubbed out."""
+    from src.data.ingest import Ingester
+
+    config = {
+        "rag": {"db_path": str(tmp_path / "db")},
+        "chat": {"concurrency": {"max_concurrent": 1, "acquire_timeout": 5}},
+        "whatsapp": {
+            "message_log_dir": str(tmp_path / "log"),
+            "ingest_state_file": str(tmp_path / "state.json"),
+            "ingest": {"settle_minutes": settle_minutes},
+        },
+    }
+    collection = _FakeCollection()
+    return Ingester(config, encoder=_FakeEncoder(), collection=collection), collection
+
+
+def _write_log(ingester, scope, rows):
+    """Append ``(id, text, timestamp)`` rows to the scope's message log."""
+    for message_id, text, ts in rows:
+        ingester.log.append(chat_id="chat", message_id=message_id, sender="Alguém",
+                            text=text, timestamp=ts, scope=scope)
+
+
 class TestIngestWatermark:
     """The watermark is a high-water mark, so one bad timestamp can freeze it.
 
@@ -263,27 +308,55 @@ class TestIngestWatermark:
     def test_a_future_timestamp_does_not_freeze_the_watermark(self, tmp_path):
         import time as _time
 
-        from src.data.ingest import _FUTURE_TOLERANCE_S, Ingester
+        from src.data.ingest import _FUTURE_TOLERANCE_S
 
         now = int(_time.time())
-        messages = [
-            {"id": "m1", "sender": "Gustavo", "text": "normal", "timestamp": now - 60},
-            {"id": "m2", "sender": "Rafa", "text": "clock is wrong",
-             "timestamp": now + _FUTURE_TOLERANCE_S + 10_000},
-        ]
-        timestamps = [int(m["timestamp"]) for m in messages]
-        horizon = now + _FUTURE_TOLERANCE_S
-        newest = max((t for t in timestamps if t <= horizon), default=0)
+        ingester, _ = _fake_ingester(tmp_path)
+        _write_log(ingester, "shared", [
+            ("m1", "normal", now - 60),
+            ("m2", "clock is wrong", now + _FUTURE_TOLERANCE_S + 10_000),
+        ])
 
-        assert newest == now - 60, "the future message must not set the watermark"
-        assert newest < messages[1]["timestamp"]
+        ingester.ingest_scope("shared")
+
+        assert ingester.state.watermark("shared") == now - 60
+        # The real proof: a message logged AFTERWARDS is still reachable.
+        _write_log(ingester, "shared", [("m3", "planted fact", now - 30)])
+        result = ingester.ingest_scope("shared")
+        assert result["messages"] >= 1
 
     def test_a_normal_batch_still_advances(self, tmp_path):
         import time as _time
 
-        from src.data.ingest import _FUTURE_TOLERANCE_S
+        now = int(_time.time())
+        ingester, _ = _fake_ingester(tmp_path)
+        _write_log(ingester, "shared", [
+            ("m1", "um", now - 7200), ("m2", "dois", now - 7100),
+            ("m3", "tres", now - 7000),
+        ])
+        ingester.ingest_scope("shared")
+        assert ingester.state.watermark("shared") == now - 7000
+
+    def test_a_warm_tail_is_held_back_and_merged_next_run(self, tmp_path):
+        """A 15-minute cadence must not shatter the index into 1-3 message chunks."""
+        import time as _time
 
         now = int(_time.time())
-        timestamps = [now - 120, now - 60, now - 10]
-        horizon = now + _FUTURE_TOLERANCE_S
-        assert max(t for t in timestamps if t <= horizon) == now - 10
+        ingester, collection = _fake_ingester(tmp_path, settle_minutes=10)
+        # 16 settled messages plus a 4-message tail that is still warm.
+        settled = [(f"s{i}", f"velho {i}", now - 7200 + i) for i in range(16)]
+        warm = [(f"w{i}", f"novo {i}", now - 60 + i) for i in range(4)]
+        _write_log(ingester, "shared", settled + warm)
+
+        ingester.ingest_scope("shared")
+
+        sizes = [m["message_count"] for m in collection.metadatas]
+        assert sizes == [16], f"the warm tail should not have been written: {sizes}"
+        assert ingester.state.watermark("shared") < now - 60, \
+            "the watermark must stop short of messages left unconsumed"
+
+        # Once the tail settles it is picked up — nothing was lost.
+        collection.metadatas.clear()
+        ingester.settle_seconds = 0
+        ingester.ingest_scope("shared")
+        assert [m["message_count"] for m in collection.metadatas] == [4]

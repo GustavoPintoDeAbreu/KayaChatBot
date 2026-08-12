@@ -127,7 +127,8 @@ _system_prompt = build_system_prompt(
 )
 
 
-def _responder(message: str, speaker: str, recent_lines, scope=None, exclude_from=None):
+def _responder(message: str, speaker: str, recent_lines, scope=None,
+               exclude_from=None, summary: str = ""):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
@@ -136,11 +137,12 @@ def _responder(message: str, speaker: str, recent_lines, scope=None, exclude_fro
 
     ``scope`` limits which chat's long-term memory may be retrieved, and
     ``exclude_from`` stops retrieval re-injecting the recent turns the prompt
-    already carries verbatim.
+    already carries verbatim. ``summary`` is this chat's rolling summary of the
+    turns that have already scrolled out of that window.
     """
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,
-        scope=scope, exclude_from=exclude_from,
+        scope=scope, exclude_from=exclude_from, summary=summary,
     )
 
 
@@ -246,11 +248,18 @@ def _imagegen(mode: str, prompt: str, image_path=None):
     return imagegen.run(config, prompt, mode=mode, image_path=image_path)
 
 
+from src.chat.summary import SummaryWriter
+
+# Rolling per-chat summary of what has scrolled out of the verbatim window.
+# Shares the engine's backend, so no second model is loaded.
+_summary_writer = SummaryWriter(config, engine.backend)
+
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
                           transcribe=_stt,
                           image_generate=_imagegen, fetch_media=_fetch_media,
-                          describe_image=_describe)
+                          describe_image=_describe,
+                          summary_writer=_summary_writer)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 

@@ -1166,3 +1166,113 @@ def test_image_acknowledgements_carry_no_dashes(tmp_path):
     for key, reply in adapter.command_replies.items():
         assert "—" not in reply and "–" not in reply, key
         assert " - " not in reply, key
+
+
+# ── the verbatim window vs retrieval ─────────────────────────────────────────
+# `exclude_from` is what stops retrieval re-injecting turns the prompt already
+# carries word for word. It had no test at all, which matters more now that
+# history_turns is 60 rather than 6: the window start moved a long way back, so
+# a mistake here silently changes what the model can recall.
+
+def _capture_responder(tmp_path, **overrides):
+    """An adapter whose responder records the kwargs it was handed."""
+    seen = {}
+
+    def responder(message, speaker, recent_lines, scope=None, exclude_from=None,
+                  summary=""):
+        seen["scope"] = scope
+        seen["exclude_from"] = exclude_from
+        seen["summary"] = summary
+        seen["recent"] = list(recent_lines or [])
+        return "ok"
+
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                           "contacts": {ALICE: "Alice"}, **overrides}}
+    adapter = WhatsAppAdapter(
+        responder, MockWahaClient(echo=False), config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "s"), max_lines=200),
+    )
+    return adapter, seen
+
+
+def _dm_at(text, ts):
+    event = dm_event(text)
+    event["payload"]["timestamp"] = ts
+    return event
+
+
+def test_no_window_start_before_anything_has_been_said(tmp_path):
+    adapter, seen = _capture_responder(tmp_path)
+    adapter.handle_event(_dm_at("olá", 1_700_000_000), system_prompt="")
+    # One message in: the window starts at that message, not before it.
+    assert seen["exclude_from"] is not None
+
+
+def test_the_window_start_follows_history_turns(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=3)
+    base = 1_700_000_000
+    for i in range(6):
+        adapter.handle_event(_dm_at(f"mensagem {i}", base + i), system_prompt="")
+    # With history_turns=3 the window holds the last three inbound timestamps,
+    # so it starts at the 3rd most recent (base+3), not at the oldest (base).
+    assert seen["exclude_from"].startswith("2023-11-14T"), seen["exclude_from"]
+    from datetime import datetime, timezone
+
+    expected = datetime.fromtimestamp(base + 3, tz=timezone.utc).replace(
+        tzinfo=None).isoformat()
+    assert seen["exclude_from"] == expected
+
+
+def test_a_bigger_window_reaches_further_back(tmp_path):
+    """Raising history_turns must move the boundary earlier, not later."""
+    base = 1_700_000_000
+    starts = {}
+    for turns in (3, 10):
+        adapter, seen = _capture_responder(tmp_path / f"t{turns}", history_turns=turns)
+        for i in range(12):
+            adapter.handle_event(_dm_at(f"m{i}", base + i), system_prompt="")
+        starts[turns] = seen["exclude_from"]
+    assert starts[10] < starts[3], "a longer verbatim window must start earlier"
+
+
+def test_messages_without_a_timestamp_do_not_corrupt_the_window(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=3)
+    adapter.handle_event(_dm_at("com tempo", 1_700_000_000), system_prompt="")
+    event = dm_event("sem tempo")
+    event["payload"]["timestamp"] = 0
+    adapter.handle_event(event, system_prompt="")
+    # The zero is ignored rather than becoming 1970 and excluding everything.
+    assert seen["exclude_from"].startswith("2023-")
+
+
+def test_the_rolling_summary_reaches_the_responder(tmp_path):
+    class Writer:
+        class store:
+            @staticmethod
+            def summary_for(chat_id):
+                return "Ficou combinado jantar no sábado."
+
+        @staticmethod
+        def maybe_update(chat_id, history):
+            return False
+
+    adapter, seen = _capture_responder(tmp_path)
+    adapter.summary_writer = Writer()
+    adapter._responder_takes_summary = True
+    adapter.handle_event(_dm_at("e então?", 1_700_000_000), system_prompt="")
+    assert seen["summary"] == "Ficou combinado jantar no sábado."
+
+
+def test_a_responder_that_takes_no_summary_still_works(tmp_path):
+    """The simulators and older stubs must keep working unchanged."""
+    def old_style(message, speaker, recent_lines, scope=None, exclude_from=None):
+        return f"reply:{message}"
+
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False}}
+    adapter = WhatsAppAdapter(
+        old_style, MockWahaClient(echo=False), config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "s2")),
+    )
+    assert adapter._responder_takes_summary is False
+    result = adapter.handle_event(_dm_at("olá", 1_700_000_000), system_prompt="")
+    assert result["reply"] == "reply:olá"

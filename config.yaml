@@ -245,6 +245,11 @@ inference:
   top_k: 64
   repetition_penalty: 1.2      # >1 discourages verbatim regurgitation of prior turns
   no_repeat_ngram_size: 3      # Hard-block any repeated 3-gram (kills copy-the-last-answer loops)
+  # Words kept per line of verbatim history. Not a context-saving measure: a prior
+  # bot turn pasted back in full invites the model to copy it wholesale (the
+  # observed "stuck" / repetition bug). With whatsapp.history_turns at 60 this is
+  # what bounds the block at ~4,000 tokens, so raise the two together or not at all.
+  history_max_words: 40
   # Steers default replies short & chatty (WhatsApp). Dropped automatically when the
   # question asks for detail (see response_utils.wants_long_answer). Set "" to disable.
   brevity_hint: "Responde de forma breve, direta e natural, em 1 a 3 frases, como numa conversa de WhatsApp. Só te alongas se te pedirem explicitamente."
@@ -378,6 +383,27 @@ chat:
     # Empty list = everywhere (not recommended).
     allowed_scopes: ["shared"]
 
+  # ── Rolling per-chat summary (src/chat/summary.py) ──────────────────────────
+  # 60 lines of verbatim history covers an evening, not a month. What scrolls
+  # past it is condensed here so the THREAD of a long exchange survives — who
+  # agreed to what, in what order — which semantic search structurally cannot
+  # return, because it retrieves whichever chunk is nearest the question rather
+  # than the sequence.
+  #
+  # Generated on a background worker AFTER the reply is sent, taking the GPU lock
+  # with a short timeout and skipping when it is busy: the bridge DROPS an inbound
+  # message on a contended lock, so a summary must never sit on it. A skipped
+  # update is simply retried after the next message.
+  #
+  # Local model only, one file per chat, never written into the shared vector
+  # store — so scope isolation holds without any new rules.
+  summary:
+    enabled: true
+    every_lines: 30           # update once this many new lines have accumulated
+    max_words: 150
+    max_new_tokens: 220
+    lock_timeout_seconds: 5   # give up rather than delay somebody's reply
+
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.
   # Toggle to false to revert to default (filtered) behavior instantly.
@@ -439,8 +465,23 @@ whatsapp:
   bot_jid: ""                 # the bot number's JID; left blank → auto-learned from WAHA (incl. its @lid)
   webhook_token: ""           # shared secret; WAHA must send it as the X-Webhook-Token header
   send_seen: true             # show read receipt + typing indicator before replying
-  history_turns: 6            # how many recent lines of per-chat history to feed the model
+  # How many recent lines of per-chat history go into the prompt verbatim. Was 6
+  # (three exchanges, ~400 tokens) on the assumption that context was scarce. It
+  # is not: the server runs a 32768-token window and the live 12B was measured at
+  # 60/60 needle recall across every depth out to 27,411 tokens
+  # (reports/benchmarks/context_recall_20260808T105708Z.json), while a typical
+  # factual turn spends ~6,000. The old "reliable window ~2,360 tokens" note came
+  # from the RETIRED fine-tuned heretic model, which scored 17-25/45.
+  #
+  # 60 lines x 40 words (inference.history_max_words) is ~4,000 tokens, roughly
+  # 12% of the window, and buys thirty exchanges of exact dialogue. The cost is
+  # latency, not memory: config.yaml records 3.5s at 2k, 12.1s at 14k. Two knock-on
+  # effects are deliberate — the session store grows to 2x this (whatsapp_adapter),
+  # and `exclude_from` moves earlier, so retrieval stops re-injecting chunks that
+  # are now held verbatim.
+  history_turns: 60
   sessions_dir: "data/whatsapp_sessions"
+  summaries_dir: "data/whatsapp_summaries"
   prefs_dir: "data/whatsapp_prefs"
 
   # ── Memory scoping + incremental ingestion (src/chat/scope.py, src/data/ingest.py)
@@ -458,7 +499,21 @@ whatsapp:
   ingest_state_file: "data/ingest_state.json"
   ingest:
     on_boot: true          # catch up on whatever was missed while down
-    interval_minutes: 120  # 0 disables the periodic pass
+    # 15, not 120. At two hours there was a blind spot the size of the gap: a
+    # message from ten minutes ago had already scrolled past the verbatim window
+    # and was not yet embedded, so it existed nowhere the model could reach.
+    #
+    # Three things had to be fixed before this was safe rather than merely
+    # faster, all of them invisible at the old cadence: the embedder was rebuilt
+    # from scratch every cycle (~2.2GB on the serving card, now borrowed from the
+    # retriever), the embed call took no GPU lock (now it does), and every run
+    # flushed a partial chunk (see settle_minutes).
+    interval_minutes: 15
+    # Don't write a trailing partial chunk until its newest message has sat still
+    # this long. Without it a 15-minute cadence shatters the index into one- and
+    # two-message chunks, which is what top_k and min_similarity then rank —
+    # retrieval quality falls while every timing number stays green.
+    settle_minutes: 10
   group:
     respond_on_mention: true
     respond_on_reply: true

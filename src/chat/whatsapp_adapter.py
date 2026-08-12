@@ -16,6 +16,7 @@ Routing rules (matching the chosen behaviour):
 """
 
 import datetime
+import inspect
 import json
 import logging
 import os
@@ -31,6 +32,17 @@ from src.data.message_log import MessageLog
 from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
+
+
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    """Whether ``fn`` will accept ``name=`` — asked once, not guessed per call."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind == p.VAR_KEYWORD for p in params.values())
 
 Responder = Callable[[str, str, List[str]], str]
 
@@ -263,6 +275,7 @@ class WhatsAppAdapter:
         image_generate: Optional[Callable[..., Optional[bytes]]] = None,
         fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
+        summary_writer: Any = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -356,6 +369,11 @@ class WhatsAppAdapter:
         # the preference is NOT stored, because it would silently do nothing.
         # Injected so the adapter stays free of model/TTS imports (and tests can
         # exercise voice delivery without Piper installed).
+        # Keeps each chat's rolling summary of what has scrolled out of the
+        # verbatim window. Injected like tts_synthesize so the adapter needs no
+        # model import and tests can run without one.
+        self.summary_writer = summary_writer
+        self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self.tts_synthesize = tts_synthesize
         # What a reply sounds like is not what it looks like: emoji, markdown and
         # URLs are read out loud by Piper. Injected like tts_synthesize so the
@@ -780,10 +798,17 @@ class WhatsAppAdapter:
         self._note_message_time(msg.chat_id, msg.timestamp)
         scope = scope_for_chat(msg.chat_id, self.shared_chats)
         exclude_from = self._session_window_start(msg.chat_id)
+        kwargs = {"scope": scope, "exclude_from": exclude_from}
+        # Older responders (test stubs, the simulators) take no `summary`. Ask the
+        # signature rather than catching TypeError, which would swallow a real one
+        # raised inside the responder itself.
+        if self.summary_writer is not None and self._responder_takes_summary:
+            try:
+                kwargs["summary"] = self.summary_writer.store.summary_for(msg.chat_id)
+            except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
+                logger.warning("could not read the summary for this chat: %s", exc)
         try:
-            result = self.responder(
-                text, speaker, recent, scope=scope, exclude_from=exclude_from
-            )
+            result = self.responder(text, speaker, recent, **kwargs)
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
@@ -831,6 +856,16 @@ class WhatsAppAdapter:
             msg.chat_id, reply, reply_to=reply_to,
             force_voice=deliver_as_voice_once, citation=citation,
         )
+
+        # Keep this chat's rolling summary current. Queued AFTER delivery and run
+        # on a worker that skips when the GPU is busy, because a summary must
+        # never cost somebody their next message.
+        if self.summary_writer is not None:
+            try:
+                self.summary_writer.maybe_update(
+                    msg.chat_id, self.session_store.recent(msg.chat_id, None))
+            except Exception as exc:  # noqa: BLE001 — never break a delivered reply
+                logger.warning("summary trigger failed: %s", exc)
 
         # Remember this sent message so a later 👍/👎 reaction on it can be attributed.
         if self.feedback_enabled:
