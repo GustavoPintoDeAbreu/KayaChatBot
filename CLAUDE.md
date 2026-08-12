@@ -18,6 +18,13 @@ is deliberate, not a missing call. Factual answers are unchanged (verified: gold
 excluding greetings moved −0.053, inside the ±0.07 noise band). Any router failure
 falls back to `factual`, i.e. the old behaviour.
 
+**A fourth mode, `general` (2026-08-12).** `factual` used to swallow every question
+that was not banter, including the ones with nothing to do with the group, so
+"quem é melhor, Ronaldo ou Messi?" retrieved group context plus every member
+profile and came back as a sourced report about Kaya. `general` answers the world
+with **no group retrieval and no member profiles**. `retrieval_enabled` is now
+`mode not in (BANTER, GENERAL)`.
+
 **Live model (since 2026-08-08): a STOCK `gemma-4-12b-it` at Q6_K, with no LoRA.**
 A 14-config bake-off found the stock 12B beat the fine-tuned E4B on every judged
 dimension (xai-judged golden 3.846 vs 3.068, knowledge 2.94 vs 1.84, refusals 0%
@@ -74,7 +81,8 @@ kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 
 # Model bake-off (candidate models across GPU configurations)
 scripts/fetch_bakeoff_models.sh                          # download candidate GGUFs (~262GB)
-kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint
+kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint/in-voice/no-dash/compliance
+kaya_chatbot_env/bin/python scripts/run_offensive_probe.py      # refusal rate; the group wants 0%
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
@@ -189,11 +197,45 @@ Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `
 
 Incoming voice notes are transcribed with faster-whisper (`large-v3`, int8_float16 on CUDA) and then flow through the ordinary text path, router included — a voice note arrives with **empty text**, so without transcription it is silently dropped. WAHA reports its media at `http://localhost:3000/...`, which is its own container, not ours: `rewrite_media_url()` swaps in the reachable base URL, and removing it breaks every voice note.
 
+**What is spoken is not what is written.** `tts.sanitize_for_speech()` is applied
+at the one point a reply becomes audio (`whatsapp_server._tts`) and strips the
+sources line, emoji, markdown and bare domains. Without it Piper read
+`🌐 Fontes: x.com, play.google.com` aloud, domain by domain, because the citation
+was appended in `engine.respond` before delivery ever chose text or speech.
+`Reply` now carries `citation` **separately** from `text`: appended for a written
+message, sent as a short follow-up after a voice note (`chat.audio.send_citation_as_text`).
+The interaction log records `delivered_as` and `spoken_text`, and
+`MockWahaClient.send_voice` keeps the spoken text rather than only its byte count
+— that missing field is why no test caught this.
+
 Voice replies use Piper on CPU (~28× realtime, so speaking never competes with the GPU). Kokoro, the usual default, only ships Brazilian Portuguese. A Piper voice speaks **one** language, so `synthesize_wav()` splits the reply into sentences, groups consecutive same-language runs (`split_by_language()`, using `language_signal()` from `response_utils.py`), and speaks each with the voice configured under `chat.audio.voices` (`pt` → `pt_PT-tugão`, `en` → `en_GB-alan`) before concatenating the WAV and encoding once to OGG/Opus via PyAV (ffmpeg is not installed on this box). A sentence with no language marker inherits the previous one; a missing voice file falls back to `pt`. Voice replies are sticky per chat (`ChatPreferences`), set through the router's `CMD_AUDIO` / `CMD_TEXT`; `CMD_AUDIO_ONCE` is a one-off delivery hint that does not change the preference.
 
 ### Images (`src/chat/vision.py`, `src/chat/imagegen.py`)
 
 **Reading them.** The serving model is multimodal, so `--mmproj` on the `llama` service is all it takes — no second model, ~180MB. An inbound photo is described (`vision.describe_url`) exactly the way a voice note is transcribed, and the description replaces/augments the message text. That reuse is the design: once it is text, the message log, the ingester, the router and retrieval need no changes, which is why "aquela foto do barco" is findable later. A caption is kept alongside the description. Without `--mmproj` the bot answers as though nothing were attached.
+
+**Keeping the face (2026-08-12).** The `0.409` likeness in the bake-off was
+measured with an English instruction ending `"Keep the face exactly the same."`
+Production was sending the user's **raw Portuguese** with no such clause, at a
+fixed seed, through two successive downscales. Four changes, all in
+`chat.imagegen`: `identity_clause` is appended to every edit;
+`translate_prompt` has the local model rewrite the Portuguese request as a short
+English instruction first (Kontext's CLIP-L + T5-XXL are English-trained);
+`face_crop` tightens the frame around detected faces when the largest is under
+`face_min_ratio` of the width, and `src/chat/face_utils.prepare_source` resizes
+**once** straight to a `PREFERRED_KONTEXT_RESOLUTIONS` bucket (`_auto_resize=False`);
+`candidates` renders N takes from one model load and ships the one with the
+highest ArcFace similarity to the source face. `seed: null` means a fresh seed per
+request — the old fixed `1234` made a bad face reproducible.
+
+**The likeness metric was partly measuring the wrong thing.** `image_bakeoff.py`
+compared the *largest* face in the output against the largest in the source. Half
+the bench photos are group shots by design, so on those it frequently compared two
+different people. Re-scoring the 2026-08-09 run against the closest-matching face
+moved p05 `0.030 → 0.246` and p06 `0.184 → 0.370` (flux-kontext mean `0.409 → 0.459`).
+`medieval-king` stayed at `0.109`: head-covering edits are a real failure, not an
+artefact. Face detection is InsightFace `buffalo_l` on CPU, mounted into the
+containers from `~/.insightface`; every path degrades to a no-op without it.
 
 **Making them.** `imagegen.run()` shells out to `scripts/imagegen_worker.py` — never in-process. Dropping a diffusion pipeline in Python leaves ~20GB allocated with no `nn.Module` alive, it would hold a card between requests, and an OOM would take the bot down. Editing runs **FLUX.1 Kontext** (bake-off winner: likeness 0.409 vs Qwen's 0.138, adherence 4.4/5, ~86s); text-to-image runs **Z-Image Turbo**. The router's `CMD_IMAGE` picks the subject: attached photo, else the last photo seen in that chat, else generate from text. The webhook only acknowledges — the picture is sent from a background thread. `chat.imagegen.allowed_scopes` gates editing to the shared group.
 
@@ -202,6 +244,17 @@ Voice replies use Piper on CPU (~28× realtime, so speaking never competes with 
 ### Config System (`src/config_loader.py`)
 
 Single entry point: `load_config(path, profile_override=None)`. Profiles (defined under `model_profiles` in `config.yaml`) deep-merge into the top-level `model:` and `training:` sections. The active profile is set by `active_model_profile` in `config.yaml` or passed via `--profile` CLI flag. **All code paths must use `load_config()` — never read `config.yaml` directly.**
+
+### Web search (`src/chat/web_search.py`)
+
+Grok's web-search answer is **context, not the reply** (`web_search.synthesize_locally`,
+default true). Returning it verbatim bypassed the persona, the uncensored preamble
+and `clean_response`, and Grok answers only the half of a message it considers
+web-answerable — the logged result was a Ronaldo/Messi comparison followed by
+*"A primeira parte da pergunta não se enquadra em resposta factual baseada na web."*
+The local model now writes every reply, so one voice answers the whole message.
+Set `synthesize_locally: false` to get the old behaviour back. The privacy guard is
+unchanged: a query naming a group member never leaves the box.
 
 ### LLM Providers (`src/llm_providers/`)
 
