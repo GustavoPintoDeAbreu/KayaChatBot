@@ -773,6 +773,10 @@ def stage_report(run_dir: Path) -> None:
         clean = [v for v in values if isinstance(v, (int, float))]
         return round(sum(clean) / len(clean), 3) if clean else None
 
+    def usable(cell: Dict[str, Any]) -> bool:
+        """An edit worth sending: it happened, and it is still the same person."""
+        return (cell.get("likeness") or 0) >= 0.40 and (cell.get("adherence") or 0) >= 4
+
     summary = []
     for arm, arm_cells in by_arm.items():
         summary.append({
@@ -780,20 +784,31 @@ def stage_report(run_dir: Path) -> None:
             "n": len(arm_cells),
             "likeness": mean([c.get("likeness") for c in arm_cells]),
             "adherence": mean([c.get("adherence") for c in arm_cells]),
+            # Likeness and adherence pull against each other: the surest way to
+            # keep a face is to barely edit the photo, and this bench has cells at
+            # likeness 0.98 / adherence 1 and at 0.04 / adherence 5. Ranking on
+            # likeness alone rewards doing nothing, so carry two figures that
+            # cannot be won that way — the product, and the count of edits that
+            # clear both bars at once.
+            "likeness_x_adherence": mean(
+                [(c.get("likeness") or 0) * (c.get("adherence") or 0) / 5.0
+                 for c in arm_cells]),
+            "usable": sum(usable(c) for c in arm_cells),
             "realism": mean([c.get("realism") for c in arm_cells]),
             "face_kept_pct": round(100 * sum(bool(c.get("face_found")) for c in arm_cells)
                                    / max(len(arm_cells), 1)),
             "median_seconds": mean([c.get("seconds") for c in arm_cells]),
             "peak_vram_gb": max([c.get("peak_vram_gb") or 0 for c in arm_cells], default=0),
         })
-    summary.sort(key=lambda row: (row["likeness"] or 0, row["adherence"] or 0), reverse=True)
+    summary.sort(key=lambda row: (row["likeness_x_adherence"] or 0, row["usable"]), reverse=True)
     results["summary"] = summary
     (run_dir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-    print(f"\n{'arm':<20}{'likeness':>10}{'adherence':>11}{'realism':>9}"
-          f"{'face%':>7}{'secs':>8}{'VRAM':>7}")
+    print(f"\n{'arm':<20}{'lik':>7}{'adh':>7}{'lik*adh':>9}{'usable':>8}"
+          f"{'realism':>9}{'face%':>7}{'secs':>8}{'VRAM':>7}")
     for row in summary:
-        print(f"{row['arm']:<20}{str(row['likeness']):>10}{str(row['adherence']):>11}"
+        print(f"{row['arm']:<20}{str(row['likeness']):>7}{str(row['adherence']):>7}"
+              f"{str(row['likeness_x_adherence']):>9}{row['usable']:>5}/{row['n']:<2}"
               f"{str(row['realism']):>9}{row['face_kept_pct']:>6}%"
               f"{str(row['median_seconds']):>8}{row['peak_vram_gb']:>6}G")
 
