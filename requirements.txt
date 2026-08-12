@@ -76,7 +76,12 @@ diffusers==0.37.1
 # (src/chat/face_utils.py). CPU only — the card is holding the pipeline.
 insightface==1.0.1
 onnxruntime==1.24.4
-opencv-python-headless==5.0.0.93
+# opencv-python, NOT -headless: insightface declares `opencv-python` by name, so
+# installing only the headless build leaves it unsatisfied and pip pulls the
+# regular one anyway. 4.11 is the last line that still accepts numpy 1.26 — from
+# 4.12 and all of 5.x the wheels require numpy>=2, which this stack is pinned
+# below (numpy==1.26.4, load-bearing for torch 2.6 / scipy / chromadb).
+opencv-python==4.11.0.86
 
 # --- Testing (used by the kaya-test container / CI) ---
 pytest==9.0.2
