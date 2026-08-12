@@ -502,7 +502,18 @@ web_search:
   provider: grok
   # model: ""                  # defaults to generation.xai.model (grok-4-1-fast-reasoning)
   trigger_similarity: 0.40     # top RAG cosine below this → treat as out-of-group (low-RAG fallback)
-  current_events_max: 0.60     # current-events cue searches unless RAG score is above this
+  # A current-events cue searches unless RAG is strongly anchored to the group.
+  # 0.60 was too low and was silently suppressing the lookups it exists for: the
+  # group talks about football and Lisbon constantly, so their own chat scores
+  # HIGH against exactly those questions. Measured 2026-08-12 against the live
+  # store (3450 chunks): "Como está o tempo em Lisboa hoje?" 0.714 and "Quanto
+  # foi o resultado do último jogo do Benfica?" 0.611 both sat above the old bar,
+  # so neither searched — the weather question came back as "Não tenho acesso aos
+  # dados meteorológicos em tempo real", which is the AI-disclaimer answer the
+  # group least wants. Questions genuinely about the group's own history are
+  # already excluded by _GROUP_HISTORY_RE and by the named-member guard, so this
+  # bar only has to catch what those two miss.
+  current_events_max: 0.85
   # Low-signal domains dropped from Grok's web search (xAI allows at most 5 exclusions).
   exclude_domains:
     - youtube.com
