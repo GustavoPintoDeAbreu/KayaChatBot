@@ -601,7 +601,7 @@ def build_qwen_image_edit_2511(photos, edits, seed):
     return generate, pipe
 
 
-def _build_flux2_klein(repo: str, photos, edits, seed):
+def _build_flux2_klein(repo: str, photos, edits, seed, treatment: bool = False):
     """FLUX.2 Klein — 9B, undistilled, with a Qwen3 LLM as its text encoder.
 
     That text encoder is the point of running two variants of this arm. Klein's
@@ -641,18 +641,50 @@ def _build_flux2_klein(repo: str, photos, edits, seed):
         return prepared[photo["id"]][0]
 
     def generate(source, edit, seed, photo_id=None):
-        return pipe(
-            image=source, prompt=edit["instruction"],
-            height=source.height, width=source.width,
-            guidance_scale=4.0, num_inference_steps=28,
-            generator=torch.Generator("cpu").manual_seed(seed),
-        ).images[0]
+        instruction = edit["instruction"]
+        takes = 1
+        if treatment:
+            # Exactly what the prod Kontext arm gets, so the comparison is
+            # pipeline-for-pipeline rather than a handicapped model against a
+            # helped one. Klein was measured without either, and the two together
+            # are what took Kontext from 0.459 to 0.695 on the standard grid.
+            from scripts.imagegen_worker import DEFAULT_IDENTITY_CLAUSE
+
+            instruction = f"{instruction.rstrip().rstrip('.')}. {DEFAULT_IDENTITY_CLAUSE}"
+            takes = 2
+
+        candidates = []
+        for index in range(takes):
+            take = seed + index
+            candidates.append((pipe(
+                image=source, prompt=instruction,
+                height=source.height, width=source.width,
+                guidance_scale=4.0, num_inference_steps=28,
+                generator=torch.Generator("cpu").manual_seed(take),
+            ).images[0], take))
+        if takes == 1:
+            return candidates[0][0]
+        reference = prepared.get(photo_id, (None, None))[1]
+        best, _, _ = face_utils.pick_best(reference, candidates)
+        return best
 
     return generate, pipe, prepare
 
 
 def build_flux2_klein(photos, edits, seed):
     return _build_flux2_klein("black-forest-labs/FLUX.2-klein-9B", photos, edits, seed)
+
+
+def build_flux2_klein_prod(photos, edits, seed):
+    """Klein given the same treatment the live Kontext pipeline gets.
+
+    The first Klein run scored adherence 5.0 on every edgy prompt and lost the
+    face far more often than Kontext — but it ran without the identity clause and
+    without best-of-N, which are the two things that moved Kontext from 0.459 to
+    0.695. This arm removes that handicap so the comparison means something.
+    """
+    return _build_flux2_klein("black-forest-labs/FLUX.2-klein-9B", photos, edits,
+                              seed, treatment=True)
 
 
 def build_flux2_klein_uncensored(photos, edits, seed):
@@ -663,6 +695,7 @@ def build_flux2_klein_uncensored(photos, edits, seed):
 ARMS: Dict[str, Callable] = {
     "sdxl-ipadapter": build_sdxl_ipadapter,
     "flux2-klein": build_flux2_klein,
+    "flux2-klein-prod": build_flux2_klein_prod,
     "flux2-klein-uncensored": build_flux2_klein_uncensored,
     "z-image-turbo": build_z_image_turbo,
     "qwen-image-edit": build_qwen_image_edit,
@@ -817,7 +850,9 @@ def stage_score(run_dir: Path, photo_dir: Path, judge_url: str) -> None:
 
     results_path = run_dir / "results.json"
     results = json.loads(results_path.read_text(encoding="utf-8"))
-    edits = {edit["id"]: edit for edit in EDITS}
+    # Both sets: scoring runs long after generation and has no idea which one the
+    # run used, so a run made with --edgy must still find its instructions here.
+    edits = {edit["id"]: edit for edit in (*EDITS, *EDGY_EDITS)}
 
     references = {}
     for npy in photo_dir.glob("*.npy"):
