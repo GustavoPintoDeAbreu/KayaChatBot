@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
-from src.chat.gpu_lock import GpuBusyError
+from src.chat.gpu_lock import GpuBusyError, gpu_section
 from src.chat.whatsapp_adapter import WhatsAppAdapter
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
@@ -127,7 +127,8 @@ _system_prompt = build_system_prompt(
 )
 
 
-def _responder(message: str, speaker: str, recent_lines, scope=None, exclude_from=None):
+def _responder(message: str, speaker: str, recent_lines, scope=None,
+               exclude_from=None, summary: str = ""):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
@@ -136,11 +137,12 @@ def _responder(message: str, speaker: str, recent_lines, scope=None, exclude_fro
 
     ``scope`` limits which chat's long-term memory may be retrieved, and
     ``exclude_from`` stops retrieval re-injecting the recent turns the prompt
-    already carries verbatim.
+    already carries verbatim. ``summary`` is this chat's rolling summary of the
+    turns that have already scrolled out of that window.
     """
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,
-        scope=scope, exclude_from=exclude_from,
+        scope=scope, exclude_from=exclude_from, summary=summary,
     )
 
 
@@ -165,6 +167,13 @@ def _tts(text: str):
     if not tts.is_available(config):
         return None
     return tts.synthesize_voice_note(text, config)
+
+
+def _speech_text(text: str) -> str:
+    """The spoken form of a written reply (see tts.sanitize_for_speech)."""
+    from src.chat import tts
+
+    return tts.sanitize_for_speech(text, citation_prefix=CITATION_PREFIX)
 
 
 def _stt(url: str, mimetype: str):
@@ -225,16 +234,39 @@ def _describe(url: str, mimetype: str):
 
 
 def _imagegen(mode: str, prompt: str, image_path=None):
-    """Make one image, or None. Blocking — the adapter calls it off-thread."""
+    """Make one image, or None. Blocking — the adapter calls it off-thread.
+
+    An edit request is rewritten into a short English instruction first: Kontext's
+    text encoders are English-trained and the request arrives in Portuguese. The
+    rewrite is one small local generation and falls back to the raw text.
+    """
     from src.chat import imagegen
 
-    return imagegen.run(config, prompt, mode=mode, image_path=image_path)
+    # Generation from scratch has no original face to restore.
+    restore_face = False
+    if mode == "edit":
+        with gpu_section(config):
+            # The same call also answers whether this edit is meant to change the
+            # person's face — restoring the original face onto a zombie would undo
+            # the request.
+            prompt, restore_face = imagegen.build_edit_instruction(
+                config, prompt, engine.backend)
+    return imagegen.run(config, prompt, mode=mode, image_path=image_path,
+                        restore_face=restore_face)
 
+
+from src.chat.summary import SummaryWriter
+
+# Rolling per-chat summary of what has scrolled out of the verbatim window.
+# Shares the engine's backend, so no second model is loaded.
+_summary_writer = SummaryWriter(config, engine.backend)
 
 adapter = WhatsAppAdapter(_responder, waha_client, config,
-                          tts_synthesize=_tts, transcribe=_stt,
+                          tts_synthesize=_tts, speech_text=_speech_text,
+                          transcribe=_stt,
                           image_generate=_imagegen, fetch_media=_fetch_media,
-                          describe_image=_describe)
+                          describe_image=_describe,
+                          summary_writer=_summary_writer)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
@@ -306,7 +338,9 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
             assistant_response=result["reply"],
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             is_group=bool(result.get("is_group")),
-            web_search_used=CITATION_PREFIX in result["reply"],
+            web_search_used=bool(result.get("citation")),
+            delivered_as=result.get("delivered_as", "text"),
+            spoken_text=result.get("spoken_text", ""),
         )
 
 

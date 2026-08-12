@@ -66,6 +66,23 @@ python-dotenv==1.0.1
 colorama==0.4.6
 ipython==8.30.0
 
+# --- Image generation / editing ---
+# diffusers used to arrive unpinned, transitively from unsloth. It is not a
+# transitive detail: PREFERRED_KONTEXT_RESOLUTIONS and the pipeline's _auto_resize
+# behaviour decide what resolution a face reaches the transformer at, and a
+# resolver picking a different version would change that silently.
+diffusers==0.37.1
+# Face detection for edit framing and for choosing between candidate takes
+# (src/chat/face_utils.py). CPU only — the card is holding the pipeline.
+insightface==1.0.1
+onnxruntime==1.24.4
+# opencv-python, NOT -headless: insightface declares `opencv-python` by name, so
+# installing only the headless build leaves it unsatisfied and pip pulls the
+# regular one anyway. 4.11 is the last line that still accepts numpy 1.26 — from
+# 4.12 and all of 5.x the wheels require numpy>=2, which this stack is pinned
+# below (numpy==1.26.4, load-bearing for torch 2.6 / scipy / chromadb).
+opencv-python==4.11.0.86
+
 # --- Testing (used by the kaya-test container / CI) ---
 pytest==9.0.2
 av==18.0.0

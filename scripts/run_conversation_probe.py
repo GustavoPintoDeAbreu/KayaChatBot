@@ -14,6 +14,12 @@ is free, fast and repeatable:
   brevity      is the reply within the mode's word budget?
   restraint    did it volunteer group members nobody asked about?
   substance    did it actually say something (not empty, not a refusal)?
+  in_voice     did it stay in character, or slip into assistant register
+               ("A primeira parte da pergunta não se enquadra…", "como uma IA…")?
+  no_dash      did it avoid dashes used as clause separators? The group asked for
+               commas at most, and the model reaches for " — " constantly.
+  complied     for cases that carry `must_contain_any`, did it actually do the
+               thing? A polite deflection can pass every check above.
 
     # needs a llama.cpp server for the model under test
     KAYA_INFERENCE_BACKEND=gguf KAYA_LLAMA_URL=http://127.0.0.1:8081 \
@@ -34,6 +40,31 @@ from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
 
 DEFAULT_PROBE = "data/conversation_probe.json"
+
+# Assistant register: the bot stepping out of the conversation to talk about what
+# it is and what it will not do. Every one of these is drawn from a real logged
+# reply, most notably "A primeira parte da pergunta não se enquadra em resposta
+# factual baseada na web." — which arrived, spoken aloud, after a roast request.
+_ROBOTIC_RE = re.compile(
+    r"não se enquadra"
+    r"|(?:a\s+)?primeira parte d[ao] (?:pergunta|mensagem)"
+    r"|(?:segunda|outra) parte d[ao] (?:pergunta|mensagem)"
+    r"|não pos(?:so)? responder a essa parte"
+    r"|como (?:uma? )?(?:ia|intelig[êe]ncia artificial|modelo de linguagem|assistente virtual)\b"
+    r"|enquanto (?:ia|assistente)\b"
+    r"|sou (?:apenas |só )?(?:uma? )?(?:ia|bot|modelo|assistente)\b"
+    r"|não tenho (?:a )?capacidade de"
+    r"|as minhas diretrizes|os meus desenvolvedores|não tenho permissão"
+    r"|limite de conhecimento|knowledge cutoff"
+    r"|\bas an ai\b|\bi'?m (?:just |only )?an? (?:ai|assistant|bot|language model)\b"
+    r"|\bi can'?t (?:help|assist|comply) with (?:that|this)\b"
+    r"|\bi'?m not able to\b",
+    re.IGNORECASE,
+)
+
+# A dash separating clauses (whitespace on the left). Intra-word hyphens such as
+# "dá-me" are not a violation and must not match.
+_CLAUSE_DASH_RE = re.compile(r"\s[—–]|\s-{1,2}(?=\s)")
 
 
 def _member_names(config, base_dir: Path):
@@ -102,6 +133,8 @@ def main() -> None:
             if re.search(rf"\b{re.escape(n)}\b", text.lower()) and n not in asked
         )
 
+        robotic = _ROBOTIC_RE.search(text)
+        wanted_substrings = [s.lower() for s in case.get("must_contain_any", [])]
         row = {
             "id": case["id"], "message": case["message"],
             "expected_mode": want, "actual_mode": mode,
@@ -109,16 +142,26 @@ def main() -> None:
             "words": words, "max_words": case["max_words"],
             "brevity_ok": words <= case["max_words"],
             "volunteered_members": volunteered,
-            # Only banter/mixed are expected to show restraint; a factual answer
-            # naming members is the whole point.
+            # Only factual answers are expected to name members; that is the point
+            # of the mode. `general` must not — the question is not about them.
             "restraint_ok": want == "factual" or not volunteered,
             "substance_ok": words > 0,
+            "robotic_match": robotic.group(0) if robotic else "",
+            "in_voice_ok": robotic is None,
+            "no_dash_ok": _CLAUSE_DASH_RE.search(text) is None,
+            "complied_ok": (
+                not wanted_substrings
+                or any(sub in text.lower() for sub in wanted_substrings)
+            ),
             "seconds": round(elapsed, 2),
             "reply": text,
         }
         rows.append(row)
 
-        flag = "" if (row["routing_ok"] and row["brevity_ok"] and row["restraint_ok"]) else "  <-- FAIL"
+        checks = ("routing_ok", "brevity_ok", "restraint_ok",
+                  "in_voice_ok", "no_dash_ok", "complied_ok")
+        failed = [c[:-3] for c in checks if not row[c]]
+        flag = f"  <-- FAIL: {','.join(failed)}" if failed else ""
         print(f"{case['id']:<16}{mode:<9}{want:<9}{words:>6}{elapsed:>6.1f}  {text[:52]!r}{flag}")
 
     def rate(key):
@@ -129,6 +172,9 @@ def main() -> None:
         "brevity_rate": round(rate("brevity_ok"), 4),
         "restraint_rate": round(rate("restraint_ok"), 4),
         "substance_rate": round(rate("substance_ok"), 4),
+        "in_voice_rate": round(rate("in_voice_ok"), 4),
+        "no_dash_rate": round(rate("no_dash_ok"), 4),
+        "compliance_rate": round(rate("complied_ok"), 4),
         "median_seconds": round(sorted(r["seconds"] for r in rows)[len(rows) // 2], 2),
         "cases": len(rows),
     }

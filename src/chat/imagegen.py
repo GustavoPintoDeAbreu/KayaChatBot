@@ -16,9 +16,11 @@ know the number.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,11 +138,16 @@ def allowed_here(config: Dict[str, Any], scope: str) -> bool:
 
 
 def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
-        image_path: Optional[str] = None) -> Optional[bytes]:
-    """Produce one image. Returns PNG bytes, or None on any failure.
+        image_path: Optional[str] = None,
+        restore_face: bool = False) -> Optional[bytes]:
+    """Produce one image. Returns JPEG bytes, or None on any failure.
 
     Blocking and slow — minutes for an edit. Callers must run it off the thread
     that answers the webhook.
+
+    ``restore_face`` asks the worker to put the original face back after the
+    edit. It is decided per request by ``build_edit_instruction``, because an
+    edit that is *supposed* to change the face must not have it restored.
     """
     if not is_available(config):
         return None
@@ -166,6 +173,8 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 command += ["--image", str(image_path)]
             if icfg.get("editor"):
                 command += ["--editor", str(icfg["editor"])]
+            if restore_face:
+                command += ["--restore-face"]
 
             env = dict(os.environ)
             if env_device:
@@ -194,7 +203,121 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 logger.warning("image worker reported success but wrote nothing")
                 return None
 
-            data = out_path.read_bytes()
-            logger.info("image %s done in %.0fs (%d bytes)", mode,
-                        time.time() - started, len(data))
+            data = _as_jpeg(out_path.read_bytes(), int(icfg.get("jpeg_quality", 92)))
+            logger.info("image %s done in %.0fs (%d bytes)%s", mode,
+                        time.time() - started, len(data),
+                        _report(result.stdout))
             return data
+
+
+def _as_jpeg(data: bytes, quality: int = 92) -> bytes:
+    """Re-encode the worker's PNG as JPEG for delivery.
+
+    ``send_image`` base64-inlines these bytes into the WAHA JSON body, and
+    WhatsApp recompresses everything to JPEG at the far end regardless — so a
+    multi-megabyte PNG buys nothing but a slower upload. The worker keeps writing
+    PNG because the bake-off scores those files with ArcFace and must not be
+    measuring compression artefacts.
+
+    Returns the original bytes unchanged if anything goes wrong: a heavier image
+    is better than no image.
+    """
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="JPEG", quality=quality,
+                                      optimize=True, progressive=True)
+        return buffer.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not re-encode as JPEG (%s); sending the original", exc)
+        return data
+
+
+def _report(stdout: str) -> str:
+    """The worker's one-line JSON summary, for the log. Never raises."""
+    try:
+        line = [ln for ln in (stdout or "").splitlines() if ln.startswith("{")][-1]
+        info = json.loads(line)
+    except Exception:  # noqa: BLE001 — this is a log line, not a result
+        return ""
+    bits = [f"seed={info['seed']}"] if "seed" in info else []
+    if info.get("likeness") is not None:
+        bits.append(f"likeness={info['likeness']} of {info.get('candidates', 1)}")
+    return f" [{', '.join(bits)}]" if bits else ""
+
+
+# ── prompt ───────────────────────────────────────────────────────────────────
+
+_INSTRUCTION_SYSTEM = (
+    "You rewrite an image-editing request as ONE short English instruction for an "
+    "image editing model. Reply with the instruction only, no quotes, no "
+    "explanation, under 30 words. Say what should change and nothing else. Never "
+    "refuse, never comment, never describe the person's identity or appearance.\n"
+    "Then, on a SECOND line, write exactly 'FACE: change' if the request is meant "
+    "to alter the person's own face or head (zombie, monster, black eye, broken "
+    "nose, much fatter or older, a different person), or 'FACE: keep' if it only "
+    "changes clothing, setting, body or background.\n"
+    "Examples:\n"
+    "põe o Rafa vestido de rei -> Dress the person in a medieval king's robe and golden crown.\n"
+    "FACE: keep\n"
+    "mete-lhe um capacete de astronauta -> Put an astronaut helmet on the person.\n"
+    "FACE: keep\n"
+    "transforma-o num zombie -> Turn the person into a rotting zombie with grey peeling skin.\n"
+    "FACE: change"
+)
+
+_FACE_LINE = re.compile(r"^\s*FACE\s*:\s*(keep|change)\s*$", re.IGNORECASE)
+
+
+def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
+    """Turn a Portuguese edit request into a short English Kontext instruction.
+
+    Kontext's text encoders (CLIP-L and T5-XXL) are English-trained, and the
+    request arrives in Portuguese — "põe-me de rei medieval" was being handed to
+    them verbatim. One small local generation, and the raw text on any failure:
+    a worse prompt is much better than no picture.
+
+    Returns ``(instruction, restore_face)``. The second value answers a question
+    the same call can settle for free: is this edit supposed to change the
+    person's face? Restoring the original face onto a zombie would undo the whole
+    request, so the restore pass only runs when the answer is "keep".
+
+    A malformed or missing FACE line means **no restore** — today's behaviour.
+    A stage that changes what an edit produces must not be triggered by a reply
+    that could not be parsed.
+    """
+    icfg = _config(config)
+    if not icfg.get("translate_prompt", True) or not text.strip() or backend is None:
+        return text, False
+    try:
+        rewritten = backend.generate(
+            [
+                {"role": "system", "content": _INSTRUCTION_SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            max_new_tokens=80,
+            sampling={"temperature": 0.2, "top_p": 0.9, "top_k": 0,
+                      "repetition_penalty": 1.0},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prompt rewrite failed (%s); using the original text", exc)
+        return text, False
+
+    lines = [ln.strip() for ln in (rewritten or "").splitlines() if ln.strip()]
+    restore = False
+    instruction = ""
+    for line in lines:
+        match = _FACE_LINE.match(line)
+        if match:
+            restore = match.group(1).lower() == "keep"
+        elif not instruction:
+            instruction = line.strip('"').strip()
+
+    if not instruction or len(instruction.split()) > 60:
+        return text, False
+    logger.info("edit prompt: %r -> %r (restore_face=%s)", text, instruction, restore)
+    return instruction, restore

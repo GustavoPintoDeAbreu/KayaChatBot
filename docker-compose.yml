@@ -212,6 +212,10 @@ services:
       # own sandbox (…/snap/docker/<rev>/), which contains no models. The real
       # path is set in .env.
       - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
+      # InsightFace keeps its own model pack outside the HF cache. The image
+      # worker uses it to frame edits around faces and to score candidate
+      # takes; without it that degrades to a no-op rather than failing.
+      - ${KAYA_INSIGHTFACE_HOME:-/home/gustavo/.insightface}:/root/.insightface:ro
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
 
@@ -318,6 +322,10 @@ services:
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
       - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
+      # InsightFace keeps its own model pack outside the HF cache. The image
+      # worker uses it to frame edits around faces and to score candidate
+      # takes; without it that degrades to a no-op rather than failing.
+      - ${KAYA_INSIGHTFACE_HOME:-/home/gustavo/.insightface}:/root/.insightface:ro
     ports:
       - "127.0.0.1:7862:7862"
     command: python -m src.chat.whatsapp_server

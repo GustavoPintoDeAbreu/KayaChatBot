@@ -27,6 +27,7 @@ imagem de um gato astronauta" needs.
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -41,14 +42,37 @@ BASE_DIR = Path(__file__).parent.parent
 NEGATIVE = ("deformed, distorted face, disfigured, extra fingers, blurry, low quality, "
             "watermark, text, cartoon, doll, plastic skin")
 
+# Kontext has to be told what to KEEP, not only what to change: "make him a
+# medieval king" is read as licence to return a different medieval king. Every
+# instruction in the bake-off ended with a clause like this — the 0.409 likeness
+# was measured with it, and production was shipping without it.
+DEFAULT_IDENTITY_CLAUSE = (
+    "Keep the person's face, facial features, hairline, skin tone and identity "
+    "exactly the same as in the original photo. Do not change who they are."
+)
+
+# The face-restore pass. A LoRA trained for FLUX.2 Klein 9B that takes a
+# body/scene image plus a face image and transfers the face — which is exactly
+# the second half of a two-stage edit. rank-64 (316MB) by default; the repo also
+# ships a rank-128 build if the quality is not there.
+DEFAULT_RESTORE_LORA_REPO = "Alissonerdx/BFS-Best-Face-Swap"
+DEFAULT_RESTORE_LORA = "bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors"
+
+# Modules whose 8-bit error lands directly in pixel space, so they stay bf16.
+# Only the Qwen path uses this; FLUX quantizes its transformer whole, having been
+# measured to survive it. A "flux" key lived here for a while looking load-bearing
+# and was never read by anything.
 KEEP_BF16 = {
     "qwen": ["img_in", "txt_in", "proj_out", "norm_out", "time_text_embed"],
-    "flux": ["x_embedder", "context_embedder", "proj_out", "norm_out", "time_text_embed"],
 }
 
 
 def load_image(path: str, longest: int = 1024):
-    """Load a photo scaled so the long side is `longest`, on a multiple of 16."""
+    """Bounded, 16-aligned load for the Qwen path, which does its own bucketing.
+
+    The FLUX path does NOT use this: it goes through face_utils.prepare_source,
+    which frames around the faces and resizes once, straight to a Kontext bucket.
+    """
     from PIL import Image, ImageOps
 
     image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
@@ -68,12 +92,23 @@ def bnb_8bit(keep):
 
 
 def edit_with_flux(image_path: str, prompt: str, out_path: str,
-                   steps: int, seed: int) -> None:
+                   steps: int, seed: int, options: Dict[str, Any] = None) -> Dict[str, Any]:
     """FLUX.1 Kontext — single pass, 8-bit, ~15GB resident, ~90s an image."""
     import torch
     from diffusers import FluxKontextPipeline
     from diffusers.quantizers import PipelineQuantizationConfig
     from transformers import BitsAndBytesConfig as TfBnb
+
+    from src.chat import face_utils
+
+    options = options or {}
+    candidates_wanted = max(1, int(options.get("candidates", 1)))
+    source, reference = face_utils.prepare_source(
+        image_path,
+        face_crop=bool(options.get("face_crop", True)),
+        min_ratio=float(options.get("face_min_ratio", 0.22)),
+        target_ratio=float(options.get("face_target_ratio", 0.32)),
+    )
 
     quant = PipelineQuantizationConfig(quant_mapping={
         "transformer": bnb_8bit([]),
@@ -91,10 +126,149 @@ def edit_with_flux(image_path: str, prompt: str, out_path: str,
     pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
-    result = pipe(image=load_image(image_path), prompt=prompt,
-                  guidance_scale=2.5, num_inference_steps=steps,
-                  generator=torch.Generator("cpu").manual_seed(seed)).images[0]
-    result.save(out_path)
+    # One model load, N takes. Loading the 15GB pipeline is most of the cost, so a
+    # second candidate is far cheaper than a second request would be.
+    candidates = []
+    for index in range(candidates_wanted):
+        take_seed = seed + index
+        image = pipe(
+            image=source, prompt=prompt,
+            height=source.height, width=source.width, _auto_resize=False,
+            guidance_scale=float(options.get("guidance_scale", 2.5)),
+            num_inference_steps=steps,
+            generator=torch.Generator("cpu").manual_seed(take_seed),
+        ).images[0]
+        candidates.append((image, take_seed))
+
+    best, best_seed, score = face_utils.pick_best(reference, candidates)
+    info = {
+        "seed": best_seed,
+        "likeness": None if score is None else round(score, 4),
+        "candidates": len(candidates),
+        "source_size": [source.width, source.height],
+    }
+
+    if options.get("restore_face"):
+        # Free Kontext before Klein loads: 15GB and 17GB do not both fit on a
+        # 24GB card, and the restore pass is a different model entirely.
+        del pipe, candidates
+        free_cuda()
+        best, restore_info = restore_with_bfs(best, image_path, reference, options)
+        info.update(restore_info)
+
+    best.save(out_path)
+    return info
+
+
+def free_cuda() -> None:
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+# The card's own template, and the argument order is the counter-intuitive part:
+# Picture 1 is the BODY being kept, Picture 2 is the FACE being donated.
+_BFS_PROMPT = (
+    "head_swap: start with Picture 1 as the base image, keeping its lighting, "
+    "environment, and background. remove the head from Picture 1 completely and "
+    "replace it with the head from Picture 2, strictly preserving the hair, eye "
+    "color, nose structure of Picture 2. copy the direction of the eye, head "
+    "rotation, micro expressions from Picture 1, high quality, sharp details, 4k."
+)
+
+
+def _run_bfs(edited, original, options: Dict[str, Any]):
+    """The model call: Klein 9B plus the BFS LoRA, two images in, one out.
+
+    Kept separate from ``restore_with_bfs`` so the decision of whether to KEEP a
+    restore can be tested without a GPU — that guard is the part worth testing.
+    """
+    import torch
+    from diffusers import Flux2KleinPipeline
+    from diffusers.quantizers import PipelineQuantizationConfig
+    from transformers import BitsAndBytesConfig as TfBnb
+
+    quant = PipelineQuantizationConfig(quant_mapping={
+        "transformer": bnb_8bit([]),
+        "text_encoder": TfBnb(load_in_8bit=True),
+    })
+    pipe = Flux2KleinPipeline.from_pretrained(
+        "black-forest-labs/FLUX.2-klein-9B", torch_dtype=torch.bfloat16,
+        quantization_config=quant)
+    pipe.load_lora_weights(
+        DEFAULT_RESTORE_LORA_REPO,
+        weight_name=str(options.get("restore_lora") or DEFAULT_RESTORE_LORA))
+    # Resident, not offloaded — see edit_with_flux for what the offload hooks do
+    # to bitsandbytes weights.
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.set_progress_bar_config(disable=True)
+
+    # Picture 1 is the BODY kept, Picture 2 the FACE donated. That order is the
+    # card's and it is the opposite of what reading the prompt suggests.
+    return pipe(
+        image=[edited, original], prompt=_BFS_PROMPT,
+        height=edited.height, width=edited.width,
+        num_inference_steps=int(options.get("restore_steps", 28)),
+        generator=torch.Generator("cpu").manual_seed(
+            int(options.get("seed", 0)) + 977),
+    ).images[0]
+
+
+def restore_with_bfs(edited, source_path: str, reference, options: Dict[str, Any]):
+    """Put the original face back onto an edit that changed everything else.
+
+    The bake-off showed both editors trading identity against instruction-following
+    because one prompt was being asked to do both jobs: Kontext scored 0.918
+    likeness on a prison-yard edit by declining to add the requested injuries,
+    while Klein followed every instruction and lost the face. Splitting the work
+    removes the trade — the editor commits to the scene, and identity is restored
+    afterwards by a model trained for exactly that.
+
+    Returns ``(image, info)``. The image is the RESTORED one only when it actually
+    scores better against the source face than the editor's own output did;
+    otherwise the editor's output is returned untouched. That guard is what makes
+    this stage safe to enable by default — a failed restore costs time, never
+    quality.
+    """
+    from src.chat import face_utils
+
+    before = face_utils.likeness(reference, edited)
+    try:
+        original = open_source_photo(source_path)
+        restored = _run_bfs(edited, original, options)
+    except Exception as exc:  # noqa: BLE001 — a failed restore must not lose the edit
+        print(f"restore failed ({type(exc).__name__}: {exc}); keeping the edit",
+              file=sys.stderr)
+        return edited, {"restored": False, "restore_error": str(exc)[:160]}
+
+    after = face_utils.likeness(reference, restored)
+    gain_needed = float(options.get("restore_min_gain", 0.0))
+    info = {
+        "restored": False,
+        "likeness_before_restore": None if before is None else round(before, 4),
+        "likeness_after_restore": None if after is None else round(after, 4),
+    }
+    if before is None or after is None:
+        # Nothing to compare — no face found in one of them. Keep the edit rather
+        # than gamble on an unmeasurable swap.
+        return edited, info
+    if after - before <= gain_needed:
+        return edited, info
+    info["restored"] = True
+    info["likeness"] = round(after, 4)
+    return restored, info
+
+
+def open_source_photo(path: str):
+    """The original photo, upright, for use as the face donor."""
+    from PIL import Image, ImageOps
+
+    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
 
 
 def _qwen_embed(repo: str, image_path: str, prompt: str, out_path: str) -> None:
@@ -126,7 +300,7 @@ def _qwen_embed(repo: str, image_path: str, prompt: str, out_path: str) -> None:
 
 
 def edit_with_qwen(image_path: str, prompt: str, out_path: str,
-                   steps: int, seed: int) -> None:
+                   steps: int, seed: int, options: Dict[str, Any] = None) -> Dict[str, Any]:
     """Qwen-Image-Edit-2509 in two passes.
 
     The 20B transformer needs 8-bit to render cleanly (NF4 turns it into a
@@ -165,6 +339,7 @@ def edit_with_qwen(image_path: str, prompt: str, out_path: str,
         true_cfg_scale=4.0, num_inference_steps=steps,
         generator=torch.Generator("cpu").manual_seed(seed)).images[0]
     result.save(out_path)
+    return {"seed": seed, "likeness": None, "candidates": 1}
 
 
 def generate_from_text(prompt: str, out_path: str, steps: int, seed: int) -> None:
@@ -197,6 +372,12 @@ def main() -> None:
     parser.add_argument("--editor", default=None)
     parser.add_argument("--steps", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--candidates", type=int, default=0)
+    parser.add_argument("--no-face-crop", action="store_true")
+    parser.add_argument("--no-identity-clause", action="store_true")
+    parser.add_argument("--restore-face", action="store_true",
+                        help="after the edit, put the original face back "
+                             "(kept only if it scores better)")
     args = parser.parse_args()
 
     if args.stage == "embed":
@@ -207,21 +388,46 @@ def main() -> None:
 
     config: Dict[str, Any] = load_config(str(BASE_DIR / "config.yaml"))
     icfg = (config.get("chat", {}) or {}).get("imagegen", {}) or {}
-    seed = args.seed or int(icfg.get("seed", 1234))
+    # A fixed seed makes a bad face reproducible: asking again returns the same
+    # stranger. Random unless one is pinned, for the bench or to reproduce a bug.
+    seed = args.seed or int(icfg.get("seed") or 0) or random.randint(1, 2**31 - 1)
 
     if args.mode == "generate":
         generate_from_text(args.prompt, args.out,
                            args.steps or int(icfg.get("generate_steps", 12)), seed)
-    else:
-        if not args.image:
-            raise SystemExit("--image is required for --mode edit")
-        editor = args.editor or icfg.get("editor", "flux-kontext")
-        if editor not in EDITORS:
-            raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
-        EDITORS[editor](args.image, args.prompt, args.out,
-                        args.steps or int(icfg.get("edit_steps", 28)), seed)
+        print(json.dumps({"ok": True, "out": args.out, "seed": seed}))
+        return
 
-    print(json.dumps({"ok": True, "out": args.out}))
+    if not args.image:
+        raise SystemExit("--image is required for --mode edit")
+    editor = args.editor or icfg.get("editor", "flux-kontext")
+    if editor not in EDITORS:
+        raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
+
+    prompt = args.prompt
+    clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
+    if clause and not args.no_identity_clause:
+        prompt = f"{prompt.rstrip().rstrip('.')}. {clause}"
+
+    options = {
+        "candidates": args.candidates or int(icfg.get("candidates", 1)),
+        "face_crop": not args.no_face_crop and bool(icfg.get("face_crop", True)),
+        "face_min_ratio": float(icfg.get("face_min_ratio", 0.22)),
+        "face_target_ratio": float(icfg.get("face_target_ratio", 0.32)),
+        "guidance_scale": float(icfg.get("guidance_scale", 2.5)),
+        # The caller decides per request whether this edit is meant to change
+        # the face; restoring it on a zombie would undo the whole point.
+        "restore_face": args.restore_face and bool(icfg.get("restore_face", True)),
+        "restore_lora": icfg.get("restore_lora") or DEFAULT_RESTORE_LORA,
+        "restore_steps": int(icfg.get("restore_steps", 28)),
+        "restore_min_gain": float(icfg.get("restore_min_gain", 0.0)),
+        "seed": seed,
+    }
+    info = EDITORS[editor](args.image, prompt, args.out,
+                           args.steps or int(icfg.get("edit_steps", 28)),
+                           seed, options) or {}
+
+    print(json.dumps({"ok": True, "out": args.out, "prompt": prompt, **info}))
 
 
 if __name__ == "__main__":

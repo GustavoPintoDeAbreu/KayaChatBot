@@ -1,5 +1,16 @@
 """
 Quick RAG test - verify retrieval and chat integration work
+
+Run it directly; it is a script, not a pytest module:
+
+    kaya_chatbot_env/bin/python tests/rag/test_retrieval.py
+
+It loads the real embedding model and the real vector store, so it needs a free
+GPU. Under pytest it is SKIPPED at collection: everything below runs at import
+time and ends in ``sys.exit(1)``, and a module-level exit does not fail one test,
+it aborts the whole run with an INTERNALERROR. That is exactly what happened when
+the suite was run while an image bake-off held the card — 638 healthy tests
+became "no tests ran" with a stack trace pointing here.
 """
 
 import os
@@ -8,6 +19,15 @@ from pathlib import Path
 
 # Add src to sys.path for Docker compatibility
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+if __name__ != "__main__":  # pragma: no cover - collection guard
+    import pytest
+
+    pytest.skip(
+        "script, not a pytest module: run it directly with python "
+        "tests/rag/test_retrieval.py (needs a free GPU)",
+        allow_module_level=True,
+    )
 
 from src.config_loader import load_config
 

@@ -24,7 +24,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.data.message_log import MessageLog
 
@@ -93,19 +93,37 @@ def build_chunks(
     scope: str,
     max_messages: int = 16,
     max_chars: int = 1800,
-) -> List[Dict[str, Any]]:
+    settle_seconds: int = 0,
+    now: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
     """Group consecutive messages into retrievable chunks.
 
     Mirrors the shape ``build_vector_db.py`` produces for the historical export —
     same metadata keys — so both kinds of chunk are retrieved and formatted
     identically. Adds ``scope`` and ``source: live``.
+
+    Returns ``(chunks, consumed_through_ts)``. The second value is the timestamp
+    the caller may advance its watermark to, and it is the point of
+    ``settle_seconds``: this used to flush an unconditional partial chunk at the
+    end of every run. At a two-hour cadence that was harmless, since a partial
+    chunk was nearly full anyway. At fifteen minutes it would shatter the index
+    into one- and two-message chunks — and those are what ``min_similarity`` and
+    ``top_k`` then have to rank, so retrieval quality would quietly fall while
+    every timing number stayed green.
+
+    So a trailing partial chunk is only emitted once its newest message has sat
+    still for ``settle_seconds``. Otherwise those messages are left unconsumed and
+    the watermark stops short of them, and the next run picks them up and builds a
+    full chunk. ``settle_seconds=0`` keeps the old flush-everything behaviour, for
+    the one-shot CLI path where nothing will come later.
     """
     chunks: List[Dict[str, Any]] = []
     current: List[Dict[str, Any]] = []
     chars = 0
+    consumed_through = 0
 
     def flush() -> None:
-        nonlocal current, chars
+        nonlocal current, chars, consumed_through
         if not current:
             return
         lines, participants, ids = [], [], []
@@ -130,6 +148,7 @@ def build_chunks(
                 "source": "live",
             },
         })
+        consumed_through = max(consumed_through, int(end or 0))
         current, chars = [], 0
 
     for msg in messages:
@@ -140,8 +159,17 @@ def build_chunks(
         chars += len(text)
         if len(current) >= max_messages or chars >= max_chars:
             flush()
-    flush()
-    return chunks
+
+    # The tail: emit it only once it has stopped growing, otherwise leave it for
+    # the next run so it can become a full chunk instead of a fragment.
+    if current:
+        newest = max(int(m.get("timestamp") or 0) for m in current)
+        settled = settle_seconds <= 0 or (
+            (now if now is not None else int(time.time())) - newest >= settle_seconds
+        )
+        if settled:
+            flush()
+    return chunks, consumed_through
 
 
 class Ingester:
@@ -160,13 +188,31 @@ class Ingester:
         )
         self._encoder = encoder
         self._collection = collection
+        icfg = ((config.get("whatsapp", {}) or {}).get("ingest", {}) or {})
+        self.settle_seconds = int(float(icfg.get("settle_minutes", 0)) * 60)
 
     # ── lazy resources ───────────────────────────────────────────────────────
     @property
     def encoder(self):
         if self._encoder is None:
+            # The serving process already holds this exact model: the retriever
+            # loads BAAI/bge-m3 once into a singleton. Building a second one costs
+            # ~2.2GB of the same card the model answers from, and it was being
+            # rebuilt on EVERY cycle — twelve cold loads a day at the old cadence,
+            # ninety-six at the new one. Borrow the loaded one when there is one.
+            try:
+                from src.chat.retriever import peek_retriever
+
+                shared = peek_retriever()
+                if shared is not None and getattr(shared, "encoder", None) is not None:
+                    self._encoder = shared.encoder
+                    return self._encoder
+            except Exception as exc:  # noqa: BLE001 — fall back to our own
+                logger.debug("could not borrow the retriever's encoder: %s", exc)
+
             from sentence_transformers import SentenceTransformer
 
+            logger.info("loading a private embedder (%s)", self.embedding_model)
             self._encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
         return self._encoder
 
@@ -192,12 +238,20 @@ class Ingester:
         if not messages:
             return {"scope": scope, "messages": 0, "chunks": 0, "since": since}
 
-        chunks = build_chunks(messages, scope)
+        chunks, consumed_through = build_chunks(
+            messages, scope, settle_seconds=self.settle_seconds)
         if chunks:
             texts = [c["text"] for c in chunks]
-            embeddings = self.encoder.encode(
-                texts, show_progress_bar=False, normalize_embeddings=True
-            ).tolist()
+            # Serialised against generation. This used to run unsynchronised on
+            # the same card the model serves from — safe only because it ran
+            # every two hours and was therefore unlikely to collide. At fifteen
+            # minutes "unlikely" stops being an argument.
+            from src.chat.gpu_lock import gpu_section
+
+            with gpu_section(self.config):
+                embeddings = self.encoder.encode(
+                    texts, show_progress_bar=False, normalize_embeddings=True
+                ).tolist()
             # upsert, not add: re-running must not duplicate.
             self.collection.upsert(
                 ids=[c["id"] for c in chunks],
@@ -220,6 +274,11 @@ class Ingester:
             logger.warning(
                 "%s: %d message(s) dated in the future (max %s); watermark held at %s",
                 scope, len(skipped), max(skipped), newest)
+        # Never advance past messages that were deliberately left unconsumed for
+        # the next run — doing so is how they would be lost forever, since read()
+        # only ever returns what is strictly newer than the watermark.
+        if consumed_through:
+            newest = min(newest, consumed_through)
         if newest <= since:
             # Nothing legitimately newer — leave the watermark alone rather than
             # moving it backwards.

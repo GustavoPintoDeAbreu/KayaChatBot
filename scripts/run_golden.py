@@ -49,8 +49,13 @@ def main() -> None:
         config, config_path, include_uncensored=config.get("chat", {}).get("uncensored_mode", False)
     )
 
-    def response_fn(question: str) -> str:
-        return engine.generate_reply(question, speaker=args.speaker, recent_lines=[], system_prompt=system_prompt)
+    def response_fn(question: str, history=None) -> str:
+        # `history` carries the turns a multithread case depends on ("E como é que
+        # ele se chama?"). Hardcoding [] here is what made those cases unanswerable.
+        return engine.generate_reply(
+            question, speaker=args.speaker, recent_lines=list(history or []),
+            system_prompt=system_prompt,
+        )
 
     print(f"Loading judge provider '{judge_name}' …")
     provider = load_provider(judge_name, config)

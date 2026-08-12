@@ -39,10 +39,22 @@ class Reply:
     The WhatsApp bridge needs ``route`` to act on commands (switch to voice
     replies, clear context) that are executed in code rather than generated —
     those come back with an empty ``text``.
+
+    ``citation`` is kept OUT of ``text`` on purpose. When a web-grounded answer is
+    delivered as a voice note, gluing "🌐 Fontes: espn.com, record.pt" onto the
+    reply means Piper reads two bare domains aloud at the end of the message. The
+    caller decides where the sources go: appended for text, sent separately (or
+    dropped) for speech.
     """
 
     text: str
     route: Optional["router.Route"] = None
+    citation: str = ""
+
+    @property
+    def text_with_citation(self) -> str:
+        """The reply as it should appear in a *written* message."""
+        return f"{self.text}\n\n{self.citation}" if self.citation else self.text
 
 
 def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
@@ -191,6 +203,8 @@ class KayaEngine:
         top_k: Optional[int] = None,
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
+        extra_context: str = "",
+        summary: str = "",
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -200,7 +214,10 @@ class KayaEngine:
         deliberately SKIPPED for banter (``retrieval=False``) — injecting member
         profiles into a reply to "😂" is what made the bot answer laughter with an
         essay about someone chosen at random. ``top_k`` narrows retrieval for the
-        lighter `mixed` mode. Web search is handled separately in ``respond``.
+        lighter `mixed` mode. ``extra_context`` carries a block the caller already
+        has in hand (today: the web-search result), prepended ahead of RAG.
+        ``summary`` is this chat's rolling summary of what has already scrolled
+        out of the verbatim window (see ``src/chat/summary.py``).
         """
         context = ""
         if retrieval and self.rag_enabled and self.retriever:
@@ -216,12 +233,20 @@ class KayaEngine:
                 print(f"⚠️  RAG retrieval failed: {exc}")
 
         parts = []
+        if extra_context:
+            parts.append(extra_context)
         if context:
             parts.append(context)
+        if summary:
+            # What has already fallen out of the verbatim window, condensed. Sits
+            # above the recent lines so the model reads it as older background
+            # rather than as part of the live exchange.
+            parts.append(f"Resumo da conversa até agora:\n{summary}")
         if recent_lines:
             # Truncate prior turns to a gist so the model can't copy its own long
             # previous answers back verbatim (the repetition / "stuck" bug).
-            trimmed = [truncate_history_line(line) for line in recent_lines]
+            max_words = int(self._inf.get("history_max_words", 40))
+            trimmed = [truncate_history_line(line, max_words) for line in recent_lines]
             parts.append("Conversa recente:\n" + "\n".join(trimmed))
         parts.append(f"{speaker_label}: {message}")
         return "\n\n".join(parts), context
@@ -238,11 +263,12 @@ class KayaEngine:
 
         Thin wrapper over ``respond`` that returns just the text, kept because
         several callers (benchmarks, the agent simulator, the probes) expect a
-        plain string.
+        plain string. Those are all written surfaces, so the citation is appended
+        exactly as it used to be; only spoken delivery splits it off.
         """
         return self.respond(
             message, speaker, recent_lines, system_prompt, max_new_tokens
-        ).text
+        ).text_with_citation
 
     def respond(
         self,
@@ -253,6 +279,7 @@ class KayaEngine:
         max_new_tokens: Optional[int] = None,
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
+        summary: str = "",
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -283,34 +310,45 @@ class KayaEngine:
             if route.command and route.command != router.CMD_AUDIO_ONCE:
                 return Reply(text="", route=route)
 
-            # Off-topic / current-events questions are answered directly by Grok's
-            # web search (factually grounded, EU-PT), bypassing the local model,
-            # which garbles facts.
+            # Off-topic / current-events questions get live facts from Grok's web
+            # search. This runs AFTER routing, and only for the two informational
+            # modes. It used to run first, which meant conversational messages
+            # could trigger a web lookup — "isto é creepy, estás a responder mais
+            # naturalmente" came back as "não há informação clara na web sobre
+            # alterações no meu comportamento". Banter must never hit the network.
             #
-            # This runs AFTER routing, and only for factual intent. It used to run
-            # first, which meant conversational messages could trigger a web
-            # lookup — "isto é creepy, estás a responder mais naturalmente" came
-            # back as "não há informação clara na web sobre alterações no meu
-            # comportamento". Banter must never hit the network.
+            # Grok's answer is now CONTEXT, not the reply. Returning it verbatim
+            # bypassed the persona, the uncensored preamble and clean_response, and
+            # the logs show what that cost: "manda-o para o caralho? Já agora quem
+            # é melhor, Cristiano ou Messi?" came back as a comparison plus "A
+            # primeira parte da pergunta não se enquadra em resposta factual
+            # baseada na web." Grok answers the half it can and disclaims the rest
+            # in a register this group does not want. One voice answers the whole
+            # message; the search only supplies the facts.
             #
             # The cost is holding the GPU lock across the search call. That is
             # deliberate: the alternative is a second lock acquisition per turn,
             # and a contended lock DROPS the message rather than queueing it.
             # Search fires on a small minority of messages, so the trade is cheap.
-            if route.mode == router.FACTUAL and self.retriever:
+            web_context = ""
+            citation = ""
+            if route.mode in (router.FACTUAL, router.GENERAL) and self.retriever:
                 from src.chat.web_search import maybe_web_search
 
                 web_result = maybe_web_search(message, self.retriever, self.config)
                 if web_result.used and web_result.answer:
                     citation = web_result.citation_line()
-                    answer = (
-                        f"{web_result.answer}\n\n{citation}" if citation else web_result.answer
-                    )
-                    return Reply(text=answer, route=route)
+                    if self._synthesize_web_locally():
+                        web_context = (
+                            "Resultados de pesquisa web (informação atual e fiável):\n"
+                            f"{web_result.answer}"
+                        )
+                    else:
+                        return Reply(text=web_result.answer, route=route, citation=citation)
 
             # 2. Mode picks the length budget, unless the caller forced one.
             if not explicit_cap:
-                if wants_long and route.mode == router.FACTUAL:
+                if wants_long and route.mode in (router.FACTUAL, router.GENERAL):
                     max_new_tokens = self._inf.get("max_new_tokens", 512)
                 elif "max_new_tokens" in mcfg:
                     max_new_tokens = int(mcfg["max_new_tokens"])
@@ -334,11 +372,17 @@ class KayaEngine:
                 top_k=mcfg.get("top_k"),
                 scope=scope,
                 exclude_from=exclude_from,
+                extra_context=web_context,
+                # Banter gets no summary: it retrieves nothing by design, and a
+                # paragraph of background would undo exactly what that mode is for.
+                summary="" if route.mode == router.BANTER else summary,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
             brevity_hint = mcfg.get("brevity_hint") or self._inf.get("brevity_hint", "")
-            if brevity_hint and not (wants_long and route.mode == router.FACTUAL):
+            if brevity_hint and not (
+                wants_long and route.mode in (router.FACTUAL, router.GENERAL)
+            ):
                 user_turn += f"\n\n({brevity_hint})"
             # Steer the reply language so an English message isn't answered in Portuguese
             # (and reinforce European-PT otherwise, against Brazilian-PT drift).
@@ -357,6 +401,20 @@ class KayaEngine:
         return Reply(
             text=clean_response(raw, user_name=speaker, bot_name="Kaya Bot"),
             route=route,
+            citation=citation,
+        )
+
+    def _synthesize_web_locally(self) -> bool:
+        """Whether a web result is rewritten by the local model or sent verbatim.
+
+        Verbatim was the original design because the retired fine-tuned E4B
+        garbled raw web snippets. Grok now hands over a finished answer rather
+        than snippets, and the model serving this is a capable stock 12B, so the
+        answer is used as context. Flip ``web_search.synthesize_locally`` to false
+        to get the old behaviour back in one edit.
+        """
+        return bool(
+            (self.config.get("web_search", {}) or {}).get("synthesize_locally", True)
         )
 
 

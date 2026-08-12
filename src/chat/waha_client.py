@@ -58,8 +58,12 @@ class WahaClient:
         return resp.json()
 
     def send_voice(self, chat_id: str, ogg_bytes: bytes,
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Send an OGG/Opus voice note. WhatsApp rejects other codecs as voice."""
+                   reply_to: Optional[str] = None, text: str = "") -> Dict[str, Any]:
+        """Send an OGG/Opus voice note. WhatsApp rejects other codecs as voice.
+
+        ``text`` is what was spoken. WhatsApp has no field for it, so it is only
+        carried so the mock client can record it.
+        """
         import base64
 
         body: Dict[str, Any] = {
@@ -78,18 +82,25 @@ class WahaClient:
         return resp.json()
 
     def send_image(self, chat_id: str, image_bytes: bytes, caption: str = "",
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Send a PNG as a photo. Generation can take minutes, so this call gets
-        its own longer timeout — the shared client's 30s would abort a send that
-        is only slow because the file is large."""
+                   reply_to: Optional[str] = None,
+                   mimetype: str = "image/jpeg",
+                   filename: str = "kaya.jpg") -> Dict[str, Any]:
+        """Send a photo. Generation can take minutes, so this call gets its own
+        longer timeout — the shared client's 30s would abort a send that is only
+        slow because the file is large.
+
+        The format is the caller's to choose. These bytes are base64-inlined into
+        the JSON body, and WhatsApp recompresses to JPEG at the far end anyway, so
+        the default is JPEG rather than the multi-megabyte PNG this used to
+        hardcode."""
         import base64
 
         body: Dict[str, Any] = {
             "session": self.session,
             "chatId": chat_id,
             "file": {
-                "mimetype": "image/png",
-                "filename": "kaya.png",
+                "mimetype": mimetype,
+                "filename": filename,
                 "data": base64.b64encode(image_bytes).decode("ascii"),
             },
         }
@@ -135,11 +146,16 @@ class MockWahaClient:
         self._counter = 0
 
     def send_voice(self, chat_id: str, ogg_bytes: bytes,
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Capture the voice note instead of sending it."""
+                   reply_to: Optional[str] = None, text: str = "") -> Dict[str, Any]:
+        """Capture the voice note instead of sending it.
+
+        ``text`` is recorded too. Keeping only the byte count is why the
+        simulator could assert that a voice note was sent but never what it said,
+        which is how a spoken "🌐 Fontes: x.com, play.google.com" went unnoticed.
+        """
         self._counter += 1
         record = {"chat_id": chat_id, "voice_bytes": len(ogg_bytes or b""),
-                  "reply_to": reply_to}
+                  "spoken_text": text, "reply_to": reply_to}
         self.sent.append(record)
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] (voice note, {len(ogg_bytes or b'')} bytes)\n")
@@ -155,7 +171,9 @@ class MockWahaClient:
         return {"mocked": True, "id": message_id, **record}
 
     def send_image(self, chat_id: str, image_bytes: bytes, caption: str = "",
-                   reply_to: Optional[str] = None) -> Dict[str, Any]:
+                   reply_to: Optional[str] = None,
+                   mimetype: str = "image/jpeg",
+                   filename: str = "kaya.jpg") -> Dict[str, Any]:
         self._counter += 1
         record = {"chat_id": chat_id, "image_bytes": len(image_bytes or b""),
                   "caption": caption, "reply_to": reply_to}

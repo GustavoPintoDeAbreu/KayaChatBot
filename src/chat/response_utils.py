@@ -189,6 +189,42 @@ def _strip_meta_narration(text: str, user_name: str) -> str:
     return rest if (is_leak and rest) else text
 
 
+# A dash used as punctuation: surrounded by whitespace, or trailing at end of line.
+# Intra-word hyphens must survive untouched ("dá-me", "pt_PT-tugão", "Kontext-dev"),
+# and a line-leading "- " is a list bullet, not a clause separator.
+_CLAUSE_DASH_RE = re.compile(r"(?<=\S)[ \t]+[—–]|(?<=\S)[ \t]+-{1,2}(?=[ \t])")
+# A dash left dangling at the end of a line separates nothing; drop it outright
+# rather than leaving a trailing comma behind.
+_TRAILING_DASH_RE = re.compile(r"[ \t]+[—–-]{1,2}[ \t]*$")
+
+
+def strip_clause_dashes(text: str) -> str:
+    """Replace dashes used to separate clauses with a comma.
+
+    The group asked for this explicitly: no em dashes, commas at most. Prompting
+    alone does not hold over a few hundred tokens, and it cannot reach the parts
+    of a reply that were never generated (the canned acknowledgements), so the
+    rule is enforced here as well.
+
+    Only whitespace-delimited dashes are touched. ``dá-me``, ``pt_PT-tugão`` and
+    a ``- `` bullet at the start of a line are left exactly as they are.
+    """
+    if not text:
+        return text
+    out = []
+    for line in text.split("\n"):
+        line = _TRAILING_DASH_RE.sub("", line)
+        stripped = line.lstrip()
+        # A bullet line: protect the marker, clean the rest.
+        if stripped.startswith(("- ", "-\t", "— ", "– ")):
+            lead = len(line) - len(stripped)
+            out.append(line[: lead + 2] + _CLAUSE_DASH_RE.sub(",", line[lead + 2 :]))
+            continue
+        out.append(_CLAUSE_DASH_RE.sub(",", line))
+    # "palavra , outra" can only come from the substitution above.
+    return re.sub(r"\s+,", ",", "\n".join(out))
+
+
 def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str:
     """Clean a raw generated response.
 
@@ -205,6 +241,8 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
       2. Cut at the first line where the model starts a *new user turn*
          (``"<user>:"``, ``"User:"``, ``"Utilizador:"``) — a hallucinated
          continuation — while preserving every line before it.
+      3. Replace clause-separating dashes with commas (see
+         ``strip_clause_dashes``).
     """
     if not text:
         return ""
@@ -238,7 +276,7 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
             break
         kept_lines.append(line)
 
-    return "\n".join(kept_lines).strip()
+    return strip_clause_dashes("\n".join(kept_lines).strip())
 
 
 def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str:

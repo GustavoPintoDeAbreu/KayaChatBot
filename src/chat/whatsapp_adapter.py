@@ -16,6 +16,7 @@ Routing rules (matching the chosen behaviour):
 """
 
 import datetime
+import inspect
 import json
 import logging
 import os
@@ -31,6 +32,17 @@ from src.data.message_log import MessageLog
 from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
+
+
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    """Whether ``fn`` will accept ``name=`` — asked once, not guessed per call."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind == p.VAR_KEYWORD for p in params.values())
 
 Responder = Callable[[str, str, List[str]], str]
 
@@ -258,10 +270,12 @@ class WhatsAppAdapter:
         prefs: Optional[ChatPreferences] = None,
         message_log: Optional[MessageLog] = None,
         tts_synthesize: Optional[Callable[[str], Optional[bytes]]] = None,
+        speech_text: Optional[Callable[[str], str]] = None,
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
         image_generate: Optional[Callable[..., Optional[bytes]]] = None,
         fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
+        summary_writer: Any = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -315,6 +329,11 @@ class WhatsAppAdapter:
         )
         self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
+        # How many INBOUND messages those lines represent. An answered turn writes
+        # two lines (the asker's and the bot's), so it is half — and this is what
+        # the retrieval-exclusion window must be measured in. See
+        # _note_message_time for what goes wrong when the two disagree.
+        self._inbound_window = max(1, self.history_turns // 2)
         self.send_seen = bool(wcfg.get("send_seen", True))
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
@@ -333,18 +352,20 @@ class WhatsAppAdapter:
         )
         # Confirmations for router-detected commands, kept here so the wording is
         # not generated (and so it cannot drift or refuse).
+        # No dashes anywhere in here: the group asked for commas at most, and a
+        # canned string is the one place a prompt rule can never reach.
         self.command_replies = {
-            "audio": "Feito — passo a responder-te por áudio.",
-            "text": "Feito — volto a responder por texto.",
-            "clear": "Contexto limpo — esqueci as mensagens recentes desta conversa.",
+            "audio": "Feito, passo a responder-te por áudio.",
+            "text": "Feito, volto a responder por texto.",
+            "clear": "Contexto limpo, esqueci as mensagens recentes desta conversa.",
             # Until TTS exists, saying yes and then answering in text forever is
             # worse than saying no. See chat.audio.reply_enabled.
-            "audio_unavailable": "Ainda não sei responder por áudio — o Gustavo está a tratar disso. Por agora continuo a escrever.",
+            "audio_unavailable": "Ainda não sei responder por áudio, o Gustavo está a tratar disso. Por agora continuo a escrever.",
             # An edit takes minutes, so the acknowledgement has to set the
             # expectation — silence for five minutes reads as a broken bot.
-            "image_editing": "Dá-me uns minutos que isto demora — já mando.",
+            "image_editing": "Dá-me uns minutos que isto demora, já mando.",
             "image_generating": "Vou fazer isso, dá-me um bocado.",
-            "image_queued": "Fica em fila, tenho {ahead} à frente — mando assim que estiver.",
+            "image_queued": "Fica em fila, tenho {ahead} à frente, mando assim que estiver.",
             "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
             "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
@@ -353,11 +374,20 @@ class WhatsAppAdapter:
         # the preference is NOT stored, because it would silently do nothing.
         # Injected so the adapter stays free of model/TTS imports (and tests can
         # exercise voice delivery without Piper installed).
+        # Keeps each chat's rolling summary of what has scrolled out of the
+        # verbatim window. Injected like tts_synthesize so the adapter needs no
+        # model import and tests can run without one.
+        self.summary_writer = summary_writer
+        self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self.tts_synthesize = tts_synthesize
+        # What a reply sounds like is not what it looks like: emoji, markdown and
+        # URLs are read out loud by Piper. Injected like tts_synthesize so the
+        # adapter keeps no tts import.
+        self.speech_text = speech_text
         self.transcribe = transcribe
-        self.audio_reply_enabled = bool(
-            ((config.get("chat", {}) or {}).get("audio", {}) or {}).get("reply_enabled", False)
-        )
+        audio_cfg = ((config.get("chat", {}) or {}).get("audio", {}) or {})
+        self.audio_reply_enabled = bool(audio_cfg.get("reply_enabled", False))
+        self.send_citation_as_text = bool(audio_cfg.get("send_citation_as_text", True))
         # Whether to attribute 👍/👎 emoji reactions on the bot's own replies as
         # feedback. The actual logging happens in the server; the adapter only tracks
         # which sent message ids are the bot's and resolves a reaction back to them.
@@ -404,28 +434,45 @@ class WhatsAppAdapter:
         return bool(mentioned or replied)
 
     def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None,
-                 force_voice: bool = False):
+                 force_voice: bool = False, citation: str = ""):
         """Send the reply as text, or as a voice note if this chat asked for it.
 
         Falls back to text whenever synthesis fails — a silent non-reply is much
         worse than the wrong medium.
+
+        ``citation`` is the sources line of a web-grounded answer. In text it is
+        appended exactly as before. Spoken, it is NOT: Piper reading "🌐 Fontes:
+        x.com, play.google.com" at the end of a voice note is what the group heard
+        and did not want. It goes out as a short written follow-up instead.
+
+        Returns ``(sent, delivered_as, spoken_text)`` so the caller can record what
+        was actually said, which the metrics log had no way of knowing before.
         """
         wants_voice = force_voice or self.prefs.output_mode(chat_id) == ChatPreferences.OUTPUT_AUDIO
+        written = f"{text}\n\n{citation}" if citation else text
         if not wants_voice:
-            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
+            return self.waha_client.send_text(chat_id, written, reply_to=reply_to), "text", ""
 
+        spoken = self.speech_text(text) if self.speech_text else text
         ogg = None
-        if self.tts_synthesize is not None:
-            ogg = self.tts_synthesize(text)
+        if self.tts_synthesize is not None and spoken.strip():
+            ogg = self.tts_synthesize(spoken)
         if not ogg:
             print("⚠️  voice synthesis unavailable — replying with text instead")
-            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
+            return self.waha_client.send_text(chat_id, written, reply_to=reply_to), "text", ""
 
         try:
-            return self.waha_client.send_voice(chat_id, ogg, reply_to=reply_to)
+            sent = self.waha_client.send_voice(chat_id, ogg, reply_to=reply_to, text=spoken)
         except Exception as exc:  # noqa: BLE001
             print(f"⚠️  sending the voice note failed ({exc}); replying with text")
-            return self.waha_client.send_text(chat_id, text, reply_to=reply_to)
+            return self.waha_client.send_text(chat_id, written, reply_to=reply_to), "text", ""
+
+        if citation and self.send_citation_as_text:
+            try:
+                self.waha_client.send_text(chat_id, citation)
+            except Exception as exc:  # noqa: BLE001 — the answer already went out
+                print(f"⚠️  sending the sources line failed ({exc})")
+        return sent, "voice", spoken
 
     def _note_message_time(self, chat_id: str, ts: Optional[int]) -> None:
         """Track message times so we know where this chat's verbatim window starts.
@@ -438,8 +485,17 @@ class WhatsAppAdapter:
             return
         window = self._session_times.setdefault(chat_id, [])
         window.append(int(ts))
-        # The session store keeps `history_turns` turns; keep matching timestamps.
-        del window[: max(0, len(window) - self.history_turns)]
+        # Keep one timestamp per INBOUND message actually inside the window, not
+        # one per line. Each answered turn appends two lines to the session store
+        # — the asker's and the bot's — so `history_turns` lines is only half that
+        # many inbound messages.
+        #
+        # Getting this wrong opens a hole rather than a duplicate: the window
+        # start would sit further back than what the prompt actually carries, so
+        # retrieval would drop chunks covering messages that are NOT held
+        # verbatim, and nothing would have them. At history_turns=6 the hole was
+        # three messages wide and easy to miss; at 60 it would be thirty.
+        del window[: max(0, len(window) - self._inbound_window)]
 
     def _session_window_start(self, chat_id: str) -> Optional[str]:
         """ISO timestamp of the oldest message still held verbatim in this chat.
@@ -756,10 +812,17 @@ class WhatsAppAdapter:
         self._note_message_time(msg.chat_id, msg.timestamp)
         scope = scope_for_chat(msg.chat_id, self.shared_chats)
         exclude_from = self._session_window_start(msg.chat_id)
+        kwargs = {"scope": scope, "exclude_from": exclude_from}
+        # Older responders (test stubs, the simulators) take no `summary`. Ask the
+        # signature rather than catching TypeError, which would swallow a real one
+        # raised inside the responder itself.
+        if self.summary_writer is not None and self._responder_takes_summary:
+            try:
+                kwargs["summary"] = self.summary_writer.store.summary_for(msg.chat_id)
+            except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
+                logger.warning("could not read the summary for this chat: %s", exc)
         try:
-            result = self.responder(
-                text, speaker, recent, scope=scope, exclude_from=exclude_from
-            )
+            result = self.responder(text, speaker, recent, **kwargs)
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
@@ -770,6 +833,7 @@ class WhatsAppAdapter:
         # than generated, so the confirmation cannot drift or be refused.
         reply = result if isinstance(result, str) else getattr(result, "text", "")
         route = None if isinstance(result, str) else getattr(result, "route", None)
+        citation = "" if isinstance(result, str) else getattr(result, "citation", "")
         command = getattr(route, "command", None) if route else None
 
         # A one-off voice request changes only how THIS reply is delivered, so it
@@ -802,8 +866,20 @@ class WhatsAppAdapter:
 
         # Quote the asker's message in groups so it's clear who the bot answers.
         reply_to = msg.message_id if msg.is_group else None
-        sent = self._deliver(msg.chat_id, reply, reply_to=reply_to,
-                             force_voice=deliver_as_voice_once)
+        sent, delivered_as, spoken = self._deliver(
+            msg.chat_id, reply, reply_to=reply_to,
+            force_voice=deliver_as_voice_once, citation=citation,
+        )
+
+        # Keep this chat's rolling summary current. Queued AFTER delivery and run
+        # on a worker that skips when the GPU is busy, because a summary must
+        # never cost somebody their next message.
+        if self.summary_writer is not None:
+            try:
+                self.summary_writer.maybe_update(
+                    msg.chat_id, self.session_store.recent(msg.chat_id, None))
+            except Exception as exc:  # noqa: BLE001 — never break a delivered reply
+                logger.warning("summary trigger failed: %s", exc)
 
         # Remember this sent message so a later 👍/👎 reaction on it can be attributed.
         if self.feedback_enabled:
@@ -822,8 +898,15 @@ class WhatsAppAdapter:
             "chat_id": msg.chat_id,
             "speaker": speaker,
             "reply": reply,
+            "citation": citation,
             "user_text": text,
             "is_group": msg.is_group,
+            # What medium it actually went out on, and — for a voice note — the
+            # exact string Piper was given. Without these the interaction log
+            # cannot tell a spoken reply from a written one, let alone show that
+            # the sources line was being read aloud.
+            "delivered_as": delivered_as,
+            "spoken_text": spoken,
         }
 
     def _remember_sent(self, message_id: str, info: Dict[str, Any]) -> None:

@@ -351,9 +351,14 @@ def test_clear_command_not_generated_as_reply(tmp_path):
 class RoutedReply:
     """Mimics ``engine.Reply``: reply text plus how the message was routed."""
 
-    def __init__(self, text="", command=None, mode="banter"):
+    def __init__(self, text="", command=None, mode="banter", citation=""):
         self.text = text
+        self.citation = citation
         self.route = type("Route", (), {"mode": mode, "command": command})()
+
+    @property
+    def text_with_citation(self):
+        return f"{self.text}\n\n{self.citation}" if self.citation else self.text
 
 
 def make_routed_adapter(tmp_path, reply, **overrides):
@@ -782,9 +787,16 @@ def test_failed_generation_says_so(tmp_path):
 
     adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
 
+    # Wait for the QUEUE to drain, not for a message count. The job runs on a
+    # background thread, so counting sends races with the scheduler — this failed
+    # once on a box that was busy rendering a bake-off, and only then.
     import time
-    deadline = time.time() + 5.0
-    while time.time() < deadline and len(adapter.waha_client.sent) < 2:
+
+    from src.chat import imagegen
+
+    deadline = time.time() + 10.0
+    while time.time() < deadline and (
+            imagegen.get_queue().depth > 0 or len(adapter.waha_client.sent) < 2):
         time.sleep(0.02)
     assert "não consegui" in adapter.waha_client.sent[-1]["text"].lower()
 
@@ -1061,3 +1073,243 @@ def test_a_pending_image_is_visible_in_the_conversation(tmp_path):
     history = adapter.session_store.recent(GROUP, 10)
     assert any("a preparar uma imagem" in line for line in history)
     assert any("gato astronauta" in line for line in history)
+
+
+# ── what is SPOKEN vs what is WRITTEN ────────────────────────────────────────
+# Every voice test above stubs TTS as `lambda text: b"OGG"` and asserts on byte
+# counts, so nothing noticed that a web-grounded reply was handing Piper its
+# "🌐 Fontes: x.com, play.google.com" line to read out domain by domain.
+
+def _capture_tts(adapter):
+    """Record the exact string handed to the synthesiser."""
+    seen = {}
+
+    def tts(text):
+        seen["text"] = text
+        return b"OGG"
+
+    adapter.tts_synthesize = tts
+    return seen
+
+
+def test_voice_note_never_speaks_the_sources_line(tmp_path):
+    from src.chat.tts import sanitize_for_speech
+
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br, pt.uefa.com"),
+    )
+    adapter.audio_reply_enabled = True
+    adapter.speech_text = sanitize_for_speech
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    spoken = _capture_tts(adapter)
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    assert spoken["text"] == "O Benfica ganhou 6-1."
+    assert "Fontes" not in spoken["text"]
+    assert "espn" not in spoken["text"]
+
+
+def test_sources_follow_the_voice_note_as_text(tmp_path):
+    from src.chat.tts import sanitize_for_speech
+
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br"),
+    )
+    adapter.audio_reply_enabled = True
+    adapter.speech_text = sanitize_for_speech
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    _capture_tts(adapter)
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    sent = adapter.waha_client.sent
+    assert any("voice_bytes" in item for item in sent)
+    assert any(item.get("text") == "🌐 Fontes: espn.com.br" for item in sent)
+
+
+def test_written_reply_still_carries_the_sources_line(tmp_path):
+    adapter = make_routed_adapter(
+        tmp_path,
+        RoutedReply(text="O Benfica ganhou 6-1.", mode="factual",
+                    citation="🌐 Fontes: espn.com.br"),
+    )
+
+    adapter.handle_event(dm_event("quem ganhou?"), system_prompt="")
+
+    assert adapter.waha_client.sent[-1]["text"] == (
+        "O Benfica ganhou 6-1.\n\n🌐 Fontes: espn.com.br"
+    )
+
+
+def test_spoken_text_is_recorded_for_the_voice_note(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+    adapter.audio_reply_enabled = True
+    adapter.prefs.set_output_mode(ALICE, "audio")
+    adapter.tts_synthesize = lambda text: b"OGG"
+
+    result = adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert result["delivered_as"] == "voice"
+    assert result["spoken_text"] == "Olá!"
+    assert adapter.waha_client.sent[-1]["spoken_text"] == "Olá!"
+
+
+def test_text_delivery_is_reported_as_text(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="Olá!", mode="banter"))
+
+    result = adapter.handle_event(dm_event("olá"), system_prompt="")
+
+    assert result["delivered_as"] == "text"
+    assert result["spoken_text"] == ""
+
+
+def test_image_acknowledgements_carry_no_dashes(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+    for key, reply in adapter.command_replies.items():
+        assert "—" not in reply and "–" not in reply, key
+        assert " - " not in reply, key
+
+
+# ── the verbatim window vs retrieval ─────────────────────────────────────────
+# `exclude_from` is what stops retrieval re-injecting turns the prompt already
+# carries word for word. It had no test at all, which matters more now that
+# history_turns is 60 rather than 6: the window start moved a long way back, so
+# a mistake here silently changes what the model can recall.
+
+def _capture_responder(tmp_path, **overrides):
+    """An adapter whose responder records the kwargs it was handed."""
+    seen = {}
+
+    def responder(message, speaker, recent_lines, scope=None, exclude_from=None,
+                  summary=""):
+        seen["scope"] = scope
+        seen["exclude_from"] = exclude_from
+        seen["summary"] = summary
+        seen["recent"] = list(recent_lines or [])
+        return "ok"
+
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                           "contacts": {ALICE: "Alice"}, **overrides}}
+    adapter = WhatsAppAdapter(
+        responder, MockWahaClient(echo=False), config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "s"), max_lines=200),
+    )
+    return adapter, seen
+
+
+def _dm_at(text, ts):
+    event = dm_event(text)
+    event["payload"]["timestamp"] = ts
+    return event
+
+
+def test_no_window_start_before_anything_has_been_said(tmp_path):
+    adapter, seen = _capture_responder(tmp_path)
+    adapter.handle_event(_dm_at("olá", 1_700_000_000), system_prompt="")
+    # One message in: the window starts at that message, not before it.
+    assert seen["exclude_from"] is not None
+
+
+def test_the_window_start_follows_history_turns(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=6)
+    base = 1_700_000_000
+    for i in range(10):
+        adapter.handle_event(_dm_at(f"mensagem {i}", base + i), system_prompt="")
+    # 6 lines is 3 answered turns, so the window covers the last THREE inbound
+    # messages — the 10th, 9th and 8th. It starts at the 8th (base + 7).
+    from datetime import datetime, timezone
+
+    expected = datetime.fromtimestamp(base + 7, tz=timezone.utc).replace(
+        tzinfo=None).isoformat()
+    assert seen["exclude_from"] == expected, (
+        "the window must be measured in inbound messages, not session lines")
+
+
+def test_a_bigger_window_reaches_further_back(tmp_path):
+    """Raising history_turns must move the boundary earlier, not later."""
+    base = 1_700_000_000
+    starts = {}
+    for turns in (3, 10):
+        adapter, seen = _capture_responder(tmp_path / f"t{turns}", history_turns=turns)
+        for i in range(12):
+            adapter.handle_event(_dm_at(f"m{i}", base + i), system_prompt="")
+        starts[turns] = seen["exclude_from"]
+    assert starts[10] < starts[3], "a longer verbatim window must start earlier"
+
+
+def test_messages_without_a_timestamp_do_not_corrupt_the_window(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=3)
+    adapter.handle_event(_dm_at("com tempo", 1_700_000_000), system_prompt="")
+    event = dm_event("sem tempo")
+    event["payload"]["timestamp"] = 0
+    adapter.handle_event(event, system_prompt="")
+    # The zero is ignored rather than becoming 1970 and excluding everything.
+    assert seen["exclude_from"].startswith("2023-")
+
+
+def test_the_rolling_summary_reaches_the_responder(tmp_path):
+    class Writer:
+        class store:
+            @staticmethod
+            def summary_for(chat_id):
+                return "Ficou combinado jantar no sábado."
+
+        @staticmethod
+        def maybe_update(chat_id, history):
+            return False
+
+    adapter, seen = _capture_responder(tmp_path)
+    adapter.summary_writer = Writer()
+    adapter._responder_takes_summary = True
+    adapter.handle_event(_dm_at("e então?", 1_700_000_000), system_prompt="")
+    assert seen["summary"] == "Ficou combinado jantar no sábado."
+
+
+def test_a_responder_that_takes_no_summary_still_works(tmp_path):
+    """The simulators and older stubs must keep working unchanged."""
+    def old_style(message, speaker, recent_lines, scope=None, exclude_from=None):
+        return f"reply:{message}"
+
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False}}
+    adapter = WhatsAppAdapter(
+        old_style, MockWahaClient(echo=False), config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "s2")),
+    )
+    assert adapter._responder_takes_summary is False
+    result = adapter.handle_event(_dm_at("olá", 1_700_000_000), system_prompt="")
+    assert result["reply"] == "reply:olá"
+
+
+def test_the_exclusion_window_counts_inbound_messages_not_lines(tmp_path):
+    """The window start must not reach back further than the prompt actually goes.
+
+    Each answered turn writes TWO session lines (the asker's and the bot's), so
+    `history_turns` lines is half that many inbound messages. Measuring the
+    exclusion window in lines pushes its start too far back, and retrieval then
+    drops chunks covering messages that are NOT held verbatim — a hole, not a
+    duplicate, and silent.
+    """
+    adapter, seen = _capture_responder(tmp_path, history_turns=6)
+    base = 1_700_000_000
+    for i in range(12):
+        adapter.handle_event(_dm_at(f"m{i}", base + i), system_prompt="")
+
+    lines = seen["recent"]
+    inbound = [ln for ln in lines if not ln.startswith("Kaya Bot:")]
+    assert len(lines) <= 6
+
+    from datetime import datetime, timezone
+
+    start = seen["exclude_from"]
+    oldest_inbound_ts = base + 12 - len(inbound)
+    earliest_allowed = datetime.fromtimestamp(
+        oldest_inbound_ts, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    assert start >= earliest_allowed, (
+        f"window starts at {start}, earlier than the oldest message actually in "
+        f"the prompt ({earliest_allowed}) — chunks in between would be excluded "
+        f"from retrieval without being carried verbatim")

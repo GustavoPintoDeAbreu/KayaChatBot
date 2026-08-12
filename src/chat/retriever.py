@@ -572,6 +572,16 @@ class ConversationRetriever:
 _retriever_instance = None
 _retriever_lock = threading.Lock()
 
+def peek_retriever() -> Optional["ConversationRetriever"]:
+    """The retriever if one is already loaded, else None — never builds one.
+
+    Lets the ingester borrow the embedding model this process has already paid
+    for instead of loading a second ~2.2GB copy onto the serving card, without
+    forcing a load in the CLI paths where no retriever exists.
+    """
+    return _retriever_instance
+
+
 def get_retriever(config: Dict[str, Any]) -> ConversationRetriever:
     """Get or create retriever instance (double-checked locking singleton)."""
     global _retriever_instance
