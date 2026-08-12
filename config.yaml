@@ -382,9 +382,14 @@ chat:
     #
     # And only kept when it MEASURABLY helped: the restored image must beat the
     # editor's own output on ArcFace similarity to the source, or it is discarded.
-    # That guard is what makes this safe on by default — a bad restore costs
-    # ~90s, never quality.
-    restore_face: true
+    # OFF until the bench says otherwise. The stage works — it runs on a free
+    # card, loads Klein + the LoRA, scores, and the guard correctly discarded a
+    # restore that came back at 0.811 against the editor's own 0.881. But that
+    # is the only measurement there is, and it says the restore HURT. The guard
+    # protects quality, not the ~90s and the second 17GB model load every
+    # face-preserving edit would pay for a stage with no evidence behind it.
+    # Turn on after running the 40-cell standard grid with the restore arms.
+    restore_face: false
     restore_lora: "bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors"
     restore_steps: 28
     restore_min_gain: 0.0

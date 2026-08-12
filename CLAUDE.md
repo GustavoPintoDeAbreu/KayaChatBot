@@ -239,7 +239,52 @@ containers from `~/.insightface`; every path degrades to a no-op without it.
 
 **Making them.** `imagegen.run()` shells out to `scripts/imagegen_worker.py` — never in-process. Dropping a diffusion pipeline in Python leaves ~20GB allocated with no `nn.Module` alive, it would hold a card between requests, and an OOM would take the bot down. Editing runs **FLUX.1 Kontext** (bake-off winner: likeness 0.409 vs Qwen's 0.138, adherence 4.4/5, ~86s); text-to-image runs **Z-Image Turbo**. The router's `CMD_IMAGE` picks the subject: attached photo, else the last photo seen in that chat, else generate from text. The webhook only acknowledges — the picture is sent from a background thread. `chat.imagegen.allowed_scopes` gates editing to the shared group.
 
+**Kontext keeps its job (2026-08-12).** FLUX.2 Klein 9B ran the same 40-cell
+standard grid and lost where it counts:
+
+| arm | likeness | adherence | lik×adh | usable | realism | secs |
+|---|---|---|---|---|---|---|
+| `flux-kontext-prod` | **0.695** | 4.05 | **0.536** | 21/40 | 2.83 | 177 |
+| `flux2-klein-prod` | 0.417 | **4.98** | 0.414 | **23/40** | **4.25** | **145** |
+
+Klein follows instructions almost perfectly and looks more photographic, but a
+40% drop in likeness is the wrong trade for a bot whose images are jokes about
+specific faces. Two more usable cells do not buy that back.
+
+**The two-stage restore is built but OFF** (`chat.imagegen.restore_face`). The
+editor commits to the scene and a LoRA (`Alissonerdx/BFS-Best-Face-Swap` on Klein
+9B) puts the face back, gated on the local model answering `FACE: keep` vs
+`FACE: change` — restoring the original face onto "faz dele um zombie" would undo
+the request. A malformed answer skips the restore, i.e. today's behaviour. The
+result is kept **only if it beats the editor's own output** on ArcFace similarity
+to the source. It runs (GPU0; it OOMs on GPU1 because the LLM lives there), and
+on its one measured sample the guard discarded it: 0.811 restored against 0.881
+unrestored. It costs ~90s and a second 17GB load, so it stays off until the
+40-cell grid says it earns them.
+
 **Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
+
+### Conversational memory (`src/chat/summary.py`, `src/data/ingest.py`)
+
+**The model was never the constraint — the prompt was.** Only the last 6 turns
+reached the model verbatim while the served context is 32768 tokens and needle
+recall is 60/60 out to 27,411. `whatsapp.history_turns` is **60** and
+`inference.history_max_words` (**40**) truncates each line, so the recent thread
+is carried instead of re-retrieved.
+
+Past that window a per-chat **rolling summary** (`ChatSummaryStore` +
+`SummaryWriter`) is refreshed on a background thread and prepended to the user
+turn. Two rules matter: the writer takes `gpu_section()` and **skips on
+`GpuBusyError`** rather than queueing, so summarising never delays a reply; and
+**banter never receives the summary**, for the same reason banter retrieves
+nothing — hand the model a digest of the group and it will find someone to talk
+about.
+
+Ingestion is incremental and watermarked. `build_chunks` returns
+`(chunks, consumed_through)` and a chunk within `settle_minutes` (**10**) of now
+is left for the next pass, because a chunk closed mid-conversation is a chunk
+that can never be extended. The watermark is clamped to `consumed_through`, so an
+unsettled tail is not marked as read.
 
 ### Config System (`src/config_loader.py`)
 
