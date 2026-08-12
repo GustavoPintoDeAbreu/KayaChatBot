@@ -242,10 +242,17 @@ def _imagegen(mode: str, prompt: str, image_path=None):
     """
     from src.chat import imagegen
 
+    # Generation from scratch has no original face to restore.
+    restore_face = False
     if mode == "edit":
         with gpu_section(config):
-            prompt = imagegen.build_edit_instruction(config, prompt, engine.backend)
-    return imagegen.run(config, prompt, mode=mode, image_path=image_path)
+            # The same call also answers whether this edit is meant to change the
+            # person's face — restoring the original face onto a zombie would undo
+            # the request.
+            prompt, restore_face = imagegen.build_edit_instruction(
+                config, prompt, engine.backend)
+    return imagegen.run(config, prompt, mode=mode, image_path=image_path,
+                        restore_face=restore_face)
 
 
 from src.chat.summary import SummaryWriter

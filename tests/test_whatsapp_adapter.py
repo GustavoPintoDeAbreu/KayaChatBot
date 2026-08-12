@@ -787,9 +787,16 @@ def test_failed_generation_says_so(tmp_path):
 
     adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
 
+    # Wait for the QUEUE to drain, not for a message count. The job runs on a
+    # background thread, so counting sends races with the scheduler — this failed
+    # once on a box that was busy rendering a bake-off, and only then.
     import time
-    deadline = time.time() + 5.0
-    while time.time() < deadline and len(adapter.waha_client.sent) < 2:
+
+    from src.chat import imagegen
+
+    deadline = time.time() + 10.0
+    while time.time() < deadline and (
+            imagegen.get_queue().depth > 0 or len(adapter.waha_client.sent) < 2):
         time.sleep(0.02)
     assert "não consegui" in adapter.waha_client.sent[-1]["text"].lower()
 

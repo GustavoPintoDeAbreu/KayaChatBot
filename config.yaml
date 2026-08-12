@@ -368,6 +368,31 @@ chat:
     # Takes per request, scored against the source face; the closest one is sent.
     # The 15GB model load dominates, so a second take is cheap relative to it.
     candidates: 2
+    # ── the second stage ──────────────────────────────────────────────────────
+    # One prompt was being asked to do two jobs, and the models traded them off:
+    # Kontext scored 0.918 likeness on a prison-yard edit by quietly skipping the
+    # requested injuries, while Klein followed every instruction and lost the
+    # face. So the editor now commits to the scene, and identity is restored
+    # afterwards by a LoRA trained for exactly that.
+    #
+    # Only runs when the request is NOT meant to change the face — decided per
+    # request by the same local call that translates the prompt (see
+    # imagegen.build_edit_instruction). Restoring the original face onto "faz dele
+    # um zombie" would undo the whole request.
+    #
+    # And only kept when it MEASURABLY helped: the restored image must beat the
+    # editor's own output on ArcFace similarity to the source, or it is discarded.
+    # That guard is what makes this safe on by default — a bad restore costs
+    # ~90s, never quality.
+    restore_face: true
+    restore_lora: "bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors"
+    restore_steps: 28
+    restore_min_gain: 0.0
+    # Delivery format. send_image base64-inlines these bytes into the WAHA JSON
+    # body and WhatsApp recompresses to JPEG anyway, so a multi-megabyte PNG buys
+    # nothing but a slower upload. The bench still writes PNG — it scores those
+    # files with ArcFace and must not measure compression artefacts.
+    jpeg_quality: 92
     # Generation from scratch is a different job and uses Z-Image Turbo, a 6B
     # text-to-image model — it loses badly at *editing* (it returns a stranger)
     # but is fast and competent at inventing a picture.
