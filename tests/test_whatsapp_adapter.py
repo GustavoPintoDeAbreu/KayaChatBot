@@ -1829,3 +1829,75 @@ def test_the_promise_is_sent_before_the_work_starts(tmp_path):
     texts = [s.get("text") or "" for s in adapter.waha_client.sent]
     assert "Vou fazer isso" in texts[0]
     assert "Não consegui" in texts[1]
+
+
+# ── the live path resolves display names like the pipeline does (2026-08-13) ─
+def _kaya_resolver(tmp_path):
+    from src.data.identity_resolver import SenderResolver
+
+    path = tmp_path / "members.json"
+    path.write_text(json.dumps({"members": [
+        {"name": "Carnall", "aliases": ["carnall", "tomás"]},
+        {"name": "Romano", "aliases": ["romano", "ricardo romano"]},
+        {"name": "Ricky", "aliases": ["ricky", "ricardo alberto"]},
+        {"name": "Frederico", "aliases": ["frederico", "fred"]},
+    ]}), encoding="utf-8")
+    return SenderResolver(path, {"fredericop167": "Frederico"})
+
+
+def test_a_display_name_the_old_matcher_missed_now_resolves(tmp_path):
+    """"Tomas Carnall": the first token is "tomas", the alias is "tomás", and
+    the second token — an exact alias — was never tried. Five of a real
+    member's messages were logged under a name that is not a member."""
+    adapter, _ = make_adapter(tmp_path, contacts={})
+    adapter.sender_resolver = _kaya_resolver(tmp_path)
+
+    msg = parse_waha_message(
+        dm_event("olá", sender="351999999999@c.us", name="Tomas Carnall"))
+
+    assert adapter.resolve_speaker(msg) == "Carnall"
+
+
+def test_a_sender_alias_override_reaches_the_live_path(tmp_path):
+    adapter, _ = make_adapter(tmp_path, contacts={})
+    adapter.sender_resolver = _kaya_resolver(tmp_path)
+
+    msg = parse_waha_message(
+        dm_event("olá", sender="351999999998@c.us", name="fredericop167"))
+
+    assert adapter.resolve_speaker(msg) == "Frederico"
+
+
+def test_an_ambiguous_first_name_is_not_guessed(tmp_path):
+    """Two members answer to Ricardo. The bot keeps the display name rather
+    than attributing the message to whichever it happened to match."""
+    adapter, _ = make_adapter(tmp_path, contacts={})
+    adapter.sender_resolver = _kaya_resolver(tmp_path)
+
+    msg = parse_waha_message(
+        dm_event("olá", sender="351999999997@c.us", name="Ricardo"))
+
+    assert adapter.resolve_speaker(msg) == "Ricardo"
+
+
+def test_the_phone_mapping_still_wins_over_the_display_name(tmp_path):
+    """A number identifies a person; a display name does not. That is what
+    settles the ambiguous cases in production."""
+    adapter, _ = make_adapter(tmp_path, contacts={"351999999997@c.us": "Ricky"})
+    adapter.sender_resolver = _kaya_resolver(tmp_path)
+
+    msg = parse_waha_message(
+        dm_event("olá", sender="351999999997@c.us", name="Ricardo"))
+
+    assert adapter.resolve_speaker(msg) == "Ricky"
+
+
+def test_without_a_resolver_the_previous_behaviour_holds(tmp_path):
+    """Tests and older callers inject none."""
+    adapter, _ = make_adapter(tmp_path, contacts={})
+    adapter.sender_resolver = None
+    adapter.member_aliases = {"gustavo": "Gustavo"}
+
+    msg = parse_waha_message(dm_event("olá", sender="351999999996@c.us", name="Gustavo"))
+
+    assert adapter.resolve_speaker(msg) == "Gustavo"

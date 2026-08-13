@@ -86,6 +86,32 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(f"⚠️  Could not load member aliases: {exc}")
 
+# The same resolver the extraction pipeline uses, so the live bot and the corpus
+# agree on who somebody is. It adds per-token matching and the sender_aliases
+# overrides, neither of which the bridge had: "Tomas Carnall" was resolving to
+# nobody because only the FIRST token was tried and the alias is "tomás".
+_sender_resolver = None
+try:
+    from src.data.identity_resolver import SenderResolver
+
+    if _mpath.exists():
+        _sender_resolver = SenderResolver(
+            _mpath, (config.get("data", {}) or {}).get("sender_aliases") or {})
+        print("✓ Sender resolver ready (token matching + sender_aliases)")
+        # Name anyone the resolver cannot place. Their messages are invisible to
+        # person-filtered retrieval and would become a phantom profile the moment
+        # the biography refresh runs. Genuine outsiders appear here too, which is
+        # why this warns rather than acting.
+        for _sender, _count in sorted(
+            _sender_resolver.unresolved_senders(
+                Path(config_path).parent / "data" / "live_messages").items(),
+            key=lambda kv: -kv[1],
+        ):
+            print(f"⚠️  sender {_sender!r} ({_count} msg) maps to no member — add an "
+                  f"alias in group_members.json or data.sender_aliases")
+except Exception as exc:  # noqa: BLE001 — fall back to the bridge's own matching
+    print(f"⚠️  Could not build the sender resolver: {exc}")
+
 # Which chats count as GROUP-WIDE memory, from a gitignored local file (a chat id
 # is still an identifier, so it stays out of git like the contacts and whitelist).
 # Shape: {"shared_chats": ["1203...@g.us"]}. Without this the group's own history
@@ -296,7 +322,8 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           transcribe=_stt,
                           image_generate=_imagegen, fetch_media=_fetch_media,
                           describe_image=_describe,
-                          summary_writer=_summary_writer)
+                          summary_writer=_summary_writer,
+                          sender_resolver=_sender_resolver)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 

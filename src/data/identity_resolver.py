@@ -108,3 +108,34 @@ class SenderResolver:
         """Return True if *name* is a known canonical group member (case-insensitive)."""
         name_lower = name.lower()
         return any(n.lower() == name_lower for n in self._canonical_names)
+
+    def unresolved_senders(self, log_dir) -> Dict[str, int]:
+        """Sender names in the message logs that resolve to no member.
+
+        A sender the resolver cannot place is a mapping waiting to be added, and
+        until it is, that person's messages are invisible to RAG person-filtering
+        and would become a phantom profile the moment anything extracts facts.
+        "Tomas Carnall" sat in that state for months with no symptom.
+
+        Reports; never changes behaviour. Genuine outsiders show up here too,
+        which is the point — the list is short enough to eyeball.
+        """
+        import json as _json
+        from collections import Counter
+        from pathlib import Path as _Path
+
+        directory = _Path(log_dir)
+        if not directory.exists():
+            return {}
+
+        counts: Counter = Counter()
+        for path in sorted(directory.glob("*.jsonl")):
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        sender = (_json.loads(line) or {}).get("sender", "")
+                        if sender and not self.is_member(self.resolve(sender)):
+                            counts[sender] += 1
+            except Exception:  # noqa: BLE001 — a startup hint is never worth a crash
+                continue
+        return dict(counts)

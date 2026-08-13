@@ -29,6 +29,13 @@ data/wpp/
 data/rag_db/
 *.jsonl
 *.json
+# ...and any copy of them. `*.json` does not match "group_members.json.bak.123",
+# so a timestamped backup of the member profiles was staged for commit once.
+*.bak
+*.bak.*
+*.orig
+*.stale.*
+*.migrated
 # Only sanitized TEMPLATES are tracked. The real data/group_members.json,
 # data/group_knowledge.json and data/golden_test_conversations.json contain
 # personal data about real people (health, relationships, locations) and MUST

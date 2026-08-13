@@ -411,3 +411,49 @@ model_profiles:
         assert config["model"]["model_id"] == "unsloth/Qwen3-14B-bnb-4bit"
         assert config["model"]["lora_r"] == 32
         assert "kaya_qwen3_14b" in config["training"]["output_dir"]
+
+
+# ── display-name overrides live outside the tracked config (2026-08-13) ──────
+def test_sender_aliases_merge_from_the_gitignored_file(tmp_path):
+    """A display name is an identifier, so it belongs with the contacts and the
+    whitelist rather than in config.yaml. Merged in the loader because BOTH the
+    live bot and the extraction pipeline resolve senders and must agree."""
+    import json
+
+    import yaml as _yaml
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "whatsapp_sender_aliases.json").write_text(
+        json.dumps({"aliases": {"someuser123": "Frederico"}}), encoding="utf-8")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(_yaml.safe_dump({"data": {"sender_aliases": {}}}), encoding="utf-8")
+
+    from src.config_loader import load_config
+
+    assert load_config(str(cfg))["data"]["sender_aliases"] == {"someuser123": "Frederico"}
+
+
+def test_a_missing_overrides_file_is_fine(tmp_path):
+    import yaml as _yaml
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(_yaml.safe_dump({"data": {"sender_aliases": {}}}), encoding="utf-8")
+
+    from src.config_loader import load_config
+
+    assert load_config(str(cfg))["data"]["sender_aliases"] == {}
+
+
+def test_a_corrupt_overrides_file_does_not_stop_startup(tmp_path):
+    import yaml as _yaml
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "whatsapp_sender_aliases.json").write_text("{not json",
+                                                                   encoding="utf-8")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(_yaml.safe_dump({"data": {"sender_aliases": {"a": "B"}}}),
+                   encoding="utf-8")
+
+    from src.config_loader import load_config
+
+    assert load_config(str(cfg))["data"]["sender_aliases"] == {"a": "B"}

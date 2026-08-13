@@ -342,6 +342,7 @@ class WhatsAppAdapter:
         fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
         summary_writer: Any = None,
+        sender_resolver: Any = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -361,6 +362,11 @@ class WhatsAppAdapter:
         # not match the name RAG person-filtering expects.
         self.member_aliases = {k.lower(): v for k, v in (wcfg.get("member_aliases", {}) or {}).items()}
         self.learn_contacts = bool(wcfg.get("learn_contacts", True))
+        # Display-name resolution, shared with the extraction pipeline so the
+        # live bot and the corpus agree on who somebody is. Injected rather than
+        # built here: it needs group_members.json, which this module otherwise
+        # never touches. None keeps the older, weaker fallback in resolve_speaker.
+        self.sender_resolver = sender_resolver
         self._contacts_path = wcfg.get("contacts_file")
         # DM anti-spam whitelist. When enabled, direct messages are only answered
         # for sender numbers in ``allowed`` (groups stay governed by @mention). The
@@ -813,16 +819,31 @@ class WhatsAppAdapter:
             if candidate and candidate in self.contacts:
                 return self.contacts[candidate]
 
-        # Not mapped yet. If WhatsApp's pushName matches a known member name or
-        # alias, adopt the CANONICAL member name (so RAG person-filtering matches)
-        # and remember the number, so the mapping self-populates from real traffic
-        # instead of needing a hand-maintained file.
+        # Not mapped yet, so fall back to the display name. That is resolved by
+        # the SAME resolver the extraction pipeline uses, rather than the
+        # whole-name-then-first-token attempt this used to make on its own: "Tomas
+        # Carnall" failed because the first token is "tomas" and the alias is
+        # "tomás", and the second token — "carnall", an exact alias — was never
+        # tried. Five of a real member's messages were logged under a name that is
+        # not a member, invisible to RAG person-filtering.
+        #
+        # It also declines to guess. "Ricardo" matches both Ricardo Romano and
+        # Ricardo Alberto, so it resolves to nobody rather than to whichever came
+        # first; ``data.sender_aliases`` settles the cases that need settling.
         pushname = (msg.sender_name or "").strip()
-        canonical = self.member_aliases.get(pushname.lower()) if pushname else None
-        if not canonical and pushname:
-            first = pushname.split()[0].lower()
-            canonical = self.member_aliases.get(first)
+        canonical = ""
+        if pushname and self.sender_resolver is not None:
+            resolved = self.sender_resolver.resolve(pushname)
+            if self.sender_resolver.is_member(resolved):
+                canonical = resolved
+        elif pushname:
+            # No resolver injected (tests, older callers): the previous behaviour.
+            canonical = self.member_aliases.get(pushname.lower()) or self.member_aliases.get(
+                pushname.split()[0].lower(), "")
+
         if canonical:
+            # Remember the number, so the mapping self-populates from real
+            # traffic instead of needing a hand-maintained file.
             if self.learn_contacts:
                 self._learn_contact(candidates, canonical)
             return canonical
