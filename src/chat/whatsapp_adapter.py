@@ -24,7 +24,7 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.chat import feedback
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
@@ -314,10 +314,15 @@ class WhatsAppAdapter:
         self.bug_commands = {"/bug", "/erro"}
         self.feedback_commands = {"/feedback", "/sugestao", "/sugestão"}
         # Every command token, used to keep these messages OUT of the memory log
-        # (see _is_command — the log is written before the reply gate).
+        # (see _parse_command — the log is written before the reply gate).
         self.all_commands = (
             self.clear_commands | self.bug_commands | self.feedback_commands
         )
+        self._command_families = {
+            **{token: "clear" for token in self.clear_commands},
+            **{token: "bug" for token in self.bug_commands},
+            **{token: "feedback" for token in self.feedback_commands},
+        }
         # Where a new report is announced. A JID (…@c.us); empty disables it.
         # Real numbers stay out of git, so this comes from KAYA_REPORT_JID.
         self.report_jid = _normalize_jid(str(wcfg.get("report_to") or ""))
@@ -744,15 +749,31 @@ class WhatsAppAdapter:
                 cleaned = re.sub(rf"@{re.escape(number)}\b", "", cleaned)
         return cleaned.strip()
 
-    def _is_command(self, text: str) -> bool:
-        """Is this message a slash command rather than something the group said?
+    def _parse_command(self, text: str) -> Optional[Tuple[str, str]]:
+        """Find a slash command anywhere in the message. ``(family, body)`` or None.
 
-        Used to keep commands out of the memory log, which is written *before* the
-        reply gate — so without this a ``/bug`` becomes a searchable "message the
-        group sent" and comes back out of retrieval a week later.
+        Used for two things: keeping commands out of the memory log, which is
+        written *before* the reply gate — so without it a ``/bug`` becomes a
+        searchable "message the group sent" and comes back out of retrieval a week
+        later — and deciding what to record.
+
+        It scans every token, not just the first, because people do not write the
+        way a parser expects. The single most useful note of the first group
+        session was typed as "Andas a dizer demasiado foda-se no fim das frases.
+        /feedback o problema é a construção frásica ser repetitiva": the command
+        arrived mid-message, so it was never recorded at all. The model answered
+        it instead, promising to do better, and the whole line went into group
+        memory.
+
+        The body is everything after the command word — the run-up is what
+        prompted the report, not part of it.
         """
-        first = (text or "").strip().lower().split(maxsplit=1)
-        return bool(first) and first[0] in self.all_commands
+        for index, token in enumerate((text or "").split()):
+            family = self._command_families.get(token.strip().lower())
+            if family:
+                body = (text or "").split(maxsplit=index + 1)
+                return family, (body[index + 1].strip() if len(body) > index + 1 else "")
+        return None
 
     def _notify(self, chat_id: str, text: str) -> None:
         """Send a side-channel message. A failed notification never breaks a report."""
@@ -770,17 +791,17 @@ class WhatsAppAdapter:
             return f"{phone}@c.us"
         return msg.sender_id or ""
 
-    def _handle_report(self, msg: InboundMessage, text: str, speaker: str,
+    def _handle_report(self, msg: InboundMessage, body: str, speaker: str,
                        command: str) -> Dict[str, Any]:
         """Record a ``/bug`` or ``/feedback`` and confirm it, without generating.
 
-        The body is everything after the command word. A bare command explains
-        itself and stores nothing — no pending-capture state, so an unrelated next
-        message can never be swallowed into somebody's bug report.
+        ``body`` is everything after the command word, already split off by
+        ``_parse_command``. A bare command explains itself and stores nothing — no
+        pending-capture state, so an unrelated next message can never be swallowed
+        into somebody's bug report.
         """
         is_bug = command == "bug"
-        parts = text.strip().split(maxsplit=1)
-        body = parts[1].strip() if len(parts) > 1 else ""
+        body = (body or "").strip()
 
         if not body:
             reply = self.command_replies["bug_usage" if is_bug else "feedback_usage"]
@@ -872,12 +893,12 @@ class WhatsAppAdapter:
         # here or they come back out of retrieval later as things people "said" —
         # which is exactly what a week of collected bug reports must not become.
         # Mention-stripped first: in a group the text arrives as "@Kaya /bug ...".
-        _command_message = self._is_command(self._strip_bot_mention(msg.text))
+        _command = self._parse_command(self._strip_bot_mention(msg.text))
 
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth
         # keeping, and it would otherwise be dropped by the gate below.
-        if self.log_messages and not msg.from_me and msg.text.strip() and not _command_message:
+        if self.log_messages and not msg.from_me and msg.text.strip() and not _command:
             self.message_log.append(
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
@@ -901,12 +922,13 @@ class WhatsAppAdapter:
         # stops fixating on prior turns. Handled before generation; not stored.
         # ``/bug`` and ``/feedback``: recorded, confirmed, never generated on. The
         # collection channel for the listening week — see src/chat/feedback.py.
-        _word = text.strip().lower().split(maxsplit=1)[0] if text.strip() else ""
-        if _word in self.bug_commands:
-            return self._handle_report(msg, text, speaker, "bug")
-        if _word in self.feedback_commands:
-            return self._handle_report(msg, text, speaker, "feedback")
+        parsed = self._parse_command(text)
+        if parsed and parsed[0] in ("bug", "feedback"):
+            return self._handle_report(msg, parsed[1], speaker, parsed[0])
 
+        # ``/clear`` stays strict — it must be the whole message. The two mistakes
+        # are not symmetric: a missed report can be retyped, while a wrongly
+        # triggered wipe silently destroys the context of a live conversation.
         if text.strip().lower() in self.clear_commands:
             self.session_store._store(msg.chat_id).clear()
             reply = "Contexto limpo — esqueci as mensagens recentes desta conversa."

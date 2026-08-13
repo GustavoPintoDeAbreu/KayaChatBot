@@ -1498,3 +1498,55 @@ def test_a_plain_string_responder_still_works(tmp_path):
     result = adapter.handle_event(dm_event("olá"))
 
     assert result["telemetry"] == {}
+
+
+# ── commands typed mid-message (2026-08-13) ──────────────────────────────────
+def test_feedback_mid_message_is_recorded(tmp_path):
+    """The most useful note of the first group session was typed mid-sentence.
+
+    "Andas a dizer demasiado foda-se no fim das frases. /feedback o problema é
+    a construção frásica" matched nothing, because only the first token was
+    checked. The model answered it — promising to do better — and the line went
+    into group memory instead of the feedback log.
+    """
+    adapter, client, tmp = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event(
+        "Andas a dizer demasiado foda se no fim das frases. "
+        "/feedback o problema é a construção frásica ser repetitiva"))
+
+    assert result["logged"] is True
+    rows = _rows(tmp_path / "feedback.jsonl")
+    assert rows[-1]["text"] == "o problema é a construção frásica ser repetitiva"
+
+
+def test_the_run_up_is_context_not_part_of_the_report(tmp_path):
+    """Only what follows the command word is the report."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("isto está estranho /bug o áudio corta a meio"))
+
+    assert _rows(tmp_path / "bugs.jsonl")[-1]["description"] == "o áudio corta a meio"
+
+
+def test_an_inline_command_stays_out_of_the_memory_log(tmp_path):
+    """The log is written before the reply gate — a report must not become
+    something 'the group said' and come back out of retrieval a week later."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+    logged = []
+    adapter.log_messages = True
+    adapter.message_log = type("Log", (), {"append": lambda self, **kw: logged.append(kw)})()
+
+    adapter.handle_event(dm_event("a voz é podre /feedback experimenta outro TTS"))
+
+    assert logged == []
+
+
+def test_clear_still_has_to_be_the_whole_message(tmp_path):
+    """A wrongly triggered wipe destroys a live conversation's context; a missed
+    one is retyped. The two mistakes are not symmetric, so /clear stays strict."""
+    adapter, client = make_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("podes fazer /clear a isso?"))
+
+    assert result.get("command") != "clear"
