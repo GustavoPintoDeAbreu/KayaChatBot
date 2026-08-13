@@ -308,6 +308,42 @@ chat:
       retrieval: true
       max_new_tokens: 256
       system_prompt: null   # null = use data.system_prompt (the detailed one)
+    roast:
+      # "quem é o mais burro?", "roast the Gil", "quem tem o search history mais
+      # sus?" — a verdict aimed AT a member rather than information about one.
+      # These used to route factual, which handed the model every profile and
+      # told it to answer; it then reached for whoever had the most material,
+      # and the same person came back turn after turn. Over the first group
+      # session that was 29.4% of every mention against an 8% even split.
+      #
+      # system_prompt stays null on purpose: roasting needs the member profiles
+      # that build_mode_system_prompt drops, so this uses the detailed prompt and
+      # steers with mode_hint instead.
+      retrieval: true
+      max_new_tokens: 200
+      system_prompt: null
+      brevity_hint: "Responde em 1 a 3 frases, afiado e directo, sem preâmbulo."
+      # mode_hint survives a request for detail ("justifica with everything
+      # you've got"), unlike brevity_hint.
+      mode_hint: "Isto é um roast. Escolhe UMA pessoa e compromete-te, com humor negro e factos concretos do que sabes sobre ela. Se o pedido não disser em quem, escolhe alguém que não tenha sido gozado nas últimas mensagens, e varia, o grupo tem 13 pessoas e não é sempre o mesmo. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
+
+  # ── Thinking it through, when asked ─────────────────────────────────────────
+  # "before you go, try one last time. Really hard and detailed" got a single
+  # throwaway line back. On an explicit request (see response_utils.
+  # wants_reasoning) the bot takes private notes first and answers from them,
+  # with the elaboration token budget.
+  #
+  # The notes are never sent: the reply is still written once, in one voice, by
+  # the same prompt as every other reply. Showing the reasoning would put a
+  # register in the group chat that the persona never uses anywhere else.
+  #
+  # Explicit triggers only. This is a second generation held inside the GPU lock,
+  # and whatsapp_server DROPS an inbound message on a contended lock rather than
+  # queueing it, so a false positive costs somebody else their reply.
+  reasoning:
+    enabled: true
+    max_new_tokens: 200
+    temperature: 0.4         # notes are for thinking, not for voice
 
   # ── Audio (Phase 4) ─────────────────────────────────────────────────────────
   # Capability gates. While these are false the bot must NOT promise voice

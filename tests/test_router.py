@@ -153,3 +153,63 @@ class TestGeneralMode:
         router.classify(backend, _config(), "explica-me a inflação")
         system = backend.calls[0]["messages"][0]["content"]
         assert "GENERAL" in system
+
+
+# ── ROAST, and reasoning (2026-08-13) ────────────────────────────────────────
+class TestRoastLabel:
+    """A verdict aimed AT a member, rather than information about one.
+
+    These used to route factual, which handed the model every member profile
+    and told it to answer. It then reached for whoever had the most material,
+    and the same person came back turn after turn: 29.4% of every mention the
+    bot made over the first group session, against an 8% even split.
+    """
+
+    def test_roast_is_a_mode_not_a_command(self):
+        route = router._parse("ROAST")
+        assert route.mode == router.ROAST
+        assert route.command is None
+
+    def test_roast_retrieves(self):
+        """It needs the group's own material to be any good."""
+        assert router.Route(mode=router.ROAST).retrieval_enabled is True
+
+    def test_roast_is_a_known_mode(self):
+        assert router.ROAST in router.MODES
+
+    def test_the_roast_label_is_in_the_prompt(self):
+        """A label the model is never told about can never be produced."""
+        assert "ROAST" in router._ROUTER_SYSTEM
+
+    @pytest.mark.parametrize("label", ["BANTER", "MIXED", "GENERAL", "FACTUAL", "ROAST"])
+    def test_every_mode_still_parses(self, label):
+        assert router._parse(label).mode == label.lower()
+
+
+class TestReasoningTrigger:
+    """Explicit request only. Every firing is a second generation inside the GPU
+    lock, and whatsapp_server drops an inbound message on a contended lock."""
+
+    @pytest.mark.parametrize("message", [
+        "before you go, try one last time. Really hard and detailed",
+        "justifica with everything you've got, porque é que o Gil é o teu alvo",
+        "pensa bem antes de responderes",
+        "explica isso em detalhe",
+        "think carefully about this one",
+    ])
+    def test_an_explicit_request_triggers_it(self, message):
+        from src.chat.response_utils import wants_reasoning
+
+        assert wants_reasoning(message) is True
+
+    @pytest.mark.parametrize("message", [
+        "quem é o mais burro?",
+        "Ahahahahaha",
+        "wassup",
+        "quem é que dava na boca do Rafa num sparring?",
+        "",
+    ])
+    def test_ordinary_messages_do_not(self, message):
+        from src.chat.response_utils import wants_reasoning
+
+        assert wants_reasoning(message) is False

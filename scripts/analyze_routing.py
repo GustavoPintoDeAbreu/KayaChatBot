@@ -125,6 +125,11 @@ def report(rows: List[Dict[str, Any]]) -> None:
         print(f"  {mode:9} {count:4}  {_percent(count, len(tagged))}  "
               f"median {median}  mean rag {rag} chars  {_bar(count/len(tagged))}")
 
+    thought = sum(1 for r in tagged if r.get("reasoning_used"))
+    if thought:
+        print(f"\n  answered after a planning pass: {thought} of {len(tagged)}"
+              f" ({_percent(thought, len(tagged))})")
+
     fallbacks = sum(1 for r in tagged if r.get("route_fallback"))
     flag = "  ⚠️ above 5%" if fallbacks / len(tagged) > 0.05 else ""
     print(f"\n  fallback to default route: {fallbacks} of {len(tagged)}"

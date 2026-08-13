@@ -53,6 +53,50 @@ def wants_long_answer(text: str, long_word_threshold: int = 30) -> bool:
     return len(text.split()) >= long_word_threshold
 
 
+# Asking the bot to actually think about it, rather than answer off the cuff.
+# Deliberately explicit phrases only: this buys a second generation, and a false
+# positive doubles the latency of a path already at 8-16s in a busy group.
+_REASONING_CUES = (
+    "pensa bem",
+    "pensa melhor",
+    "pensa nisso",
+    "pensa lá bem",
+    "com calma",
+    "a sério agora",
+    "justifica",
+    "fundamenta",
+    "argumenta",
+    "com detalhe",
+    "em detalhe",
+    "think hard",
+    "think carefully",
+    "think about it",
+    "really hard",
+    "justify",
+    "in detail",
+    "make a case",
+)
+
+
+def wants_reasoning(text: str) -> bool:
+    """Whether the message explicitly asks the bot to think the answer through.
+
+    Asked for twice: once as a /feedback note ("reasoning router, if requested by
+    the user use further intent solver to think question through"), and once in
+    the group, where "before you go, try one last time. Really hard and detailed"
+    got a single throwaway line back.
+
+    A trigger, not a judgement. The router does not decide this on its own —
+    every firing costs an extra generation while the GPU lock is held, and
+    whatsapp_server drops an inbound message on a contended lock rather than
+    queueing it.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(cue in lowered for cue in _REASONING_CUES)
+
+
 def truncate_history_line(line: str, max_words: int = 40) -> str:
     """Shorten one ``"<who>: <text>"`` history line to its first ``max_words``.
 
