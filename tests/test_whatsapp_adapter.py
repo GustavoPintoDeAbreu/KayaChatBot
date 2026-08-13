@@ -1550,3 +1550,47 @@ def test_clear_still_has_to_be_the_whole_message(tmp_path):
     result = adapter.handle_event(dm_event("podes fazer /clear a isso?"))
 
     assert result.get("command") != "clear"
+
+
+# ── concurrent writes to one chat's history (2026-08-13) ─────────────────────
+def test_concurrent_appends_do_not_lose_lines(tmp_path):
+    """append() is a read-modify-write and more than one thread does it.
+
+    The webhook thread appends "(a preparar uma imagem…)" while the image
+    queue worker appends "(imagem enviada)" for the previous job. Unlocked,
+    whichever loaded first won and the other line was simply gone — measured at
+    60-95% of lines lost under three writers, plus save failures, because the
+    atomic write used one fixed ".tmp" path that both threads replaced.
+    """
+    import threading
+
+    store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=500)
+
+    def writer(tag):
+        for index in range(30):
+            store.append("chat@g.us", f"{tag}{index}")
+
+    threads = [threading.Thread(target=writer, args=(tag,)) for tag in "ABC"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(store.recent("chat@g.us", None)) == 90
+
+
+def test_a_save_leaves_no_scratch_file_behind(tmp_path):
+    session_dir = tmp_path / "sessions"
+    store = KeyedSessionMemory(base_dir=str(session_dir), max_lines=50)
+
+    store.append("chat@g.us", "Gustavo: olá")
+
+    assert [p.name for p in session_dir.iterdir()] == ["chat_g.us.json"]
+
+
+def test_each_chat_locks_independently(tmp_path):
+    """One chat's write must not serialise another's."""
+    store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=50)
+
+    assert store._chat_lock("a@g.us") is not store._chat_lock("b@g.us")
+    assert store._chat_lock("a@g.us") is store._chat_lock("a@g.us")

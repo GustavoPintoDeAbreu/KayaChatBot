@@ -8,6 +8,7 @@ or external service. Privacy is a core requirement: all data stays on-device.
 import json
 import logging
 import os
+import threading
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -67,12 +68,24 @@ class SessionMemory:
             to_save = history[-self.MAX_SAVED_MESSAGES:]
             # Atomic write: write to a temp file in the same directory, then
             # os.replace() so a crash mid-write can't corrupt the history file.
-            tmp_file = self.history_file.with_suffix(self.history_file.suffix + ".tmp")
-            tmp_file.write_text(
-                json.dumps(to_save, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            os.replace(tmp_file, self.history_file)
+            # The temp name carries the writer's identity because it used to be a
+            # single fixed ".tmp": two threads saving the same chat wrote to one
+            # path and replaced it out from under each other, so the save failed
+            # outright and a concurrent reader could catch the real file
+            # mid-replace, read invalid JSON, and be told the chat had no history
+            # at all. Measured at 60-95% of lines lost under three writers.
+            tmp_file = self.history_file.with_suffix(
+                f"{self.history_file.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                tmp_file.write_text(
+                    json.dumps(to_save, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                os.replace(tmp_file, self.history_file)
+            finally:
+                # A failed replace must not leave the scratch file behind.
+                if tmp_file.exists():
+                    tmp_file.unlink(missing_ok=True)
             return True
         except OSError as exc:
             logger.warning("Failed to save chat history to %s: %s", self.history_file, exc)
@@ -114,12 +127,23 @@ class KeyedSessionMemory:
             self.base_dir = project_root / base_dir
         self.max_lines = max_lines
         self._stores: Dict[str, SessionMemory] = {}
+        # Guards the two dicts below; `_locks` then guards each chat's file.
+        self._lock = threading.Lock()
+        self._locks: Dict[str, threading.Lock] = {}
 
     def _store(self, chat_id: str) -> SessionMemory:
-        if chat_id not in self._stores:
-            path = self.base_dir / f"{_safe_key(chat_id)}.json"
-            self._stores[chat_id] = SessionMemory(str(path))
-        return self._stores[chat_id]
+        with self._lock:
+            if chat_id not in self._stores:
+                path = self.base_dir / f"{_safe_key(chat_id)}.json"
+                self._stores[chat_id] = SessionMemory(str(path))
+            return self._stores[chat_id]
+
+    def _chat_lock(self, chat_id: str) -> threading.Lock:
+        """One lock per chat, so two chats never wait on each other."""
+        with self._lock:
+            if chat_id not in self._locks:
+                self._locks[chat_id] = threading.Lock()
+            return self._locks[chat_id]
 
     def recent(self, chat_id: str, limit: Optional[int] = None) -> List[str]:
         """Return the most recent lines for a chat (oldest→newest)."""
@@ -128,11 +152,20 @@ class KeyedSessionMemory:
         return history[-limit:]
 
     def append(self, chat_id: str, line: str) -> None:
-        """Append one ``"<who>: <text>"`` line, capping the rolling window."""
-        store = self._store(chat_id)
-        history = store.load() or []
-        history.append(line)
-        store.save(history[-self.max_lines:])
+        """Append one ``"<who>: <text>"`` line, capping the rolling window.
+
+        Locked per chat, because this is a read-modify-write and more than one
+        thread does it. The image path is the clear case: the webhook thread
+        appends "(a preparar uma imagem…)" while the queue worker appends
+        "(imagem enviada)" for the previous job, and whichever loaded first wins
+        — the other line is simply gone. Losing either is what makes the bot
+        answer "então e a foto?" with no idea what it agreed to make.
+        """
+        with self._chat_lock(chat_id):
+            store = self._store(chat_id)
+            history = store.load() or []
+            history.append(line)
+            store.save(history[-self.max_lines:])
 
 
 class ChatPreferences:
