@@ -229,6 +229,18 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 logger.warning("image worker reported success but wrote nothing")
                 return None
 
+            report = _summary(result.stdout)
+            # The worker retried already and the picture still matches the one it
+            # was given. Returning it means the bot sends the original back as
+            # though it were the edit, and then invents a reason when asked —
+            # "it got blocked by the content filters" is something nothing in
+            # this pipeline knows. None makes the caller say so honestly.
+            if mode == "edit" and report.get("edited") is False:
+                logger.warning("edit changed nothing (changed=%s, retried=%s); "
+                               "reporting failure instead of sending the source back",
+                               report.get("changed"), report.get("retried"))
+                return None
+
             data = _as_jpeg(out_path.read_bytes(), int(icfg.get("jpeg_quality", 92)))
             logger.info("image %s done in %.0fs (%d bytes)%s", mode,
                         time.time() - started, len(data),
@@ -263,16 +275,27 @@ def _as_jpeg(data: bytes, quality: int = 92) -> bytes:
         return data
 
 
-def _report(stdout: str) -> str:
-    """The worker's one-line JSON summary, for the log. Never raises."""
+def _summary(stdout: str) -> Dict[str, Any]:
+    """The worker's final one-line JSON summary. ``{}`` if there isn't one."""
     try:
         line = [ln for ln in (stdout or "").splitlines() if ln.startswith("{")][-1]
-        info = json.loads(line)
-    except Exception:  # noqa: BLE001 — this is a log line, not a result
+        return json.loads(line)
+    except Exception:  # noqa: BLE001 — a missing summary is not a failed image
+        return {}
+
+
+def _report(stdout: str) -> str:
+    """The worker's one-line JSON summary, for the log. Never raises."""
+    info = _summary(stdout)
+    if not info:
         return ""
     bits = [f"seed={info['seed']}"] if "seed" in info else []
     if info.get("likeness") is not None:
         bits.append(f"likeness={info['likeness']} of {info.get('candidates', 1)}")
+    if info.get("changed") is not None:
+        bits.append(f"changed={info['changed']}")
+    if info.get("retried"):
+        bits.append("retried")
     return f" [{', '.join(bits)}]" if bits else ""
 
 

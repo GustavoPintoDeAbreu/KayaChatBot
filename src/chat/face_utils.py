@@ -206,18 +206,57 @@ def prepare_source(path: str, face_crop: bool = True, min_ratio: float = 0.22,
     return fit_to_kontext(framed), reference
 
 
-def pick_best(reference, candidates: Sequence[Tuple[Any, int]]):
-    """Return ``(image, seed, score)`` for the candidate closest to ``reference``.
+def change_ratio(source, edited) -> float:
+    """How much of the picture actually changed, 0.0 (identical) to 1.0.
 
-    Falls back to the first candidate whenever nothing can be scored, so a missing
-    detector costs the choice, not the picture.
+    Mean absolute per-pixel difference at a small fixed size, which is enough to
+    separate "the model edited the photo" from "the model handed the photo
+    back". Compared at 64x64 grayscale so JPEG noise and resampling do not read
+    as change.
+    """
+    from PIL import Image, ImageChops, ImageStat
+
+    try:
+        size = (64, 64)
+        left = source.convert("L").resize(size, Image.BILINEAR)
+        right = edited.convert("L").resize(size, Image.BILINEAR)
+        return ImageStat.Stat(ImageChops.difference(left, right)).mean[0] / 255.0
+    except Exception:  # noqa: BLE001 — an unscoreable pair is not a no-op claim
+        return 1.0
+
+
+def pick_best(reference, candidates: Sequence[Tuple[Any, int]],
+              source=None, noop_threshold: float = 0.0):
+    """Return ``(image, seed, score)`` for the best candidate.
+
+    "Best" used to mean nothing but the highest ArcFace similarity to the source
+    face, and that rewards doing nothing: the take that changed least always
+    won. Asked to "make these guys kissing" the bot returned the original photo
+    unaltered, twice, and then told the group it had been blocked by content
+    filters — which nothing in the code knows.
+
+    So a candidate that barely differs from the source is disqualified first,
+    and the likeness contest is run among the ones that actually edited the
+    picture. This is the production half of the decision the bake-off already
+    made for scoring: an edit must not be able to win by refusing to edit.
+
+    ``noop_threshold`` of 0.0 keeps the old behaviour. If EVERY candidate is a
+    no-op there is nothing to choose between, so the best-liked one is returned
+    with the caller left to notice via ``change_ratio``.
+
+    Falls back to the first candidate whenever nothing can be scored, so a
+    missing detector costs the choice, not the picture.
     """
     if not candidates:
         raise ValueError("no candidates to choose from")
-    scored = []
-    for image, seed in candidates:
-        score = likeness(reference, image)
-        scored.append((image, seed, score))
+
+    changed = candidates
+    if source is not None and noop_threshold > 0:
+        edited = [(image, seed) for image, seed in candidates
+                  if change_ratio(source, image) >= noop_threshold]
+        changed = edited or candidates
+
+    scored = [(image, seed, likeness(reference, image)) for image, seed in changed]
     usable = [row for row in scored if row[2] is not None]
     if not usable:
         image, seed, _ = scored[0]

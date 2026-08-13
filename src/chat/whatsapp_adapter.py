@@ -387,6 +387,14 @@ class WhatsAppAdapter:
             "image_queued": "Fica em fila, tenho {ahead} à frente, mando assim que estiver.",
             "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
+            # The editor handing the photo back unchanged used to be delivered as
+            # a success, and the group had to work out for itself that nothing
+            # had happened ("Was the generation rejected? The image looks exactly
+            # the same"). Asked about it, the bot invented content filters. It
+            # says this instead, and the same line goes into the history so the
+            # follow-up turn answers from fact.
+            "image_unchanged": ("Essa edição não pegou, a imagem saiu na mesma. "
+                                "Tenta pedir de outra maneira ou com mais detalhe."),
             "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
             # Reports are collected for a week before anything is acted on, so the
             # confirmation has to say the message landed somewhere a person reads.
@@ -597,8 +605,15 @@ class WhatsAppAdapter:
                         return
                 image = self.image_generate(mode=mode, prompt=text, image_path=path)
                 if not image:
-                    self._deliver(msg.chat_id,
-                                  self.command_replies.get("image_failed", ""))
+                    # An edit that produced nothing is reported as an edit that
+                    # produced nothing. The bot must not be left guessing why
+                    # two turns later — that is how "it got blocked by the
+                    # content filters" was invented in the group.
+                    reply = self.command_replies.get(
+                        "image_unchanged" if mode == "edit" else "image_failed", "")
+                    self._deliver(msg.chat_id, reply)
+                    self.session_store.append(
+                        msg.chat_id, f"Kaya Bot: (a imagem não saiu, pedido: {text[:80]})")
                     return
                 self.waha_client.send_image(
                     msg.chat_id, image,

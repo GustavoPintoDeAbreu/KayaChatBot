@@ -419,6 +419,26 @@ chat:
     # Takes per request, scored against the source face; the closest one is sent.
     # The 15GB model load dominates, so a second take is cheap relative to it.
     candidates: 2
+    # …but "closest to the source face" on its own rewards doing nothing: the
+    # take that changed least always won. Asked to "make these guys kissing" the
+    # bot returned the original photo, twice, and then told the group it had been
+    # blocked by content filters, which nothing here knows.
+    #
+    # noop_threshold is the mean per-pixel change (0..1) below which a candidate
+    # is not an edit at all. Such candidates lose the likeness contest to any
+    # that actually edited; if every one is a no-op the request is retried at
+    # retry_guidance_scale WITHOUT the identity clause (the clause is exactly the
+    # instruction a model best satisfies by changing nothing), and if that fails
+    # too the bot says so rather than sending the source back as the edit.
+    # 0 disables the check and restores the old behaviour.
+    #
+    # Calibrated against the 40-cell standard grid, not guessed. Real Kontext
+    # edits score 0.048 (the weakest, a gym-bodybuilder cell) to 0.44, while an
+    # unchanged image round-tripped through the delivery path scores at most
+    # 0.0003 (identical 0.0000, JPEG q92 0.0001, q70 0.0003, half-scale 0.0001).
+    # 0.012 is 40x above the noise floor and 4x below the weakest real edit.
+    noop_threshold: 0.012
+    retry_guidance_scale: 3.5
     # ── the second stage ──────────────────────────────────────────────────────
     # One prompt was being asked to do two jobs, and the models traded them off:
     # Kontext scored 0.918 likeness on a prison-yard edit by quietly skipping the

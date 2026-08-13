@@ -1594,3 +1594,66 @@ def test_each_chat_locks_independently(tmp_path):
 
     assert store._chat_lock("a@g.us") is not store._chat_lock("b@g.us")
     assert store._chat_lock("a@g.us") is store._chat_lock("a@g.us")
+
+
+# ── an edit that changed nothing (2026-08-13) ────────────────────────────────
+def _wait_for_text(adapter, needle, timeout=5.0):
+    """The failure message is sent from the image thread, like the image is."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(needle in (s.get("text") or "") for s in adapter.waha_client.sent):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_an_unchanged_edit_is_reported_honestly(tmp_path):
+    """The editor handing the photo back was delivered as a success. The group
+    had to work it out ("Was the generation rejected? The image looks exactly
+    the same"), and asked about it the bot invented content filters."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    assert _wait_for_text(adapter, "saiu na mesma")
+
+
+def test_a_failed_edit_is_recorded_in_the_conversation(tmp_path):
+    """So the follow-up turn answers from fact instead of inventing a reason."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    # The history line is written after the message is sent, both on the image
+    # thread, so wait on the line itself rather than on the send.
+    import time
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        history = adapter.session_store.recent(GROUP, 10)
+        if any("a imagem não saiu" in line for line in history):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"the failed edit was never recorded: {history}")
+
+
+def test_a_failed_generation_keeps_its_own_message(tmp_path):
+    """Generation from scratch cannot "come back unchanged" — there is no
+    source for it to be unchanged from."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                         system_prompt="")
+
+    assert _wait_for_text(adapter, "Não consegui fazer a imagem")
