@@ -204,13 +204,22 @@ def noweb_dm(text):
     }
 
 
-def noweb_group(text, mention_lid=None, reply_to_lid=None):
-    """A NOWEB-shaped group message with nested contextInfo."""
+def noweb_group(text, mention_lid=None, reply_to_lid=None, quoted=None,
+                stanza_id="PARENT1"):
+    """A NOWEB-shaped group message with nested contextInfo.
+
+    ``quoted`` is the quoted message OBJECT, the shape Baileys actually sends
+    (``{"conversation": "..."}``, ``{"extendedTextMessage": {...}}``, a media
+    message with a caption), because that nesting is the thing being parsed.
+    """
     ext = {"text": text, "contextInfo": {}}
     if mention_lid:
         ext["contextInfo"]["mentionedJid"] = [mention_lid]
     if reply_to_lid:
         ext["contextInfo"]["participant"] = reply_to_lid
+    if quoted is not None:
+        ext["contextInfo"]["quotedMessage"] = quoted
+        ext["contextInfo"]["stanzaId"] = stanza_id
     return {
         "event": "message",
         "me": {"id": BOT_JID, "lid": BOT_LID},
@@ -1657,3 +1666,107 @@ def test_a_failed_generation_keeps_its_own_message(tmp_path):
                          system_prompt="")
 
     assert _wait_for_text(adapter, "Não consegui fazer a imagem")
+
+
+# ── the message a reply is answering (bug 7acbc092, 2026-08-13) ──────────────
+# Gil replied to an earlier message with "A culpa é do" and the bot answered
+# "A culpa é do quem? Completa lá a frase, papi." parse_waha_message read the
+# quoted message for its SENDER — enough to decide whether to answer — and threw
+# the body away, so the model had nothing to attach the fragment to.
+PARENT = "Os judeus é que mandam nisto tudo"
+
+
+def test_the_quoted_message_is_parsed_from_noweb():
+    msg = parse_waha_message(
+        noweb_group("A culpa é do", quoted={"conversation": PARENT}))
+
+    assert msg.quoted_text == PARENT
+    assert msg.reply_to_id == "PARENT1"
+
+
+def test_a_quoted_message_with_context_is_unwrapped():
+    """A quoted message that itself had context nests one level deeper."""
+    msg = parse_waha_message(
+        noweb_group("sim", quoted={"extendedTextMessage": {"text": "quem vem ao jantar?"}}))
+
+    assert msg.quoted_text == "quem vem ao jantar?"
+
+
+def test_a_quoted_photo_contributes_its_caption():
+    msg = parse_waha_message(
+        noweb_group("Esse é meu dog", quoted={"imageMessage": {"caption": "o meu cão novo"}}))
+
+    assert msg.quoted_text == "o meu cão novo"
+
+
+def test_the_webjs_shape_is_read_too():
+    """The bridge has to work with either WAHA engine."""
+    event = group_event("Ao contrário de outros", mention=True)
+    event["payload"]["quotedMsg"] = {"body": PARENT, "id": "P2", "participant": ALICE}
+
+    msg = parse_waha_message(event)
+
+    assert msg.quoted_text == PARENT
+    assert msg.reply_to_id == "P2"
+
+
+def test_a_reply_with_no_quoted_body_is_not_an_error():
+    """WAHA does not always send one — a reply to something it never saw
+    arrives with the participant and nothing else."""
+    msg = parse_waha_message(noweb_group("yah", reply_to_lid=USER_LID))
+
+    assert msg.quoted_text == ""
+    assert msg.reply_to_id == ""
+
+
+def test_the_model_is_shown_what_is_being_replied_to(tmp_path):
+    """The actual bug: the fragment must arrive with its parent attached."""
+    adapter, _ = make_adapter(tmp_path)
+    seen = {}
+    adapter.responder = lambda message, speaker, recent, **kw: seen.setdefault("msg", message) or "ok"
+
+    adapter.handle_event(
+        noweb_group("A culpa é do", mention_lid=BOT_LID, quoted={"conversation": PARENT}))
+
+    assert PARENT in seen["msg"]
+    assert "A culpa é do" in seen["msg"]
+
+
+def test_an_ordinary_message_gains_no_prefix(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+    seen = {}
+    adapter.responder = lambda message, speaker, recent, **kw: seen.setdefault("msg", message) or "ok"
+
+    adapter.handle_event(noweb_group("boas malta", mention_lid=BOT_LID))
+
+    assert seen["msg"] == "boas malta"
+
+
+def test_the_quote_survives_into_the_history(tmp_path):
+    """The parent is usually NOT in this history — the bot only records turns it
+    answered — so dropping it here leaves the follow-up turn as contextless."""
+    adapter, _ = make_adapter(tmp_path)
+
+    adapter.handle_event(
+        noweb_group("A culpa é do", mention_lid=BOT_LID, quoted={"conversation": PARENT}))
+
+    assert any(PARENT in line for line in adapter.session_store.recent(GROUP, 10))
+
+
+def test_a_quoted_bot_message_is_named_as_the_bot(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+
+    msg = parse_waha_message(
+        noweb_group("mentira", reply_to_lid=BOT_JID, quoted={"conversation": "O Gil é o pior"}))
+
+    assert "Kaya Bot" in adapter.quoted_context(msg)
+
+
+def test_a_command_quoting_something_is_still_a_command(tmp_path):
+    """The prefix is added after the command check, so "/bug" used as a reply
+    still records a report rather than becoming a message about one."""
+    adapter, client, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/bug o áudio corta a meio"))
+
+    assert result["logged"] is True
