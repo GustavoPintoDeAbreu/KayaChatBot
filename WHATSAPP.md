@@ -92,6 +92,41 @@ embedded into ChromaDB — is written *before* the reply gate, so
 `whatsapp_adapter._is_command` excludes them explicitly. Without that a week of
 bug reports would come back out of retrieval as things the group said.
 
+## `shared_chats` is the setting that breaks quietly
+
+`data/whatsapp_shared_chats.json` (gitignored) lists the chats whose content is
+**group-wide** memory. Everything else gets `group:<hash>` or `dm:<hash>` and is
+private to itself. Two things hang off it, and both fail *silently* if it names
+the wrong chat:
+
+- **Image editing** is gated on `chat.imagegen.allowed_scopes: ["shared"]`. In a
+  non-shared group the bot answers *"Só faço imagens no grupo, não por aqui"* —
+  while standing in the group. That reads as a broken feature, not a
+  misconfiguration, which is exactly how it was reported on 2026-08-13.
+- **Retrieval asymmetry.** A DM may recall anything the group said; a non-shared
+  group's history is invisible from DMs. Nobody notices, because the group can
+  still read its own messages *and* the historical export (which is `shared`), so
+  answers look right from inside the group.
+
+It happened: the file listed the 3-person *Testing Kaya* group instead of the real
+16-person one, so 184 live messages and 25 chunks accumulated under
+`group:72fcd308f7383d08`. Fixing it needs a **restart** (the file is read once at
+import) plus a migration, because `chunk_uid` hashes the scope into the id — the
+old chunks can never be upserted, only deleted and rebuilt:
+
+```bash
+# 1. back up data/live_messages, ingest_state.json and data/rag_db
+# 2. fix whatsapp_shared_chats.json in BOTH ~/kaya-prod/data and the dev copy
+# 3. merge live_messages/group_<hash>.jsonl into shared.jsonl, scope rewritten
+# 4. delete the live_ chunks for the old scope (never chunk_/img_/exp_/aud_ —
+#    those are the historical export)
+# 5. set the shared watermark in ingest_state.json to 0
+# 6. restart; ingest.on_boot rebuilds the chunks under the right scope
+```
+
+After adding the bot to a **new** group, check `docker logs kaya-prod | grep
+shared-memory` and confirm the count matches what you expect.
+
 ## Behaviour & limits
 
 - **DM:** answered only for numbers in the anti-spam whitelist when
