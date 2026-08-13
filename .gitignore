@@ -175,3 +175,7 @@ data/bench_photos/
 # Simulator working data — a copy of the real store plus whatever a run invents.
 data_sim/
 reports/sim/
+
+# Rendered landing-page PNGs (~10MB a set). Regenerate with
+# scripts/render_landing_shots.py; the HTML is the source of truth.
+reports/landing/

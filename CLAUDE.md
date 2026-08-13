@@ -284,6 +284,33 @@ A failed re-encode returns the original bytes rather than nothing.
 
 **Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
 
+### Slash commands, and why they must not be remembered (2026-08-13)
+
+`/clear` (`/limpar`), `/bug` (`/erro`) and `/feedback` (`/sugestao`) are matched
+literally in `whatsapp_adapter.handle_event` and never reach the model. `/bug`
+and `/feedback` take the rest of the message as the body; sent bare they reply
+with usage and store **nothing** — deliberately no pending-capture state, so an
+unrelated next message can never be swallowed into someone's report. They reuse
+`feedback.log_bug_report` and the new `feedback.log_note` (the latter exists
+because `log_comment` joins to an earlier 👍/👎 by `feedback_id`, and a
+standalone `/feedback` has no rating to attach to).
+
+**The trap: `message_log.append` runs BEFORE the reply gate.** Everything the bot
+sees is logged first — that is the whole point, group chatter it was not
+addressed in is the memory worth keeping — and `src/data/ingest.py` folds that
+log into ChromaDB. So a command left unfiltered becomes a searchable thing "the
+group said", and a week of bug reports would come back out of retrieval.
+`_is_command()` guards the append, **mention-stripped first** because in a group
+the text arrives as `@Kaya /bug ...`. This fixed `/clear` at the same time; it
+had been leaking since it was written, unnoticed only because nobody had used it.
+
+New reports are announced by DM to `KAYA_REPORT_JID` (env, not `config.yaml` — a
+real number), and a report filed *in the group* also DMs its author a private
+copy; from a DM that would be the same message twice, so it is not sent. Sending
+is done in the adapter, not in `feedback._notify_bug_report`: that seam has no
+WAHA client and stays reserved for email. Any send failure is swallowed — the
+report is already on disk.
+
 ### Conversational memory (`src/chat/summary.py`, `src/data/ingest.py`)
 
 **The model was never the constraint — the prompt was.** Only the last 6 turns

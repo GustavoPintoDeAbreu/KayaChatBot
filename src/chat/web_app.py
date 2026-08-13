@@ -330,7 +330,7 @@ def submit_bug(description: str, contact: str, history: list):
 
 
 def _load_feedback_stats():
-    """Build the Feedback tab: rating counts + recent 👎 reasons + recent bug reports."""
+    """Build the Feedback tab: ratings, 👎 reasons, /feedback notes and bug reports."""
     agg = feedback.aggregate_feedback()
     by_src = ", ".join(f"{k}: {v}" for k, v in agg["by_source"].items()) or "—"
     md = (
@@ -338,17 +338,22 @@ def _load_feedback_stats():
         f"- **Avaliações totais:** {agg['total_ratings']} "
         f"(👍 {agg['up']} · 👎 {agg['down']})\n"
         f"- **Por origem:** {by_src}\n"
+        f"- **Sugestões (/feedback):** {agg['note_total']}\n"
         f"- **Bugs reportados:** {agg['bug_total']}\n"
     )
     down_rows = [
         [d["timestamp"][:19], d["source"], d["user_message"], d["reason"]]
         for d in agg["recent_down"]
     ]
+    note_rows = [
+        [n["timestamp"][:19], n["source"], n["contact"], n["text"]]
+        for n in agg["recent_notes"]
+    ]
     bug_rows = [
         [b["timestamp"][:19], b["description"], b["contact"], b["version"]]
         for b in agg["recent_bugs"]
     ]
-    return md, down_rows, bug_rows
+    return md, down_rows, note_rows, bug_rows
 
 
 with gr.Blocks(title="Kaya Bot 🤖") as demo:
@@ -469,15 +474,22 @@ with gr.Blocks(title="Kaya Bot 🤖") as demo:
                 label="👎 recentes (com motivo)",
                 interactive=False,
             )
+            fb_note_table = gr.Dataframe(
+                headers=["quando", "origem", "quem", "sugestão"],
+                datatype=["str", "str", "str", "str"],
+                label="💬 sugestões (/feedback)",
+                interactive=False,
+            )
             fb_bug_table = gr.Dataframe(
                 headers=["quando", "descrição", "contacto", "versão"],
                 datatype=["str", "str", "str", "str"],
                 label="🐞 bugs reportados",
                 interactive=False,
             )
+            _fb_outputs = [fb_md, fb_down_table, fb_note_table, fb_bug_table]
             fb_refresh = gr.Button("Atualizar", variant="secondary")
-            fb_refresh.click(_load_feedback_stats, None, [fb_md, fb_down_table, fb_bug_table])
-            demo.load(_load_feedback_stats, None, [fb_md, fb_down_table, fb_bug_table])
+            fb_refresh.click(_load_feedback_stats, None, _fb_outputs)
+            demo.load(_load_feedback_stats, None, _fb_outputs)
 
 if __name__ == "__main__":
     # Localhost-only by default: the bot serves private group memory, so it must

@@ -26,6 +26,7 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Remembers the thread**: 60 turns verbatim plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
 - **Voice in and out**: voice notes are transcribed with faster-whisper; replies can be spoken with Piper, per-language and sticky per chat
 - **Sees and makes pictures**: inbound photos are described into text (and so become searchable later); FLUX.1 Kontext edits a photo, Z-Image Turbo invents one
+- **Tells you when it is wrong**: `/bug` and `/feedback` on WhatsApp (plus a web form) collect reports into the Feedback dashboard — and are deliberately never stored as group memory
 - **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
 - Fine-tunes a chosen model profile using LoRA with 4-bit quantization (not used by the live model)

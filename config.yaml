@@ -473,9 +473,17 @@ chat:
     enabled: true
     log_file: "./data/feedback/message_feedback.jsonl"
 
-  # Bug-report channel (web UI only) — for "the app is broken", distinct from
-  # disliking an answer. Reports are appended to the JSONL below (email delivery is
-  # deferred; see feedback._notify_bug_report) and shown in the "Feedback" tab.
+  # Bug-report channel — for "the app is broken", distinct from disliking an
+  # answer. Two front doors: the web form, and `/bug <descrição>` on WhatsApp.
+  # Reports are appended to the JSONL below (email delivery is deferred; see
+  # feedback._notify_bug_report) and shown in the "Feedback" tab. `/feedback`
+  # writes a `type: note` record into the feedback log above instead.
+  #
+  # Neither ever enters the message log, so a report is never embedded as group
+  # memory — see whatsapp_adapter._is_command.
+  #
+  # A new report is announced by DM to KAYA_REPORT_JID (env, not config: it is a
+  # real number). Unset means reports are collected silently.
   bug_report:
     enabled: true
     log_file: "./data/feedback/bug_reports.jsonl"

@@ -8,9 +8,10 @@ optional written reason for a 👎, and "the app is broken" bug reports from the
 Two append-only JSONL sinks, kept separate from the interaction log so the existing
 dashboard/tooling is untouched:
 
-  * ``message_feedback.jsonl`` — ratings (``rating: up|down``) and reason comments
-    (``type: comment``), joined on ``feedback_id``.
-  * ``bug_reports.jsonl`` — web bug reports.
+  * ``message_feedback.jsonl`` — ratings (``rating: up|down``), reason comments
+    (``type: comment``) joined on ``feedback_id``, and standalone notes
+    (``type: note``) from ``/feedback`` that belong to no particular answer.
+  * ``bug_reports.jsonl`` — bug reports, from the web form or ``/bug`` on WhatsApp.
 
 Invariant (same as metrics): logging must never raise into the caller. A feedback
 failure can never drop or delay a user's reply, so everything is wrapped defensively.
@@ -110,6 +111,39 @@ def log_comment(
         "comment": comment.strip(),
     }
     _append(Path(path) if path else _DEFAULT_FEEDBACK_LOG, entry)
+
+
+def log_note(
+    *,
+    source: str,
+    text: str,
+    contact: Optional[str] = None,
+    env: Optional[str] = None,
+    version: Optional[str] = None,
+    path: Optional[Path] = None,
+) -> str:
+    """Record standalone feedback, unattached to any particular answer.
+
+    ``log_comment`` cannot serve this: it joins to an earlier 👍/👎 by
+    ``feedback_id``, and someone typing ``/feedback`` has not rated anything.
+    Written into the same sink with ``type: "note"``, which ``aggregate_feedback``
+    already excludes from the rating totals (it filters on ``type == "rating"``).
+    """
+    if not (text or "").strip():
+        return ""
+    note_id = str(uuid.uuid4())
+    entry = {
+        "feedback_id": note_id,
+        "type": "note",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "text": text.strip(),
+        "contact": (contact or "").strip() or None,
+        "env": env or None,
+        "version": version or None,
+    }
+    _append(Path(path) if path else _DEFAULT_FEEDBACK_LOG, entry)
+    return note_id
 
 
 def log_bug_report(
@@ -218,6 +252,17 @@ def aggregate_feedback(
         if len(recent_down) >= recent:
             break
 
+    notes = [r for r in rows if r.get("type") == "note"]
+    recent_notes = [
+        {
+            "timestamp": n.get("timestamp", ""),
+            "source": n.get("source", ""),
+            "contact": n.get("contact") or "",
+            "text": n.get("text", ""),
+        }
+        for n in list(reversed(notes))[:recent]
+    ]
+
     bugs = load_bug_reports(bug_path)
     recent_bugs = [
         {
@@ -235,6 +280,8 @@ def aggregate_feedback(
         "down": down,
         "by_source": {f"{src}:{rating}": count for (src, rating), count in by_source.items()},
         "recent_down": recent_down,
+        "note_total": len(notes),
+        "recent_notes": recent_notes,
         "bug_total": len(bugs),
         "recent_bugs": recent_bugs,
     }
