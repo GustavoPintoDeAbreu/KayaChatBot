@@ -22,7 +22,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from typing import Optional, Tuple
+
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from src.config_loader import load_config
@@ -451,13 +454,52 @@ async def webhook(
     return {"handled": True}
 
 
-# Mount the existing Gradio UI at "/" so one process serves both the web chat and
-# the WhatsApp webhook on the same model. Importing web_app reuses the engine.
+def _web_credentials() -> Optional[Tuple[str, str]]:
+    """The username/password pair guarding the chat UI, or None if unset.
+
+    Same precedence as web_app's own launch path: the environment wins over
+    config.yaml, so the deployed secret never has to live in the repo.
+    """
+    env_user = os.environ.get("KAYA_WEB_USER")
+    env_pass = os.environ.get("KAYA_WEB_PASS")
+    if env_user and env_pass:
+        return (env_user, env_pass)
+    cfg_auth = (config.get("chat", {}) or {}).get("web_auth")
+    return tuple(cfg_auth) if cfg_auth else None
+
+
+# The public landing page. "/" explains what the bot is and does, to anyone, with
+# no login — it is the page the group is given. The chat itself lives behind a
+# password at "/app", which is what the page's button points at.
+_LANDING = Path(__file__).parent / "static" / "landing.html"
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing() -> HTMLResponse:
+    try:
+        return HTMLResponse(_LANDING.read_text(encoding="utf-8"))
+    except OSError:
+        # Never strand the visitor: without the page, send them to the login.
+        return HTMLResponse('<meta http-equiv="refresh" content="0; url=/app">', 200)
+
+
+# Mount the Gradio UI at "/app" so one process serves the web chat, the landing
+# page and the WhatsApp webhook on the same model. Importing web_app reuses the
+# engine.
+#
+# `auth` is the load-bearing argument. It was absent for as long as this mount
+# existed, and because prod runs THIS module — not web_app's __main__ — the
+# KAYA_WEB_USER/KAYA_WEB_PASS pair was set in the environment and silently
+# ignored: /config served the whole app to anyone who asked. Cloudflare Access
+# was the only thing in front of it. Do not drop this argument.
 try:
     import gradio as gr
     from src.chat.web_app import demo
 
-    app = gr.mount_gradio_app(app, demo, path="/")
+    _auth = _web_credentials()
+    if _auth is None:
+        print("⚠️  No KAYA_WEB_USER/KAYA_WEB_PASS — the chat UI is UNAUTHENTICATED.")
+    app = gr.mount_gradio_app(app, demo, path="/app", auth=_auth)
 except Exception as exc:  # noqa: BLE001 — the webhook must work even if the UI fails
     print(f"⚠️  Could not mount Gradio UI: {exc}")
 

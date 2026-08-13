@@ -1,0 +1,1483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kaya — how the bot actually works</title>
+<style>
+  :root{
+    --paper:#f7f6f3; --surface:#ffffff; --surface-2:#f1efea;
+    --ink:#1b1f27; --muted:#5f6672; --faint:#8b919c;
+    --rule:#e2dfd8;
+    --teal:#1d5c63; --teal-soft:#e2eeee;
+    --amber:#a85f16; --amber-soft:#f6ebdd;
+    --bot:#e8f1ef; --user:#ffffff;
+    --code-bg:#f4f2ed;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#12141a; --surface:#181b22; --surface-2:#1e222b;
+      --ink:#e8e6e1; --muted:#9aa1ad; --faint:#6f7683;
+      --rule:#282d37;
+      --teal:#6fb3ac; --teal-soft:#17282b;
+      --amber:#d9954a; --amber-soft:#2a2118;
+      --bot:#17242a; --user:#1e222b;
+      --code-bg:#1c202a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#12141a; --surface:#181b22; --surface-2:#1e222b;
+    --ink:#e8e6e1; --muted:#9aa1ad; --faint:#6f7683;
+    --rule:#282d37;
+    --teal:#6fb3ac; --teal-soft:#17282b;
+    --amber:#d9954a; --amber-soft:#2a2118;
+    --bot:#17242a; --user:#1e222b;
+    --code-bg:#1c202a;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:50rem; margin:0 auto; padding:0 1.5rem 6rem}
+  header{padding:4.5rem 0 2.5rem; border-bottom:1px solid var(--rule); margin-bottom:3rem}
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--teal); margin-bottom:1rem;
+  }
+  h1{
+    font-family:var(--serif); font-weight:400; font-size:clamp(2rem,5.5vw,3rem);
+    line-height:1.12; margin:0 0 1rem; letter-spacing:-.015em; text-wrap:balance;
+  }
+  .standfirst{font-size:1.1rem; color:var(--muted); max-width:38rem; margin:0}
+  h2{
+    font-family:var(--serif); font-weight:400; font-size:1.7rem; line-height:1.2;
+    margin:3.5rem 0 .35rem; letter-spacing:-.01em; text-wrap:balance;
+  }
+  h3{font-size:1.02rem; font-weight:650; margin:2rem 0 .4rem; letter-spacing:-.005em}
+  h2 + .lede{color:var(--muted); margin:0 0 1.5rem; font-size:1.02rem}
+  p{margin:0 0 1rem; max-width:40rem}
+  a{color:var(--teal)}
+  code{
+    font-family:var(--mono); font-size:.86em; background:var(--code-bg);
+    padding:.13em .38em; border-radius:4px; border:1px solid var(--rule);
+  }
+  strong{font-weight:650}
+  .sec-num{
+    font-family:var(--mono); font-size:11px; color:var(--faint);
+    letter-spacing:.14em; display:block; margin-bottom:.2rem;
+  }
+
+  /* pipeline steps */
+  .step{
+    display:grid; grid-template-columns:2.4rem 1fr; gap:1rem;
+    padding:1.35rem 0; border-bottom:1px solid var(--rule);
+  }
+  .step:last-child{border-bottom:0}
+  .step-n{
+    font-family:var(--mono); font-size:.8rem; color:var(--teal);
+    background:var(--teal-soft); border-radius:6px; height:1.9rem;
+    display:flex; align-items:center; justify-content:center; font-weight:600;
+  }
+  .step h3{margin:.15rem 0 .35rem}
+  .step p{margin:0 0 .5rem; font-size:.96rem}
+  .where{
+    font-family:var(--mono); font-size:11.5px; color:var(--faint);
+    display:block; margin-top:.4rem;
+  }
+
+  /* chat */
+  .chat{
+    background:var(--surface-2); border:1px solid var(--rule); border-radius:12px;
+    padding:1.1rem; margin:1.2rem 0 .6rem;
+  }
+  .bubble{
+    max-width:80%; padding:.6rem .85rem; border-radius:12px; margin-bottom:.5rem;
+    font-size:.95rem; border:1px solid var(--rule); background:var(--user);
+    position:relative;
+  }
+  .bubble .who{
+    display:block; font-size:11px; font-family:var(--mono); color:var(--teal);
+    margin-bottom:.15rem; letter-spacing:.03em;
+  }
+  .bubble.bot{background:var(--bot); margin-left:auto; border-color:transparent}
+  .bubble.bot .who{color:var(--muted)}
+  .bubble.media{font-style:italic; color:var(--muted)}
+  .under{
+    border-left:2px solid var(--teal); padding:.15rem 0 .15rem .9rem;
+    margin:.9rem 0 1.6rem; font-size:.9rem; color:var(--muted);
+  }
+  .under b{color:var(--ink); font-weight:600}
+  .under ol{margin:.4rem 0 0; padding-left:1.1rem}
+  .under li{margin-bottom:.25rem}
+
+  /* tables */
+  .tw{overflow-x:auto; margin:1.2rem 0}
+  table{border-collapse:collapse; width:100%; font-size:.92rem; min-width:30rem}
+  th,td{padding:.5rem .7rem; text-align:left; border-bottom:1px solid var(--rule); vertical-align:top}
+  th{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--faint); font-weight:600;
+  }
+  td.num{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+
+  /* callouts */
+  .note{
+    background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--amber);
+    padding:.9rem 1.1rem; border-radius:0 8px 8px 0; margin:1.4rem 0; font-size:.94rem;
+  }
+  .note b{color:var(--amber)}
+  .note p:last-child{margin-bottom:0}
+
+  pre{
+    background:var(--code-bg); border:1px solid var(--rule); border-radius:8px;
+    padding:.9rem 1rem; overflow-x:auto; font-family:var(--mono);
+    font-size:.82rem; line-height:1.55; margin:1rem 0;
+  }
+  pre code{background:none; border:0; padding:0; font-size:inherit}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:.8rem; margin:1.4rem 0}
+  .card{background:var(--surface); border:1px solid var(--rule); border-radius:10px; padding:.85rem 1rem}
+  .card b{display:block; font-family:var(--mono); font-size:1.3rem; letter-spacing:-.02em}
+  .card span{font-size:.82rem; color:var(--muted)}
+  footer{margin-top:4rem; padding-top:1.5rem; border-top:1px solid var(--rule); color:var(--faint); font-size:.85rem}
+
+  /* ── the two switches ─────────────────────────────────────────────────── */
+  .switches{
+    position:sticky; top:0; z-index:10; display:flex; gap:.6rem; flex-wrap:wrap;
+    padding:.7rem 0 .8rem; margin-bottom:-.5rem;
+    background:linear-gradient(var(--paper) 72%, transparent);
+    backdrop-filter:blur(6px);
+  }
+  .seg{display:inline-flex; border:1px solid var(--rule); border-radius:8px; overflow:hidden}
+  .seg button{
+    font:inherit; font-size:.82rem; font-family:var(--mono); letter-spacing:.04em;
+    padding:.42rem .85rem; border:0; background:var(--surface); color:var(--muted);
+    cursor:pointer; transition:background .12s, color .12s;
+  }
+  .seg button + button{border-left:1px solid var(--rule)}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--teal); color:#fff}
+  .seg button:focus-visible{outline:2px solid var(--teal); outline-offset:-2px}
+
+  /* Show only the selected document. The state lives on the wrapper, not on
+     :root — the artifact runtime owns <html> and stamps its own attributes on
+     it, so keeping this on an element the page controls avoids depending on
+     anything outside the document. The defaults are written into the markup, so
+     the correct document is visible before a single line of script runs. */
+  .doc{display:none}
+  #page[data-level="simple"][data-lang="en"] .doc[data-level="simple"][data-lang="en"],
+  #page[data-level="simple"][data-lang="pt"] .doc[data-level="simple"][data-lang="pt"],
+  #page[data-level="advanced"][data-lang="en"] .doc[data-level="advanced"][data-lang="en"],
+  #page[data-level="advanced"][data-lang="pt"] .doc[data-level="advanced"][data-lang="pt"]{
+    display:block;
+  }
+
+  .login{
+    margin-left:auto; align-self:center; text-decoration:none;
+    font-family:var(--mono); font-size:.82rem; letter-spacing:.04em;
+    padding:.42rem .95rem; border-radius:8px;
+    background:var(--teal); color:#fff; border:1px solid var(--teal);
+    transition:opacity .12s;
+  }
+  .login:hover{opacity:.85}
+  .login:focus-visible{outline:2px solid var(--teal); outline-offset:2px}
+
+  @media (prefers-reduced-motion: reduce){ .seg button{transition:none} .login{transition:none} }
+/* the message-path figure */
+  .figure{margin:1.6rem 0}
+  .flow{
+    display:block; width:100%; max-width:38rem; height:auto; margin:0 auto;
+    color:var(--ink); font-family:var(--sans);
+  }
+  .flow text{fill:currentColor}
+  figcaption{
+    margin-top:.7rem; font-size:.86rem; color:var(--muted);
+    max-width:38rem; margin-left:auto; margin-right:auto; text-align:center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="page" data-level="simple" data-lang="en">
+
+<div class="switches" role="group" aria-label="View options">
+  <div class="seg" role="group" aria-label="Level">
+    <button type="button" data-set="level" data-value="simple" aria-pressed="true">Simple</button>
+    <button type="button" data-set="level" data-value="advanced" aria-pressed="false">In detail</button>
+  </div>
+  <div class="seg" role="group" aria-label="Language">
+    <button type="button" data-set="lang" data-value="en" aria-pressed="true">EN</button>
+    <button type="button" data-set="lang" data-value="pt" aria-pressed="false">PT</button>
+  </div>
+  <a class="login" href="/app">Entrar &rarr;</a>
+</div>
+
+<div class="doc" data-level="simple" data-lang="en" lang="en">
+<header>
+  <div class="eyebrow">Kaya · the bot</div>
+  <h1>What the bot in your group actually does</h1>
+  <p class="standfirst">It reads everything, answers when you call it, remembers what was said,
+  and can talk, listen and make pictures. Here is the honest version, including what it gets wrong.</p>
+</header>
+
+<h2>The short version</h2>
+
+<div class="cards">
+  <div class="card"><b>Reads</b><span>Everything in the group, always</span></div>
+  <div class="card"><b>Speaks</b><span>Only when you @ it or reply to it</span></div>
+  <div class="card"><b>Remembers</b><span>Years of conversation</span></div>
+  <div class="card"><b>Runs</b><span>On one machine, in Duarte's house</span></div>
+</div>
+
+<p>That first pair is the bit worth understanding. The bot is <strong>always listening and never
+butting in</strong>. It reads the group all day and says nothing, which is why weeks later it can
+tell you who said they'd bring the meat, even though nobody was talking to it at the time.</p>
+
+<div class="note">
+<p><b>Nothing you send leaves the house.</b> Your messages, photos and voice notes are processed on
+a computer in Duarte's living room. They are never sent to OpenAI, Google or anyone else. The only
+thing that ever goes out is a plain question with no names in it, when you ask about something it
+cannot know on its own, like a football score.</p>
+</div>
+
+<h2>How to talk to it</h2>
+
+<div class="tw">
+<table>
+  <tr><th>You want</th><th>Do this</th></tr>
+  <tr><td>An answer in the group</td><td>@ mention it, or reply to one of its messages</td></tr>
+  <tr><td>A private chat</td><td>Message it directly, if your number is on the list</td></tr>
+  <tr><td>It to reply by voice</td><td>“responde-me só em áudio” — it stays that way until you say otherwise</td></tr>
+  <tr><td>Just this one by voice</td><td>“manda um áudio a explicar isso”</td></tr>
+  <tr><td>Back to text</td><td>“volta a responder por texto”</td></tr>
+  <tr><td>A picture invented</td><td>“faz uma imagem de um gato astronauta”</td></tr>
+  <tr><td>Your photo edited</td><td>Send the photo with “põe-lhe uma coroa”</td></tr>
+  <tr><td>It to forget the last bit</td><td>“esquece o que falámos”</td></tr>
+</table>
+</div>
+
+<p>You can send it a <strong>voice note</strong> and it will listen. You can send it a
+<strong>photo</strong> and it will look. Both become part of what it remembers, so “aquela foto do
+barco” will find it months later.</p>
+
+<h2>What it remembers, and what it forgets</h2>
+
+<p>Two kinds of memory, and the difference explains most of its odd moments.</p>
+
+<p><strong>The recent conversation</strong> it holds word for word — roughly the last thirty
+exchanges in that chat. Ask it something that follows on from what you just said and it simply
+knows.</p>
+
+<p><strong>Everything older</strong> it has to go and find, the way you would search your own
+messages. This works well for a fact somebody stated plainly. It works less well for a vague
+question about a long argument, because it finds the closest-sounding piece of conversation rather
+than the whole thread. To help with that, it also keeps a short running summary of each chat, so the
+gist of what was decided survives even after the exact words have scrolled away.</p>
+
+<div class="note">
+<p><b>It can take a few minutes to remember something new.</b> What was just said sits in the recent
+window immediately, but it only becomes searchable a little later, when the bot folds it into its
+long-term memory. If you ask about something from an hour ago and get a blank look, that is usually
+why.</p>
+</div>
+
+<h2>Privacy between chats</h2>
+
+<p>Your private chat with the bot is <strong>yours</strong>. Tell it something in a DM and it will
+never repeat it in the group, or in anybody else's DM.</p>
+
+<p>It works one way only, deliberately: the <strong>group's</strong> history is shared, so from your
+DM you can ask about anything said in the group. The reverse never happens.</p>
+
+<h2>Pictures</h2>
+
+<p>It can invent a picture from nothing, or edit a photo you send it. Editing keeps your face and
+changes everything around it, which is the hard part and the part it is only reasonably good at.</p>
+
+<p>Expect to wait a couple of minutes. It will say so, then send the picture when it is ready, and
+it will keep answering questions while it works. Ask for two and the second waits its turn.</p>
+
+<p>Editing only works in the group, not in DMs — it puts a real person's face into an invented scene,
+so it stays where everyone can see what was made.</p>
+
+<h2>Where it falls short</h2>
+
+<p><strong>Faces survive about seven times in ten.</strong> Solo photos with a clear face do well.
+Group photos with several faces are the weak spot, and the more the edit covers the head — helmets,
+crowns, hoods — the more likely you get somebody who is nearly you.</p>
+
+<p><strong>Bodies come out worse than faces.</strong> Because it works hardest at keeping your face,
+the rest can end up strange: an extra arm, a body that does not quite join up. Look at the face
+first, then forgive the elbows.</p>
+
+<p><strong>It is not one of you.</strong> It talks about the group in the third person and does not
+invent shared memories or opinions of its own. If it does not know something it is meant to say so
+instead of guessing, and mostly it does.</p>
+
+<p><strong>It answers one message at a time.</strong> If four people ask at once, some replies take
+longer. Nothing is lost, it just queues.</p>
+</div>
+<div class="doc" data-level="simple" data-lang="pt" lang="pt">
+<header>
+  <div class="eyebrow">Kaya · o bot</div>
+  <h1>O que o bot do grupo faz, afinal</h1>
+  <p class="standfirst">Lê tudo, responde quando o chamam, lembra-se do que foi dito, e sabe falar,
+  ouvir e fazer imagens. Aqui fica a versão honesta, incluindo aquilo em que falha.</p>
+</header>
+
+<h2>A versão curta</h2>
+
+<div class="cards">
+  <div class="card"><b>Lê</b><span>Tudo o que se diz no grupo, sempre</span></div>
+  <div class="card"><b>Fala</b><span>Só quando lhe fazem @ ou respondem</span></div>
+  <div class="card"><b>Lembra</b><span>Anos de conversa</span></div>
+  <div class="card"><b>Corre</b><span>Numa máquina, em casa do Duarte</span></div>
+</div>
+
+<p>O primeiro par é o que vale a pena perceber. O bot está <strong>sempre a ouvir e nunca a
+intrometer-se</strong>. Lê o grupo o dia inteiro e não diz nada, e é por isso que semanas depois
+consegue dizer quem ficou de levar a carne, mesmo que ninguém estivesse a falar com ele na altura.</p>
+
+<div class="note">
+<p><b>Nada do que mandam sai de casa.</b> As vossas mensagens, fotografias e áudios são processados
+num computador na sala do Duarte. Nunca são enviados para a OpenAI, para a Google nem para ninguém.
+A única coisa que alguma vez sai é uma pergunta simples, sem nomes de ninguém, quando perguntam algo
+que ele não pode saber sozinho, como o resultado de um jogo.</p>
+</div>
+
+<h2>Como falar com ele</h2>
+
+<div class="tw">
+<table>
+  <tr><th>O que queres</th><th>Como se faz</th></tr>
+  <tr><td>Uma resposta no grupo</td><td>Faz-lhe @ ou responde a uma mensagem dele</td></tr>
+  <tr><td>Falar em privado</td><td>Manda mensagem direta, se o teu número estiver na lista</td></tr>
+  <tr><td>Que responda por voz</td><td>“responde-me só em áudio” — fica assim até dizeres o contrário</td></tr>
+  <tr><td>Só esta por voz</td><td>“manda um áudio a explicar isso”</td></tr>
+  <tr><td>Voltar ao texto</td><td>“volta a responder por texto”</td></tr>
+  <tr><td>Uma imagem inventada</td><td>“faz uma imagem de um gato astronauta”</td></tr>
+  <tr><td>A tua foto editada</td><td>Manda a foto com “põe-lhe uma coroa”</td></tr>
+  <tr><td>Que esqueça o que se disse</td><td>“esquece o que falámos”</td></tr>
+</table>
+</div>
+
+<p>Podes mandar-lhe um <strong>áudio</strong> e ele ouve. Podes mandar-lhe uma <strong>foto</strong>
+e ele vê. Ambos passam a fazer parte do que ele se lembra, por isso “aquela foto do barco” aparece
+meses depois.</p>
+
+<h2>Do que se lembra, e do que se esquece</h2>
+
+<p>Há dois tipos de memória, e a diferença explica quase todos os momentos estranhos dele.</p>
+
+<p><strong>A conversa recente</strong> ele guarda palavra por palavra, mais ou menos as últimas trinta
+trocas naquela conversa. Perguntas-lhe uma coisa a seguir a outra e ele simplesmente sabe.</p>
+
+<p><strong>Tudo o que é mais antigo</strong> ele tem de ir procurar, como tu farias nas tuas próprias
+mensagens. Isto funciona bem para um facto que alguém disse de forma clara. Funciona pior para uma
+pergunta vaga sobre uma discussão longa, porque ele encontra o bocado de conversa que soa mais
+parecido em vez do fio todo. Para ajudar nisso, também mantém um resumo curto de cada conversa, para
+que o essencial do que ficou decidido sobreviva depois de as palavras exactas já terem passado.</p>
+
+<div class="note">
+<p><b>Pode demorar uns minutos a lembrar-se de uma coisa nova.</b> O que acabou de ser dito fica
+logo na janela recente, mas só passa a ser procurável um pouco depois, quando o bot o arruma na
+memória de longo prazo. Se perguntares por algo de há uma hora e ele ficar a olhar para ti, é
+normalmente por isso.</p>
+</div>
+
+<h2>Privacidade entre conversas</h2>
+
+<p>A tua conversa privada com o bot é <strong>tua</strong>. Se lhe contares uma coisa numa mensagem
+direta, ele nunca a repete no grupo, nem na conversa privada de mais ninguém.</p>
+
+<p>Funciona só num sentido, de propósito: o histórico <strong>do grupo</strong> é partilhado, por isso
+da tua conversa privada podes perguntar sobre qualquer coisa dita no grupo. O contrário nunca
+acontece.</p>
+
+<h2>Imagens</h2>
+
+<p>Consegue inventar uma imagem do nada, ou editar uma foto que lhe mandes. Editar significa manter a
+tua cara e mudar tudo à volta, que é a parte difícil e aquela em que ele é apenas razoável.</p>
+
+<p>Conta com dois ou três minutos. Ele avisa, manda a imagem quando estiver pronta, e continua a
+responder a perguntas enquanto trabalha. Se pedirem duas, a segunda espera a vez.</p>
+
+<p>Editar só funciona no grupo, não em privado — põe a cara de uma pessoa real numa cena inventada,
+por isso fica onde toda a gente vê o que foi feito.</p>
+
+<h2>Onde ele falha</h2>
+
+<p><strong>A cara aguenta-se cerca de sete vezes em dez.</strong> Fotos de uma pessoa só, com a cara
+bem visível, correm bem. As fotos de grupo com várias caras são o ponto fraco, e quanto mais a edição
+tapa a cabeça — capacetes, coroas, capuzes — maior a probabilidade de sair alguém que é quase tu.</p>
+
+<p><strong>Os corpos saem pior do que as caras.</strong> Como ele se esforça sobretudo por manter a
+cara, o resto pode sair estranho: um braço a mais, um corpo que não encaixa bem. Olha primeiro para
+a cara e perdoa-lhe os cotovelos.</p>
+
+<p><strong>Ele não é um de vocês.</strong> Fala do grupo na terceira pessoa e não inventa memórias
+partilhadas nem gostos próprios. Quando não sabe uma coisa, é suposto dizê-lo em vez de adivinhar, e
+na maior parte das vezes diz.</p>
+
+<p><strong>Responde a uma mensagem de cada vez.</strong> Se quatro pessoas perguntarem ao mesmo tempo,
+algumas respostas demoram mais. Não se perde nada, apenas fica em fila.</p>
+</div>
+<div class="doc" data-level="advanced" data-lang="en" lang="en">
+<header>
+  <div class="eyebrow">Kaya · arquitectura</div>
+  <h1>How the bot actually works</h1>
+  <p class="standfirst">From a WhatsApp message hitting the box to a reply, a voice note or an
+  edited photo coming back — every step, why it exists, and what it does with the group's memory.</p>
+</header>
+<h2><span class="sec-num">01</span>The whole path, at a glance</h2>
+<p class="lede">Nine stages, plus a detour to the web for anything the group's memory cannot know.
+Most messages skip several of them.</p>
+
+<figure class="figure">
+<svg viewBox="0 0 680 656" role="img" aria-label="Flow of a WhatsApp message: arrival, media turned into text, logged to memory, an addressed check that can end in silence, routing, an optional web lookup fed back as context, generation, and delivery." class="flow">
+<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<rect x="90" y="24" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="50.0" text-anchor="middle" font-size="13">WhatsApp message</text>
+<rect x="90" y="104" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="130.0" text-anchor="middle" font-size="13">WAHA bridge</text>
+<rect x="90" y="184" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="210.0" text-anchor="middle" font-size="13">Media becomes text</text>
+<text x="324" y="210.0" font-size="11" opacity="0.62">voice → Whisper, photo → Vision</text>
+<rect x="90" y="264" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="290.0" text-anchor="middle" font-size="13">Logged to memory</text>
+<text x="324" y="290.0" font-size="11" opacity="0.62">replied to or not</text>
+<rect x="90" y="344" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="370.0" text-anchor="middle" font-size="13">Addressed to the bot?</text>
+<rect x="90" y="424" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="450.0" text-anchor="middle" font-size="13">Router picks the mode</text>
+<rect x="90" y="504" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="530.0" text-anchor="middle" font-size="13">Generate the reply</text>
+<rect x="90" y="584" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="610.0" text-anchor="middle" font-size="13">Deliver</text>
+<text x="324" y="610.0" font-size="11" opacity="0.62">text · voice · image</text>
+<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="207.0" y="410.0" font-size="11" opacity="0.62">yes</text>
+<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="355.0" y="358.0" text-anchor="middle" font-size="11" opacity="0.62">no</text>
+<rect x="400" y="344" width="240" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3 3" opacity="0.7"/>
+<text x="520.0" y="365.0" text-anchor="middle" font-size="13">Stays quiet</text>
+<text x="520.0" y="380.0" text-anchor="middle" font-size="10.5" opacity="0.62">still remembered</text>
+<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="355.0" y="511" text-anchor="middle" font-size="10.5" fill="var(--teal)">live facts</text>
+<rect x="400" y="504" width="240" height="44" rx="8" fill="none" stroke="var(--teal)" stroke-width="1.5"/>
+<text x="520.0" y="530.0" text-anchor="middle" font-size="13" fill="var(--teal)">Web search</text>
+<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw)"/>
+<text x="355.0" y="552" text-anchor="middle" font-size="10.5" fill="var(--teal)">as context</text>
+</svg>
+<figcaption>How one message travels, and the two branches that surprise people: it is remembered even when the bot says nothing, and a web result comes back as context rather than as the reply.</figcaption>
+</figure>
+
+<div class="note">
+<p><b>The one thing worth internalising:</b> the bot <em>remembers everything it sees</em> but
+<em>replies only when addressed</em>. In a group it stays silent unless you @-mention it or reply to
+one of its messages — while still logging the conversation as memory. That is why it can answer
+questions about a discussion it never took part in.</p>
+</div>
+
+<h2><span class="sec-num">02</span>Step by step</h2>
+<p class="lede">What happens to a message, in order.</p>
+
+<div class="step">
+  <div class="step-n">1</div>
+  <div>
+    <h3>The message arrives</h3>
+    <p>WAHA holds the actual WhatsApp connection (it is a linked device, like WhatsApp Web) and
+    POSTs every event to the bot as a webhook. The payload is normalised into one shape, because
+    WhatsApp's own formats differ: group senders live under <code>participant</code>, real phone
+    numbers hide behind <code>participantAlt</code>, and mentions can be in three different places.</p>
+    <span class="where">src/chat/whatsapp_adapter.py · parse_waha_message()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">2</div>
+  <div>
+    <h3>Media becomes text</h3>
+    <p>A voice note arrives with <strong>no text at all</strong> — the words are in an audio file.
+    It is transcribed with Whisper. A photo is described by the vision model. Either way the message
+    turns into ordinary text before anything else happens.</p>
+    <p>That reuse is the whole trick: once a photo is text, the memory log, the search index, the
+    intent router and the reply path all work on it unchanged. Nothing downstream knows it was a
+    picture.</p>
+    <span class="where">src/chat/stt.py · src/chat/vision.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">3</div>
+  <div>
+    <h3>Everything is logged — replied to or not</h3>
+    <p>Before deciding whether to answer, the message is appended to a per-chat log on disk. Group
+    chatter the bot was never addressed in is exactly the memory worth keeping, and it would
+    otherwise be thrown away.</p>
+    <span class="where">src/data/message_log.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">4</div>
+  <div>
+    <h3>Should it answer at all?</h3>
+    <p>DMs: yes, if the number is on the whitelist. Groups: only on an @-mention or a reply to the
+    bot. It never answers itself, never answers an empty message, and ignores a message id it has
+    already answered — WhatsApp replays its backlog after a reconnect, and without that check the
+    bot answers the same question twice.</p>
+    <span class="where">whatsapp_adapter.py · should_respond()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">5</div>
+  <div>
+    <h3>The router decides what kind of message this is</h3>
+    <p>A short classification call — is this banter, chat, a real question, or an instruction? The
+    answer picks three things at once: how much memory to search, which system prompt to use, and how
+    long the reply may be. Section 04 covers this properly.</p>
+    <span class="where">src/chat/router.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">6</div>
+  <div>
+    <h3>Memory is searched — if the mode calls for it</h3>
+    <p>The question is turned into a vector and matched against everything the group has ever said.
+    Filtered by <em>scope</em> (a DM never leaks into the group), optionally by <em>person</em>, and
+    trimmed to a token budget. Section 03 walks through it.</p>
+    <span class="where">src/chat/retriever.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">7</div>
+  <div>
+    <h3>The prompt is assembled</h3>
+    <p>System prompt (persona and rules) + member profiles + this chat's rolling summary +
+    retrieved conversations + the last <strong>60 lines</strong> of this chat verbatim + the new
+    message. Anything already in those 60 lines is excluded from retrieval, so the same text is
+    never injected twice.</p>
+    <span class="where">src/chat/engine.py · build_user_turn()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">8</div>
+  <div>
+    <h3>The model generates</h3>
+    <p>A stock <code>gemma-4-12b-it</code> at Q6_K, served by llama.cpp on one of the two GPUs. No
+    fine-tune: a 14-config bake-off found the stock model beat the fine-tuned one on every judged
+    dimension. The group's personality comes from retrieved memory, not from trained weights.</p>
+    <span class="where">src/chat/inference_backend.py · llama.cpp</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">9</div>
+  <div>
+    <h3>Delivery: text, voice, or a picture</h3>
+    <p>Text by default. Voice if that chat asked for it — split sentence by sentence so Portuguese
+    and English each get their own voice. Images are different: the bot replies immediately to say
+    it is working, and the picture arrives minutes later as a separate message.</p>
+    <p>What gets <em>spoken</em> is not the same string as what gets written. Emoji, markdown and
+    URLs read fine on screen and badly out loud, so they are stripped before synthesis — a
+    web-grounded answer used to end with Piper reading “🌐 Fontes: x.com, play.google.com” aloud,
+    domain by domain. The sources now follow the voice note as a short written message instead.</p>
+    <span class="where">src/chat/tts.py · src/chat/imagegen.py</span>
+  </div>
+</div>
+
+<h2><span class="sec-num">03</span>The memory: what goes in, what comes out</h2>
+<p class="lede">Three layers: a large verbatim window, a rolling summary of what falls out of it,
+and a searchable archive of everything else.</p>
+
+<h3>Going in: messages become searchable chunks</h3>
+<p>Every fifteen minutes, newly logged messages are grouped into chunks of up to
+<strong>16 messages or 1800 characters</strong>, converted into a vector by a multilingual
+embedding model, and stored. Re-running is safe: a chunk's id is derived from its content, so it
+overwrites rather than duplicates.</p>
+
+<pre><code>logged messages                      one chunk, embedded and stored
+──────────────────────               ────────────────────────────────────
+Tiago:  comprei um carro novo   ──►  text:  "Tiago: comprei um carro novo
+Diogo:  que carro?                           Diogo: que carro?
+Tiago:  um golf gti azul                     Tiago: um golf gti azul"
+                                     scope: shared
+                                     participants: Tiago, Diogo
+                                     timestamp_start / _end
+                                     vector: [0.021, -0.114, … 1024 dims]</code></pre>
+
+<h3>Coming out: only what the question needs</h3>
+<p>The question becomes a vector too, and the closest chunks come back. A worked example, from a
+real test run against 3,449 stored chunks:</p>
+
+<pre><code>question   "qual era o código do alarme da casa do lago?"
+             │
+             ├─ embed the question              → vector
+             ├─ filter by scope                 → shared + this chat only
+             ├─ nearest 10 chunks               → ranked by similarity
+             ├─ drop anything already in the
+             │  last 6 verbatim lines           → no double injection
+             └─ trim to 14,000 tokens           → lowest-priority context first
+
+rank 1     "André: para memória futura: o código do alarme
+            da casa do lago é 4417"                        ← 6% into the prompt
+
+reply      "O código é o 4417."</code></pre>
+
+<p>That fact was planted, then buried under <strong>40 turns</strong> of unrelated conversation
+about football and restaurants — far beyond the verbatim window. It came back purely through
+search.</p>
+
+<h3>The window is much bigger than the bot used to use</h3>
+<p>The verbatim window was six lines for a long time, on the assumption that context was scarce. It
+was not. Measured on this machine:</p>
+
+<div class="tw">
+<table>
+  <tr><th>What</th><th>Value</th></tr>
+  <tr><td>Context the server offers</td><td class="num">32,768 tokens</td></tr>
+  <tr><td>Where recall was still perfect</td><td class="num">27,411 tokens — 60/60, every depth</td></tr>
+  <tr><td>What a typical question spends</td><td class="num">~6,000 tokens</td></tr>
+  <tr><td>What six lines of history cost</td><td class="num">~400 tokens (1%)</td></tr>
+</table>
+</div>
+
+<p>So the constraint was never capacity — it was a number nobody had revisited. The figure everyone
+was working from, a reliable window of about 2,360 tokens, came from the <em>fine-tuned</em> model
+that has since been retired; it scored 17-25 out of 45 on the same test the current model passes
+60/60. The window is now 60 lines, about 4,000 tokens.</p>
+
+<div class="note">
+<p><b>What it costs is time, not memory.</b> A 2,000-token prompt answers in about 3.5s, a
+14,000-token one in 12.1s, and 27,000 in 19.8s. That is the real reason not to simply pour the whole
+conversation in — a one-word reply to "lol" would start taking twenty seconds.</p>
+</div>
+
+<h3>The rolling summary</h3>
+<p>Sixty lines covers an evening, not a month. What scrolls past it is condensed into a short running
+summary, one per chat, regenerated in the background as the conversation grows and injected above the
+verbatim block.</p>
+<p>It exists because search structurally cannot return a <em>thread</em>: it retrieves whichever chunk
+is nearest the question, which is right for "the alarm code is 4417" and wrong for "who agreed to
+what, and in what order". Two rules keep it out of the way — it is generated only <em>after</em> a
+reply has been sent, and if the GPU is busy answering somebody it gives up rather than waits, because
+the bridge drops an incoming message while the lock is held. A skipped summary is simply retried
+after the next message.</p>
+<span class="where">src/chat/summary.py</span>
+
+<div class="note">
+<p><b>Scope is enforced, not advisory.</b> Every chunk is tagged <code>shared</code>,
+<code>dm:…</code> or <code>group:…</code>. The rule is deliberately asymmetric: a DM can recall
+everything the group ever said, but the group can never recall what you told the bot privately.
+That is checked by a test that plants a secret in a DM and then asks for it in the group.</p>
+</div>
+
+<h2><span class="sec-num">04</span>Working out the intent</h2>
+<p class="lede">Why "lol" gets five words and "quem é o Rui?" gets a paragraph.</p>
+
+<p>This exists because of a real failure. The bot used to retrieve group context for
+<em>every single message</em>, so <code>Ahahhha</code> produced a 77-word analysis of group dynamics,
+and <code>hey</code> produced a roast aimed at a randomly chosen member. Handed a pile of member
+profiles and told to elaborate, a model finds someone to talk about.</p>
+
+<div class="tw">
+<table>
+  <tr><th>Mode</th><th>Example</th><th>Memory searched</th><th>Reply budget</th></tr>
+  <tr>
+    <td><b>banter</b></td>
+    <td>“lol”, “ahahah 😂”, “boa noite”</td>
+    <td><b>None at all</b></td>
+    <td class="num">48 tokens</td>
+  </tr>
+  <tr>
+    <td><b>mixed</b></td>
+    <td>“o Vasco outra vez a fazer disso”</td>
+    <td>Light — top 3</td>
+    <td class="num">128 tokens</td>
+  </tr>
+  <tr>
+    <td><b>general</b></td>
+    <td>“quem é melhor, Ronaldo ou Messi?”, “explica-me a inflação”</td>
+    <td><b>None</b> — not about the group</td>
+    <td class="num">256 tokens</td>
+  </tr>
+  <tr>
+    <td><b>factual</b></td>
+    <td>“quem é o Rui?”, “quando foi o jantar?”</td>
+    <td>Full — top 10</td>
+    <td class="num">256 tokens</td>
+  </tr>
+  <tr>
+    <td><b>command</b></td>
+    <td>“responde só em áudio”, “faz uma imagem de…”</td>
+    <td>None — executed in code</td>
+    <td>—</td>
+  </tr>
+</table>
+</div>
+
+<p><code>general</code> is newer than the rest, and it exists for the same reason the router does.
+Every question that was not banter used to be <code>factual</code>, including the ones with nothing
+to do with the group, so <em>“quem é melhor, Ronaldo ou Messi?”</em> retrieved group context plus
+every member profile and came back as a sourced report about Kaya. Now a question about the world is
+answered like any assistant would answer it, with no group memory attached.</p>
+
+<p>The distinction the router works hardest at is between talking <em>about</em> something and
+asking <em>for</em> it:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Message</th><th>Routes to</th><th>Because</th></tr>
+  <tr><td>“que foto gira”</td><td>banter</td><td>a reaction, not a request</td></tr>
+  <tr><td>“quem está nesta foto?”</td><td>factual</td><td>a question <em>about</em> an image</td></tr>
+  <tr><td>“põe-lhe uma coroa”</td><td>command → image</td><td>asks to <em>alter</em> a picture</td></tr>
+  <tr><td>“o áudio estava mau”</td><td>banter</td><td>an opinion, not an instruction</td></tr>
+  <tr><td>“responde-me só em áudio”</td><td>command → voice</td><td>changes behaviour from now on</td></tr>
+</table>
+</div>
+
+<p>If the router fails for any reason, it falls back to <code>factual</code> — the old behaviour.
+It can be wrong, but it cannot break the bot.</p>
+
+<h2><span class="sec-num">05</span>Questions the group's memory cannot answer</h2>
+<p class="lede">Football results, weather, news — things that change after the last message was sent.</p>
+
+<p>When a question carries a recency cue (“hoje”, “o último jogo”, “quanto custa”) and names no
+group member, the bot asks a cloud model with live web access and uses what comes back. Two rules
+keep that honest.</p>
+
+<p><strong>The search result is context, not the reply.</strong> It used to be sent verbatim, which
+meant the group's own bot was replaced mid-conversation by a stranger with different manners. Asked
+<em>“manda-o para o caralho? Já agora quem é melhor, Cristiano ou Messi?”</em> it answered the
+football half and then announced that <em>“a primeira parte da pergunta não se enquadra em resposta
+factual baseada na web”</em>. The local model now writes every reply, with the search result as
+evidence, so one voice answers the whole message.</p>
+
+<div class="note">
+<p><b>Nothing private is searched.</b> If the question names a group member it is never sent
+anywhere — it is answered from local memory instead. Only member-free questions leave the box, and
+never with any chat history attached.</p>
+</div>
+
+<h2><span class="sec-num">06</span>What it looks like in practice</h2>
+<p class="lede">Five real interaction shapes, and what happens underneath each.
+<span style="color:var(--faint)">(Names below are invented test personas, not real members.)</span></p>
+
+<h3>A. Someone laughs</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">Vasco</span>lol</div>
+  <div class="bubble bot"><span class="who">Kaya</span>A rir de quê exatamente?</div>
+</div>
+<div class="under">
+  <b>Under the hood</b>
+  <ol>
+    <li>Router says <b>banter</b> — so the vector store is never touched</li>
+    <li>Short prompt, 48-token budget</li>
+    <li>Replied in ~5s; the message is still logged as memory</li>
+  </ol>
+</div>
+
+<h3>B. A question about the group</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">Miguel</span>que carro é que o Tiago comprou?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>O Tiago comprou um Fiat Punto vermelho ontem.</div>
+</div>
+<div class="under">
+  <b>Under the hood</b>
+  <ol>
+    <li>Router says <b>factual</b> → full retrieval, top 10 chunks</li>
+    <li>The car was mentioned 6 turns earlier — past the verbatim window, found by search</li>
+    <li>Scope filter allows <code>shared</code> group memory only</li>
+  </ol>
+</div>
+
+<h3>C. A photo arrives</h3>
+<div class="chat">
+  <div class="bubble media"><span class="who">Tiago</span>[photo] olhem esta</div>
+  <div class="bubble"><span class="who">Diogo</span>@kaya o que é isto?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Um homem sentado num barco no mar, a fazer uma pose de músculo, com óculos de sol e um boné bege…</div>
+</div>
+<div class="under">
+  <b>Under the hood</b>
+  <ol>
+    <li>The photo is described by the vision model in ~4s and the description becomes the message text</li>
+    <li>The caption is kept alongside it — the question is “o que é isto?”, the description is the evidence</li>
+    <li>The description is logged, so <b>weeks later</b> “aquela foto do barco” will find it</li>
+  </ol>
+</div>
+
+<h3>D. Asking for a picture</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">André</span>@kaya faz uma imagem de um gato astronauta</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Vou fazer isso, dá-me um bocado.</div>
+  <div class="bubble"><span class="who">Miguel</span>@kaya e entretanto, quem é o Rui?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>O Rui é instrutor de mergulho…</div>
+  <div class="bubble bot"><span class="who">Kaya</span>[image] 🐱‍🚀</div>
+</div>
+<div class="under">
+  <b>Under the hood</b>
+  <ol>
+    <li>Router says <b>command → image</b>; no photo is in play, so this is generate-from-scratch</li>
+    <li>The job goes on a queue and runs on the <b>other GPU</b> — so the question in the middle is
+        answered in ~6s while the picture renders</li>
+    <li>The pending request is written into the chat history, so if you ask “então e a foto?” the bot
+        knows what it agreed to make</li>
+    <li>The image arrives 56–128s later as its own message</li>
+  </ol>
+</div>
+
+<h3>E. Editing someone's photo</h3>
+<div class="chat">
+  <div class="bubble media"><span class="who">Vasco</span>[photo] põe este gajo vestido de rei medieval</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Dá-me uns minutos que isto demora, já mando.</div>
+  <div class="bubble"><span class="who">Diogo</span>@kaya faz-me uma também</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Fica em fila, tenho 1 à frente, mando assim que estiver.</div>
+</div>
+<div class="under">
+  <b>Under the hood</b>
+  <ol>
+    <li>An attached photo is unambiguous — that is the subject, and it is edited rather than replaced</li>
+    <li>Without an attachment, the last photo in the chat is used <b>only if the wording points at
+        it</b> (“põe-<b>lhe</b>”, “edita <b>esta</b>”). “Faz uma imagem de um gato” draws a cat instead
+        of editing someone's holiday snap</li>
+    <li>A second request queues rather than being refused — that is a change; it used to be dropped</li>
+    <li>Editing is limited to the group chat, not DMs, because it puts a real person's face into an
+        invented scene</li>
+  </ol>
+</div>
+
+<h2><span class="sec-num">07</span>What runs where</h2>
+<p class="lede">Two RTX 3090s, no NVLink — so they are two separate 24GB devices, not one 48GB pool.</p>
+
+<div class="cards">
+  <div class="card"><b>GPU 1</b><span>The language model (~19GB) plus Whisper and the embedder</span></div>
+  <div class="card"><b>GPU 0</b><span>Image generation only, and only while a job runs</span></div>
+  <div class="card"><b>CPU</b><span>Piper voice synthesis, ~28× realtime</span></div>
+</div>
+
+<p>That split is what makes conversation survive image generation: they are different processes on
+different cards. The image worker is deliberately a <em>subprocess that exits</em> — a diffusion
+pipeline left in memory does not give the VRAM back, and would hold a whole GPU hostage between
+requests.</p>
+
+<p>An edit now takes about twice as long as it used to, deliberately: the model renders two attempts
+and sends whichever one looks most like the person. Loading the 15GB pipeline is most of the cost, so
+a second attempt is far cheaper than a second request would be.</p>
+
+<div class="tw">
+<table>
+  <tr><th>Action</th><th>Typical time</th></tr>
+  <tr><td>Banter reply</td><td class="num">~5 s</td></tr>
+  <tr><td>Question with memory search</td><td class="num">7–13 s</td></tr>
+  <tr><td>Describing a photo</td><td class="num">~4 s</td></tr>
+  <tr><td>Four people asking at once</td><td class="num">8–35 s (queued, none dropped)</td></tr>
+  <tr><td>Generating an image</td><td class="num">56–75 s</td></tr>
+  <tr><td>Editing a photo</td><td class="num">~180 s</td></tr>
+</table>
+</div>
+
+<h2><span class="sec-num">08</span>Known limits</h2>
+<p class="lede">Things that are true and worth knowing before they surprise you.</p>
+
+<p><strong>Search still cannot return a thread.</strong> The last 60 lines are held word for word
+and a rolling summary covers what fell out before them, but anything older than that has to be
+<em>found</em>, and search returns whichever chunk is nearest the question rather than the sequence.
+A fact stated plainly comes back reliably. The exact order of a long argument, three months on, is
+reconstructed from a summary rather than quoted.</p>
+
+<p><strong>The summary is written by the model, so it can be wrong.</strong> It is a compression of
+what was said, not a record of it. Where the verbatim window reaches, the bot is quoting; past that,
+it is paraphrasing its own earlier paraphrase.</p>
+
+<p><strong>Newly said things take a few minutes to become searchable.</strong> Ingestion runs every
+fifteen minutes. Within the same chat this rarely shows, because 60 lines of verbatim history cover
+it; asking from a <em>different</em> chat about something just said is where the gap is still
+visible.</p>
+
+<p><strong>Photo edits keep the face about seven times in ten.</strong> Measured across 40 edits:
+identity similarity averages 0.70, up from 0.46 before the editing pipeline was reworked, and 21 of
+40 edits now both keep the face <em>and</em> carry out the instruction, against 17 before. The single
+biggest gain was telling the model what to <em>keep</em> rather than only what to change, which it
+had never been told in production.</p>
+
+<p>Two honest caveats. Keeping a face and obeying an instruction pull against each other — the
+surest way to preserve someone is to barely edit the photo, and the grid contains both a near-perfect
+likeness that ignored the prompt and a flawless costume worn by a stranger. And the bodies got
+<em>worse</em> as the faces got better: anatomy score fell from 3.8 to 2.8, because choosing between
+two attempts by facial similarity favours the one that pasted the original face in most literally.
+Group photos with several faces remain the weakest case.</p>
+
+<p><strong>It is not a group member.</strong> It refers to everyone in the third person and does not
+invent shared experiences. When it does not know something, it is meant to say so rather than guess —
+occasionally it over-applies that and denies something it was actually told.</p>
+</div>
+<div class="doc" data-level="advanced" data-lang="pt" lang="pt">
+<header>
+  <div class="eyebrow">Kaya · arquitectura</div>
+  <h1>Como o bot funciona por dentro</h1>
+  <p class="standfirst">De uma mensagem de WhatsApp a chegar à máquina até voltar uma resposta, um
+  áudio ou uma foto editada: cada passo, porque existe, e o que faz com a memória do grupo.</p>
+</header>
+
+<h2><span class="sec-num">01</span>O caminho todo, de uma vez</h2>
+<p class="lede">Nove fases, mais um desvio à web para aquilo que a memória do grupo não pode saber.
+A maioria das mensagens salta várias delas.</p>
+
+<figure class="figure">
+<svg viewBox="0 0 680 656" role="img" aria-label="Percurso de uma mensagem de WhatsApp: chegada, media convertida em texto, registo na memória, verificação de se foi dirigida ao bot que pode acabar em silêncio, encaminhamento, pesquisa web opcional devolvida como contexto, geração e entrega." class="flow">
+<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<rect x="90" y="24" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="50.0" text-anchor="middle" font-size="13">Mensagem de WhatsApp</text>
+<rect x="90" y="104" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="130.0" text-anchor="middle" font-size="13">Ponte WAHA</text>
+<rect x="90" y="184" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="210.0" text-anchor="middle" font-size="13">Media vira texto</text>
+<text x="324" y="210.0" font-size="11" opacity="0.62">áudio → Whisper, foto → Visão</text>
+<rect x="90" y="264" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="290.0" text-anchor="middle" font-size="13">Registado na memória</text>
+<text x="324" y="290.0" font-size="11" opacity="0.62">com resposta ou sem ela</text>
+<rect x="90" y="344" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="370.0" text-anchor="middle" font-size="13">Dirigida ao bot?</text>
+<rect x="90" y="424" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="450.0" text-anchor="middle" font-size="13">Router escolhe o modo</text>
+<rect x="90" y="504" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="530.0" text-anchor="middle" font-size="13">Gera a resposta</text>
+<rect x="90" y="584" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<text x="200.0" y="610.0" text-anchor="middle" font-size="13">Entrega</text>
+<text x="324" y="610.0" font-size="11" opacity="0.62">texto · voz · imagem</text>
+<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="207.0" y="410.0" font-size="11" opacity="0.62">sim</text>
+<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="355.0" y="358.0" text-anchor="middle" font-size="11" opacity="0.62">não</text>
+<rect x="400" y="344" width="240" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3 3" opacity="0.7"/>
+<text x="520.0" y="365.0" text-anchor="middle" font-size="13">Fica calado</text>
+<text x="520.0" y="380.0" text-anchor="middle" font-size="10.5" opacity="0.62">mas guarda</text>
+<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw)"/>
+<text x="355.0" y="511" text-anchor="middle" font-size="10.5" fill="var(--teal)">factos atuais</text>
+<rect x="400" y="504" width="240" height="44" rx="8" fill="none" stroke="var(--teal)" stroke-width="1.5"/>
+<text x="520.0" y="530.0" text-anchor="middle" font-size="13" fill="var(--teal)">Pesquisa web</text>
+<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw)"/>
+<text x="355.0" y="552" text-anchor="middle" font-size="10.5" fill="var(--teal)">como contexto</text>
+</svg>
+<figcaption>O caminho de uma mensagem, e os dois desvios que surpreendem: fica guardada mesmo quando o bot não diz nada, e um resultado da web volta como contexto em vez de ser a resposta.</figcaption>
+</figure>
+
+<div class="note">
+<p><b>O que vale mesmo a pena interiorizar:</b> o bot <em>guarda tudo o que vê</em> mas
+<em>só responde quando é chamado</em>. Num grupo fica calado a não ser que lhe façam @ ou respondam a
+uma mensagem dele, e continua a registar a conversa como memória. É por isso que consegue responder
+a perguntas sobre uma discussão em que nunca participou.</p>
+</div>
+
+<h2><span class="sec-num">02</span>Passo a passo</h2>
+<p class="lede">O que acontece a uma mensagem, por ordem.</p>
+
+<div class="step">
+  <div class="step-n">1</div>
+  <div>
+    <h3>A mensagem chega</h3>
+    <p>O WAHA é quem mantém a ligação ao WhatsApp (é um dispositivo associado, como o WhatsApp Web) e
+    envia todos os eventos ao bot por webhook. O conteúdo é normalizado numa única forma, porque os
+    formatos do próprio WhatsApp diferem: em grupo o remetente vem em <code>participant</code>, o
+    número real esconde-se atrás de <code>participantAlt</code>, e as menções podem estar em três
+    sítios diferentes.</p>
+    <span class="where">src/chat/whatsapp_adapter.py · parse_waha_message()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">2</div>
+  <div>
+    <h3>Media transforma-se em texto</h3>
+    <p>Um áudio chega <strong>sem texto nenhum</strong>: as palavras estão num ficheiro de som. É
+    transcrito com o Whisper. Uma foto é descrita pelo modelo de visão. De qualquer das formas, a
+    mensagem passa a ser texto normal antes de mais nada acontecer.</p>
+    <p>Esse reaproveitamento é o truque todo: assim que uma foto é texto, o registo de memória, o
+    índice de pesquisa, o router e o caminho da resposta funcionam com ela sem alterações. Nada a
+    jusante sabe que aquilo era uma imagem.</p>
+    <span class="where">src/chat/stt.py · src/chat/vision.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">3</div>
+  <div>
+    <h3>Tudo é registado, com resposta ou sem ela</h3>
+    <p>Antes sequer de decidir se responde, a mensagem é acrescentada a um registo por conversa em
+    disco. A conversa de grupo em que o bot nunca foi chamado é precisamente a memória que interessa
+    guardar, e de outra forma seria deitada fora.</p>
+    <span class="where">src/data/message_log.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">4</div>
+  <div>
+    <h3>Deve sequer responder?</h3>
+    <p>Mensagens diretas: sim, se o número estiver na lista. Grupos: só com @ ou resposta a uma
+    mensagem do bot. Nunca responde a si próprio, nunca responde a uma mensagem vazia, e ignora um id
+    de mensagem que já tenha respondido — o WhatsApp reenvia o histórico depois de uma reconexão e
+    sem essa verificação o bot responderia duas vezes à mesma pergunta.</p>
+    <span class="where">whatsapp_adapter.py · should_respond()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">5</div>
+  <div>
+    <h3>O router decide que tipo de mensagem é esta</h3>
+    <p>Uma classificação curta: isto é conversa, é chat, é uma pergunta a sério, ou é uma instrução?
+    A resposta escolhe três coisas ao mesmo tempo: quanta memória pesquisar, que prompt usar, e que
+    comprimento a resposta pode ter. A secção 04 trata disto como deve ser.</p>
+    <span class="where">src/chat/router.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">6</div>
+  <div>
+    <h3>A memória é pesquisada, se o modo o justificar</h3>
+    <p>A pergunta é transformada num vetor e comparada com tudo o que o grupo alguma vez disse.
+    Filtrada por <em>âmbito</em> (uma conversa privada nunca passa para o grupo), opcionalmente por
+    <em>pessoa</em>, e cortada a um orçamento de tokens. A secção 03 percorre isto.</p>
+    <span class="where">src/chat/retriever.py</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">7</div>
+  <div>
+    <h3>O prompt é montado</h3>
+    <p>Prompt de sistema (personalidade e regras) + perfis dos membros + o resumo em curso desta
+    conversa + conversas recuperadas + as últimas <strong>60 linhas</strong> desta conversa palavra
+    por palavra + a mensagem nova. Tudo o que já esteja nessas 60 linhas é excluído da pesquisa, para
+    que o mesmo texto nunca seja injetado duas vezes.</p>
+    <span class="where">src/chat/engine.py · build_user_turn()</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">8</div>
+  <div>
+    <h3>O modelo gera</h3>
+    <p>Um <code>gemma-4-12b-it</code> de origem em Q6_K, servido por llama.cpp numa das duas placas
+    gráficas. Sem fine-tune: uma comparação de 14 configurações mostrou que o modelo de origem batia
+    o afinado em todas as dimensões avaliadas. A personalidade do grupo vem da memória recuperada,
+    não de pesos treinados.</p>
+    <span class="where">src/chat/inference_backend.py · llama.cpp</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-n">9</div>
+  <div>
+    <h3>Entrega: texto, voz ou imagem</h3>
+    <p>Texto por omissão. Voz se aquela conversa a tiver pedido, dividida frase a frase para que
+    português e inglês tenham cada um a sua voz. As imagens são diferentes: o bot responde logo a
+    dizer que está a tratar disso, e a imagem chega minutos depois numa mensagem à parte.</p>
+    <p>O que é <em>falado</em> não é a mesma coisa que o que é escrito. Emojis, formatação e endereços
+    lêem-se bem no ecrã e mal em voz alta, por isso são retirados antes da síntese — uma resposta com
+    pesquisa web acabava com o Piper a ler “🌐 Fontes: x.com, play.google.com” em voz alta, domínio a
+    domínio. As fontes seguem agora o áudio como uma mensagem escrita curta.</p>
+    <span class="where">src/chat/tts.py · src/chat/imagegen.py</span>
+  </div>
+</div>
+
+<h2><span class="sec-num">03</span>A memória: o que entra e o que sai</h2>
+<p class="lede">Três camadas: uma janela grande palavra por palavra, um resumo em curso do que sai
+dela, e um arquivo pesquisável de todo o resto.</p>
+
+<h3>A entrar: mensagens tornam-se blocos pesquisáveis</h3>
+<p>De quinze em quinze minutos, as mensagens registadas de novo são agrupadas em blocos de até
+<strong>16 mensagens ou 1800 caracteres</strong>, convertidas num vetor por um modelo multilingue, e
+guardadas. Voltar a correr é seguro: o id de um bloco deriva do seu conteúdo, por isso sobrepõe-se em
+vez de duplicar.</p>
+
+<pre><code>mensagens registadas                 um bloco, vetorizado e guardado
+──────────────────────               ────────────────────────────────────
+Tiago:  comprei um carro novo   ──►  texto: "Tiago: comprei um carro novo
+Diogo:  que carro?                           Diogo: que carro?
+Tiago:  um golf gti azul                     Tiago: um golf gti azul"
+                                     âmbito: partilhado
+                                     participantes: Tiago, Diogo
+                                     início / fim
+                                     vetor: [0.021, -0.114, … 1024 dims]</code></pre>
+
+<h3>A sair: só o que a pergunta precisa</h3>
+<p>A pergunta também se torna um vetor, e voltam os blocos mais próximos. Um exemplo real, de um teste
+contra 3.449 blocos guardados:</p>
+
+<pre><code>pergunta   "qual era o código do alarme da casa do lago?"
+             │
+             ├─ vetorizar a pergunta            → vetor
+             ├─ filtrar por âmbito              → partilhado + esta conversa
+             ├─ 10 blocos mais próximos         → ordenados por semelhança
+             ├─ descartar o que já está nas
+             │  linhas guardadas na íntegra     → sem injeção repetida
+             └─ cortar a 14.000 tokens          → o menos importante primeiro
+
+pos. 1     "André: para memória futura: o código do alarme
+            da casa do lago é 4417"                        ← a 6% do prompt
+
+resposta   "O código é o 4417."</code></pre>
+
+<p>Esse facto foi plantado e depois soterrado por <strong>40 turnos</strong> de conversa sobre futebol
+e restaurantes, muito para lá da janela guardada na íntegra. Voltou puramente através da pesquisa.</p>
+
+<h3>A janela é muito maior do que o bot costumava usar</h3>
+<p>A janela guardada palavra por palavra foi seis linhas durante muito tempo, partindo do princípio
+de que o contexto era escasso. Não era. Medido nesta máquina:</p>
+
+<div class="tw">
+<table>
+  <tr><th>O quê</th><th>Valor</th></tr>
+  <tr><td>Contexto que o servidor oferece</td><td class="num">32.768 tokens</td></tr>
+  <tr><td>Onde a memória ainda era perfeita</td><td class="num">27.411 tokens — 60/60, a todas as profundidades</td></tr>
+  <tr><td>O que uma pergunta típica gasta</td><td class="num">~6.000 tokens</td></tr>
+  <tr><td>O que seis linhas custavam</td><td class="num">~400 tokens (1%)</td></tr>
+</table>
+</div>
+
+<p>Ou seja, o limite nunca foi capacidade: era um número que ninguém tinha voltado a rever. O valor
+de que toda a gente partia, uma janela fiável de cerca de 2.360 tokens, vinha do modelo
+<em>afinado</em> que entretanto foi reformado; esse fazia 17-25 em 45 no mesmo teste que o modelo
+actual passa 60/60. A janela é agora de 60 linhas, cerca de 4.000 tokens.</p>
+
+<div class="note">
+<p><b>O que isto custa é tempo, não memória.</b> Um prompt de 2.000 tokens responde em cerca de 3,5s,
+um de 14.000 em 12,1s, e 27.000 em 19,8s. É essa a verdadeira razão para não despejar a conversa
+toda lá para dentro: uma resposta de uma palavra a “lol” passaria a demorar vinte segundos.</p>
+</div>
+
+<h3>O resumo em curso</h3>
+<p>Sessenta linhas cobrem uma noite, não um mês. O que passa para lá disso é condensado num resumo
+curto, um por conversa, refeito em segundo plano à medida que a conversa cresce e injetado acima do
+bloco guardado na íntegra.</p>
+<p>Existe porque a pesquisa não consegue, por construção, devolver um <em>fio</em>: devolve o bloco
+mais próximo da pergunta, o que está certo para “o código do alarme é 4417” e errado para “quem
+concordou com o quê, e por que ordem”. Duas regras mantêm-no fora do caminho: só é gerado
+<em>depois</em> de a resposta ter sido enviada, e se a placa estiver ocupada a responder a alguém
+desiste em vez de esperar, porque a ponte deixa cair uma mensagem que chegue enquanto o bloqueio está
+tomado. Um resumo saltado é simplesmente retomado depois da mensagem seguinte.</p>
+<span class="where">src/chat/summary.py</span>
+
+<div class="note">
+<p><b>O âmbito é imposto, não é uma recomendação.</b> Cada bloco é marcado como
+<code>partilhado</code>, <code>dm:…</code> ou <code>grupo:…</code>. A regra é deliberadamente
+assimétrica: uma conversa privada pode recordar tudo o que o grupo alguma vez disse, mas o grupo
+nunca pode recordar o que lhe contaste em privado. Isso é verificado por um teste que planta um
+segredo numa conversa privada e depois pergunta por ele no grupo.</p>
+</div>
+
+<h2><span class="sec-num">04</span>Perceber a intenção</h2>
+<p class="lede">Porque é que “lol” leva cinco palavras e “quem é o Rui?” leva um parágrafo.</p>
+
+<p>Isto existe por causa de uma falha real. O bot pesquisava contexto do grupo para <em>todas as
+mensagens</em>, por isso <code>Ahahhha</code> produzia uma análise de 77 palavras sobre a dinâmica do
+grupo, e <code>hey</code> produzia um roast dirigido a um membro escolhido ao calhas. Dá-se a um
+modelo uma pilha de perfis e diz-se-lhe para desenvolver, e ele arranja alguém sobre quem falar.</p>
+
+<div class="tw">
+<table>
+  <tr><th>Modo</th><th>Exemplo</th><th>Memória pesquisada</th><th>Orçamento</th></tr>
+  <tr>
+    <td><b>conversa</b></td>
+    <td>“lol”, “ahahah 😂”, “boa noite”</td>
+    <td><b>Nenhuma</b></td>
+    <td class="num">48 tokens</td>
+  </tr>
+  <tr>
+    <td><b>mista</b></td>
+    <td>“o Vasco outra vez a fazer disso”</td>
+    <td>Leve — 3 melhores</td>
+    <td class="num">128 tokens</td>
+  </tr>
+  <tr>
+    <td><b>geral</b></td>
+    <td>“quem é melhor, Ronaldo ou Messi?”, “explica-me a inflação”</td>
+    <td><b>Nenhuma</b> — não é sobre o grupo</td>
+    <td class="num">256 tokens</td>
+  </tr>
+  <tr>
+    <td><b>factual</b></td>
+    <td>“quem é o Rui?”, “quando foi o jantar?”</td>
+    <td>Completa — 10 melhores</td>
+    <td class="num">256 tokens</td>
+  </tr>
+  <tr>
+    <td><b>comando</b></td>
+    <td>“responde só em áudio”, “faz uma imagem de…”</td>
+    <td>Nenhuma — executado em código</td>
+    <td>—</td>
+  </tr>
+</table>
+</div>
+
+<p>O modo <code>geral</code> é mais recente do que os outros, e existe pela mesma razão que o router.
+Todas as perguntas que não fossem conversa eram <code>factual</code>, incluindo as que nada tinham a
+ver com o grupo, por isso <em>“quem é melhor, Ronaldo ou Messi?”</em> puxava contexto do grupo e todos
+os perfis dos membros e voltava como um relatório sobre o Kaya. Agora uma pergunta sobre o mundo é
+respondida como qualquer assistente a responderia, sem memória do grupo agarrada.</p>
+
+<p>A distinção em que o router mais trabalha é entre falar <em>sobre</em> uma coisa e pedir
+<em>para</em> a fazer:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Mensagem</th><th>Vai para</th><th>Porquê</th></tr>
+  <tr><td>“que foto gira”</td><td>conversa</td><td>uma reação, não um pedido</td></tr>
+  <tr><td>“quem está nesta foto?”</td><td>factual</td><td>uma pergunta <em>sobre</em> uma imagem</td></tr>
+  <tr><td>“põe-lhe uma coroa”</td><td>comando → imagem</td><td>pede para <em>alterar</em> uma imagem</td></tr>
+  <tr><td>“o áudio estava mau”</td><td>conversa</td><td>uma opinião, não uma instrução</td></tr>
+  <tr><td>“responde-me só em áudio”</td><td>comando → voz</td><td>muda o comportamento a partir de agora</td></tr>
+</table>
+</div>
+
+<p>Se o router falhar por alguma razão, cai para <code>factual</code>, que era o comportamento
+anterior. Pode enganar-se, mas não pode partir o bot.</p>
+
+<h2><span class="sec-num">05</span>Perguntas que a memória do grupo não pode responder</h2>
+<p class="lede">Resultados de futebol, tempo, notícias: coisas que mudam depois de a última mensagem
+ter sido enviada.</p>
+
+<p>Quando uma pergunta traz uma pista de atualidade (“hoje”, “o último jogo”, “quanto custa”) e não
+nomeia nenhum membro do grupo, o bot pergunta a um modelo na nuvem com acesso à web e usa o que
+volta. Duas regras mantêm isto honesto.</p>
+
+<p><strong>O resultado da pesquisa é contexto, não é a resposta.</strong> Antes era enviado tal e
+qual, o que significava que o bot do grupo era substituído a meio da conversa por um estranho com
+outros modos. Perguntado <em>“manda-o para o caralho? Já agora quem é melhor, Cristiano ou Messi?”</em>
+respondia à metade do futebol e depois anunciava que <em>“a primeira parte da pergunta não se enquadra
+em resposta factual baseada na web”</em>. Agora é o modelo local que escreve todas as respostas, com o
+resultado da pesquisa como prova, para que uma só voz responda à mensagem inteira.</p>
+
+<div class="note">
+<p><b>Nada de privado é pesquisado.</b> Se a pergunta nomear um membro do grupo, não sai daqui: é
+respondida a partir da memória local. Só perguntas sem nomes de ninguém saem da máquina, e nunca com
+histórico de conversa agarrado.</p>
+</div>
+
+<h2><span class="sec-num">06</span>Como isto se vê na prática</h2>
+<p class="lede">Cinco formatos reais de interação, e o que acontece por baixo de cada um.
+<span style="color:var(--faint)">(Os nomes abaixo são personagens de teste, não membros reais.)</span></p>
+
+<h3>A. Alguém ri-se</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">Vasco</span>lol</div>
+  <div class="bubble bot"><span class="who">Kaya</span>A rir de quê exatamente?</div>
+</div>
+<div class="under">
+  <b>Por baixo</b>
+  <ol>
+    <li>O router diz <b>conversa</b>, por isso o índice nunca é tocado</li>
+    <li>Prompt curto, orçamento de 48 tokens</li>
+    <li>Respondeu em ~5s; a mensagem continua a ser registada como memória</li>
+  </ol>
+</div>
+
+<h3>B. Uma pergunta sobre o grupo</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">Miguel</span>que carro é que o Tiago comprou?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>O Tiago comprou um Fiat Punto vermelho ontem.</div>
+</div>
+<div class="under">
+  <b>Por baixo</b>
+  <ol>
+    <li>O router diz <b>factual</b> → pesquisa completa, 10 melhores blocos</li>
+    <li>O carro foi mencionado 6 turnos antes; com a janela actual ainda está guardado na íntegra</li>
+    <li>O filtro de âmbito só permite a memória <code>partilhada</code> do grupo</li>
+  </ol>
+</div>
+
+<h3>C. Chega uma foto</h3>
+<div class="chat">
+  <div class="bubble media"><span class="who">Tiago</span>[foto] olhem esta</div>
+  <div class="bubble"><span class="who">Diogo</span>@kaya o que é isto?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Um homem sentado num barco no mar, a fazer uma pose de músculo, com óculos de sol e um boné bege…</div>
+</div>
+<div class="under">
+  <b>Por baixo</b>
+  <ol>
+    <li>A foto é descrita pelo modelo de visão em ~4s e a descrição passa a ser o texto da mensagem</li>
+    <li>A legenda é guardada ao lado: a pergunta é “o que é isto?”, a descrição é a prova</li>
+    <li>A descrição fica registada, por isso <b>semanas depois</b> “aquela foto do barco” encontra-a</li>
+  </ol>
+</div>
+
+<h3>D. Pedir uma imagem</h3>
+<div class="chat">
+  <div class="bubble"><span class="who">André</span>@kaya faz uma imagem de um gato astronauta</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Vou fazer isso, dá-me um bocado.</div>
+  <div class="bubble"><span class="who">Miguel</span>@kaya e entretanto, quem é o Rui?</div>
+  <div class="bubble bot"><span class="who">Kaya</span>O Rui é instrutor de mergulho…</div>
+  <div class="bubble bot"><span class="who">Kaya</span>[imagem] 🐱‍🚀</div>
+</div>
+<div class="under">
+  <b>Por baixo</b>
+  <ol>
+    <li>O router diz <b>comando → imagem</b>; não há foto em jogo, por isso é gerar de raiz</li>
+    <li>O trabalho entra numa fila e corre na <b>outra placa</b>, por isso a pergunta pelo meio é
+        respondida em ~6s enquanto a imagem é feita</li>
+    <li>O pedido pendente fica escrito no histórico da conversa, para que se perguntarem “então e a
+        foto?” o bot saiba ao que se comprometeu</li>
+    <li>A imagem chega 56-128s depois, como mensagem própria</li>
+  </ol>
+</div>
+
+<h3>E. Editar a foto de alguém</h3>
+<div class="chat">
+  <div class="bubble media"><span class="who">Vasco</span>[foto] põe este gajo vestido de rei medieval</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Dá-me uns minutos que isto demora, já mando.</div>
+  <div class="bubble"><span class="who">Diogo</span>@kaya faz-me uma também</div>
+  <div class="bubble bot"><span class="who">Kaya</span>Fica em fila, tenho 1 à frente, mando assim que estiver.</div>
+</div>
+<div class="under">
+  <b>Por baixo</b>
+  <ol>
+    <li>Uma foto anexada é inequívoca: é esse o assunto, e é editada em vez de substituída</li>
+    <li>Sem anexo, usa a última foto da conversa <b>só se as palavras apontarem para ela</b>
+        (“põe-<b>lhe</b>”, “edita <b>esta</b>”). “Faz uma imagem de um gato” desenha um gato em vez de
+        editar a foto de férias de alguém</li>
+    <li>Um segundo pedido fica em fila em vez de ser recusado</li>
+    <li>Editar só funciona no grupo, não em privado, porque põe a cara de uma pessoa real numa cena
+        inventada</li>
+  </ol>
+</div>
+
+<h2><span class="sec-num">07</span>O que corre onde</h2>
+<p class="lede">Duas RTX 3090, sem NVLink: são dois dispositivos de 24GB separados, não um conjunto de
+48GB.</p>
+
+<div class="cards">
+  <div class="card"><b>GPU 1</b><span>O modelo de linguagem (~13GB) mais o Whisper e o vetorizador</span></div>
+  <div class="card"><b>GPU 0</b><span>Só geração de imagem, e só enquanto um trabalho corre</span></div>
+  <div class="card"><b>CPU</b><span>Síntese de voz com Piper, ~28× tempo real</span></div>
+</div>
+
+<p>É essa separação que faz com que a conversa sobreviva à geração de imagens: são processos
+diferentes em placas diferentes. O processo que faz imagens é de propósito um <em>subprocesso que
+termina</em>, porque uma pipeline de difusão deixada em memória não devolve a VRAM, e ficaria com uma
+placa inteira refém entre pedidos.</p>
+
+<p>Uma edição demora agora cerca do dobro do que demorava, de propósito: o modelo faz duas tentativas
+e envia aquela que mais se parece com a pessoa. Carregar os 15GB da pipeline é a maior parte do custo,
+por isso uma segunda tentativa é barata em comparação.</p>
+
+<div class="tw">
+<table>
+  <tr><th>Ação</th><th>Tempo típico</th></tr>
+  <tr><td>Resposta de conversa</td><td class="num">~5 s</td></tr>
+  <tr><td>Pergunta com pesquisa de memória</td><td class="num">7–13 s</td></tr>
+  <tr><td>Descrever uma foto</td><td class="num">~4 s</td></tr>
+  <tr><td>Quatro pessoas a perguntar ao mesmo tempo</td><td class="num">8–35 s (em fila, nenhuma perdida)</td></tr>
+  <tr><td>Gerar uma imagem</td><td class="num">56–75 s</td></tr>
+  <tr><td>Editar uma foto</td><td class="num">~180 s</td></tr>
+</table>
+</div>
+
+<h2><span class="sec-num">08</span>Limites conhecidos</h2>
+<p class="lede">Coisas verdadeiras que vale a pena saber antes de surpreenderem.</p>
+
+<p><strong>A pesquisa continua sem conseguir devolver um fio.</strong> As últimas 60 linhas ficam
+palavra por palavra e um resumo em curso cobre o que saiu antes delas, mas tudo o que for mais antigo
+tem de ser <em>encontrado</em>, e a pesquisa devolve o bloco mais próximo da pergunta em vez da
+sequência. Um facto dito de forma clara volta de forma fiável. A ordem exacta de uma discussão longa,
+três meses depois, é reconstruída a partir de um resumo em vez de citada.</p>
+
+<p><strong>O resumo é escrito pelo modelo, por isso pode estar errado.</strong> É uma compressão do
+que foi dito, não um registo. Onde a janela guardada na íntegra chega, o bot está a citar; para lá
+disso, está a parafrasear a sua própria paráfrase anterior.</p>
+
+<p><strong>Uma coisa acabada de dizer demora alguns minutos a ficar pesquisável.</strong> A ingestão
+corre de quinze em quinze minutos. Dentro da mesma conversa isto raramente se nota, porque 60 linhas
+guardadas na íntegra cobrem esse intervalo; perguntar a partir de <em>outra</em> conversa sobre algo
+acabado de dizer é onde a falha ainda se vê.</p>
+
+<p><strong>As edições de fotos mantêm a cara cerca de sete vezes em dez.</strong> Medido em 40
+edições: a semelhança de identidade fica em média nos 0,70, contra 0,46 antes de a pipeline de edição
+ser refeita, e 21 de 40 edições agora mantêm a cara <em>e</em> cumprem a instrução, contra 17 antes.
+O maior ganho foi dizer ao modelo o que <em>manter</em> em vez de só o que mudar, coisa que em
+produção nunca lhe tinha sido dita.</p>
+
+<p>Duas ressalvas honestas. Manter uma cara e obedecer a uma instrução puxam em sentidos contrários:
+a forma mais segura de preservar alguém é mal editar a foto, e a grelha contém tanto uma semelhança
+quase perfeita que ignorou o pedido como um disfarce impecável vestido por um estranho. E os corpos
+ficaram <em>piores</em> à medida que as caras ficaram melhores: a pontuação de anatomia caiu de 3,8
+para 2,8, porque escolher entre duas tentativas pela semelhança da cara favorece aquela que colou a
+cara original de forma mais literal. As fotos de grupo com várias caras continuam a ser o caso mais
+fraco.</p>
+
+<p><strong>Não é um membro do grupo.</strong> Refere-se a toda a gente na terceira pessoa e não
+inventa experiências partilhadas. Quando não sabe alguma coisa, é suposto dizê-lo em vez de adivinhar
+— de vez em quando exagera nisso e nega algo que lhe chegou mesmo a ser dito.</p>
+</div>
+
+<footer>
+  Kaya corre inteiramente numa máquina. As mensagens, fotografias e áudios do grupo nunca saem dela —
+  modelos na nuvem são usados apenas para avaliação e para pesquisas web sem nomes de ninguém.
+  <br>Kaya runs entirely on one machine. Group messages, photos and voice notes never leave it —
+  cloud models are used only for evaluation and for member-free web searches.
+</footer>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('page');
+  if (!root) return;
+  var state = { level: 'simple', lang: 'en' };
+  try {
+    var saved = JSON.parse(sessionStorage.getItem('kaya-doc') || '{}');
+    if (saved.level === 'advanced' || saved.level === 'simple') state.level = saved.level;
+    if (saved.lang === 'pt' || saved.lang === 'en') state.lang = saved.lang;
+  } catch (e) {}
+
+  function apply() {
+    root.setAttribute('data-level', state.level);
+    root.setAttribute('data-lang', state.lang);
+    var buttons = document.querySelectorAll('.seg button');
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i];
+      b.setAttribute('aria-pressed',
+        String(state[b.getAttribute('data-set')] === b.getAttribute('data-value')));
+    }
+    try { sessionStorage.setItem('kaya-doc', JSON.stringify(state)); } catch (e) {}
+  }
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest ? event.target.closest('.seg button') : null;
+    if (!button) return;
+    state[button.getAttribute('data-set')] = button.getAttribute('data-value');
+    apply();
+    // A level or language switch replaces the whole document; start at the top
+    // rather than halfway down a page the reader has not seen.
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+
+  apply();
+})();
+</script>
+
+</body>
+</html>
