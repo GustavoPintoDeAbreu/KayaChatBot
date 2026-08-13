@@ -710,13 +710,21 @@ def make_image_adapter(tmp_path, reply, imagegen_result=b"PNGDATA", **overrides)
     return adapter
 
 
-def _wait_for_image(adapter, timeout=5.0):
-    """The image is produced on a background thread; wait for it to land."""
+def _wait_for_image(adapter, timeout=5.0, count=1):
+    """Wait for ``count`` images to land, and for the queue to be done.
+
+    Both conditions, because a test that asserts on the LAST imagegen call has
+    to wait for every job — waiting only for the first image passes or fails
+    depending on how much work the scheduler got through in between.
+    """
     import time
+
+    from src.chat import imagegen
 
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if any("image_bytes" in s for s in adapter.waha_client.sent):
+        landed = sum(1 for s in adapter.waha_client.sent if "image_bytes" in s)
+        if landed >= count and imagegen.get_queue().depth == 0:
             return True
         time.sleep(0.02)
     return False
@@ -976,7 +984,7 @@ def test_last_photo_is_only_used_when_the_request_refers_to_it(tmp_path):
     adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
                          system_prompt="")
 
-    assert _wait_for_image(adapter)
+    assert _wait_for_image(adapter, count=2)
     assert adapter.imagegen_calls[-1]["mode"] == "generate"
     assert adapter.imagegen_calls[-1]["image_path"] is None
 
@@ -1770,3 +1778,54 @@ def test_a_command_quoting_something_is_still_a_command(tmp_path):
     result = adapter.handle_event(dm_event("/bug o áudio corta a meio"))
 
     assert result["logged"] is True
+
+
+# ── image requests during maintenance (2026-08-13) ───────────────────────────
+def test_a_request_during_maintenance_is_queued_with_the_wait(tmp_path):
+    """GPU0 is on loan. The request keeps its place and the wait is stated,
+    rather than acknowledged normally and delivered forty minutes later."""
+    from src.chat import imagegen
+
+    lease = tmp_path / "gpu0_lease.json"
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+    adapter.config["chat"]["imagegen"]["lease_file"] = str(lease)
+    imagegen.acquire_lease(adapter.config, "regenerating profiles", 600)
+    try:
+        result = adapter.handle_event(
+            image_group_event("faz uma imagem de um gato astronauta"), system_prompt="")
+
+        assert "manutenção" in result["reply"]
+        assert "10 min" in result["reply"]
+        assert result["queue_position"] == 1, "queued, not refused"
+    finally:
+        imagegen.release_lease(adapter.config)
+
+
+def test_the_normal_acknowledgement_returns_after_release(tmp_path):
+    from src.chat import imagegen
+
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
+    adapter.config["chat"]["imagegen"]["lease_file"] = str(tmp_path / "gpu0_lease.json")
+
+    result = adapter.handle_event(
+        image_group_event("faz uma imagem de um gato astronauta"), system_prompt="")
+
+    assert "manutenção" not in result["reply"]
+
+
+def test_the_promise_is_sent_before_the_work_starts(tmp_path):
+    """A job that fails instantly must not answer before the bot has promised.
+
+    imagegen.run returns immediately when the feature is off or an edit has no
+    source photo, so submitting before acknowledging let "não consegui" arrive
+    ahead of "vou fazer isso" — the bot replying to itself backwards.
+    """
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
+    _wait_for_text(adapter, "Não consegui")
+
+    texts = [s.get("text") or "" for s in adapter.waha_client.sent]
+    assert "Vou fazer isso" in texts[0]
+    assert "Não consegui" in texts[1]

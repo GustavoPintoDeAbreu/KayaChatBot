@@ -39,6 +39,84 @@ WORKER = BASE_DIR / "scripts" / "imagegen_worker.py"
 # runs it off the webhook thread.
 _job_lock = threading.Lock()
 
+DEFAULT_LEASE_PATH = BASE_DIR / "data" / "gpu0_lease.json"
+
+
+def lease_path(config: Dict[str, Any]) -> Path:
+    """Where the maintenance lease lives, honouring ``chat.imagegen.lease_file``."""
+    custom = _config(config).get("lease_file")
+    if not custom:
+        return DEFAULT_LEASE_PATH
+    path = Path(custom)
+    return path if path.is_absolute() else (BASE_DIR / custom)
+
+
+def read_lease(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The active maintenance lease, or None if there is none or it has expired.
+
+    Image generation is the only thing that uses GPU0 — serving, Whisper and
+    vision all live on the other card — so pausing it frees a whole 24GB while
+    the bot keeps answering. That is what makes heavy GPU work (regenerating
+    member profiles, a bake-off) possible without taking prod down.
+
+    Expiry is the safety. A crashed maintenance job cannot leave image
+    generation dead forever: the worst case is that it resumes by itself when
+    the lease runs out. A missing or unreadable file means not paused, which is
+    the right way to fail.
+    """
+    try:
+        path = lease_path(config)
+        if not path.exists():
+            return None
+        lease = json.loads(path.read_text(encoding="utf-8"))
+        if float(lease.get("expires_at", 0)) <= time.time():
+            return None
+        return lease
+    except Exception as exc:  # noqa: BLE001 — a broken lease must not stop the bot
+        logger.warning("could not read the GPU lease (%s); treating as free", exc)
+        return None
+
+
+def is_paused(config: Dict[str, Any]) -> bool:
+    return read_lease(config) is not None
+
+
+def pause_remaining(config: Dict[str, Any]) -> int:
+    """Whole minutes left on the lease, rounded up. 0 when not paused."""
+    lease = read_lease(config)
+    if not lease:
+        return 0
+    seconds = float(lease.get("expires_at", 0)) - time.time()
+    return max(1, int(seconds // 60) + (1 if seconds % 60 else 0))
+
+
+def acquire_lease(config: Dict[str, Any], reason: str, ttl_seconds: float,
+                  holder: str = "") -> Dict[str, Any]:
+    """Claim GPU0. Writes the lease; the caller still has to wait for `is_busy`."""
+    lease = {
+        "holder": holder or f"pid:{os.getpid()}",
+        "reason": reason,
+        "acquired_at": time.time(),
+        "expires_at": time.time() + float(ttl_seconds),
+    }
+    path = lease_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(lease, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return lease
+
+
+def release_lease(config: Dict[str, Any]) -> bool:
+    """Hand GPU0 back. The queue drains on its own from there."""
+    path = lease_path(config)
+    try:
+        path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        logger.warning("could not release the GPU lease: %s", exc)
+        return False
+
 
 class ImageQueue:
     """Serialises image jobs without blocking anything else.
@@ -57,12 +135,19 @@ class ImageQueue:
     no, which is honest.
     """
 
-    def __init__(self, maxsize: int = 5):
+    def __init__(self, maxsize: int = 5, config: Optional[Dict[str, Any]] = None):
         self._queue: "queue.Queue[Any]" = queue.Queue()
         self.maxsize = maxsize
         self._worker: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._depth = 0
+        # Needed only to read the maintenance lease. The queue is process-wide
+        # and built at import, before any config exists, so the first caller
+        # that has one hands it over via ``configure``.
+        self.config: Dict[str, Any] = config or {}
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        self.config = config or {}
 
     @property
     def depth(self) -> int:
@@ -85,6 +170,13 @@ class ImageQueue:
 
     def _run(self) -> None:
         while True:
+            # Checked BEFORE dequeuing, so a paused job keeps its place in the
+            # queue and `depth` stays honest for the "tenho N à frente" line.
+            # The worker must not take the exit branch below while paused with
+            # work waiting, or nothing would be left to drain on release.
+            if is_paused(self.config):
+                time.sleep(2.0)
+                continue
             try:
                 job = self._queue.get(timeout=1.0)
             except queue.Empty:

@@ -454,6 +454,10 @@ class WhatsAppAdapter:
             "image_generating": "Vou fazer isso, dá-me um bocado.",
             "image_queued": "Fica em fila, tenho {ahead} à frente, mando assim que estiver.",
             "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
+            # GPU0 is lent to a maintenance job. The request keeps its place; the
+            # wait is stated rather than discovered.
+            "image_maintenance": ("Estou em manutenção, a placa das imagens está "
+                                  "ocupada. Fica em fila, mando daqui a ~{minutes} min."),
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
             # The editor handing the photo back unchanged used to be delivered as
             # a success, and the group had to work out for itself that nothing
@@ -701,15 +705,32 @@ class WhatsAppAdapter:
         # for, refused, and never made. The queue is separate from the text path:
         # generation runs on the other GPU, so the bot keeps answering questions
         # at full speed while a picture renders.
-        position = imagegen.get_queue().submit(work)
-        if position is None:
+        queue = imagegen.get_queue()
+        queue.configure(self.config)
+
+        # The acknowledgement goes out BEFORE the job is queued. Submitting
+        # first means a job that fails instantly — the feature switched off, an
+        # edit with no source photo, both of which return without touching the
+        # GPU — can deliver "não consegui" ahead of "vou fazer isso", which
+        # reads as the bot answering itself backwards.
+        position = queue.depth + 1
+        if position > queue.maxsize:
             reply = self.command_replies.get("image_queue_full", "")
             if reply:
                 self._deliver(msg.chat_id, reply)
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                     "command": "image", "image": "queue_full"}
 
-        if position > 1:
+        waiting = imagegen.pause_remaining(self.config)
+        if waiting:
+            # GPU0 is on loan to a maintenance job. Say so with the wait, rather
+            # than acknowledging normally and delivering forty minutes later —
+            # the bounded queue exists precisely because a picture nobody still
+            # wants is worse than an honest no. If the job releases early the
+            # queue drains at once and this was merely pessimistic.
+            reply = self.command_replies.get("image_maintenance", "").format(
+                minutes=waiting)
+        elif position > 1:
             # position is 1-based, so the number of jobs AHEAD is one less —
             # saying "2 pela frente" at position 2 reads as one picture too many.
             reply = self.command_replies.get("image_queued", "").format(
@@ -727,8 +748,16 @@ class WhatsAppAdapter:
             msg.chat_id,
             f"Kaya Bot: (a preparar uma imagem, ainda não enviada — pedido: {text[:120]})")
 
+        # Only now, with the promise already sent, does the work start. A
+        # concurrent request can still have taken the last slot in the gap.
+        submitted = queue.submit(work)
+        if submitted is None:
+            self._deliver(msg.chat_id, self.command_replies.get("image_queue_full", ""))
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "command": "image", "image": "queue_full"}
+
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                "command": "image", "image": mode, "queue_position": position}
+                "command": "image", "image": mode, "queue_position": submitted}
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
