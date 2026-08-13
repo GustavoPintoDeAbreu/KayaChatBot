@@ -118,8 +118,12 @@ git clone git@github.com:GustavoPintoDeAbreu/KayaChatBot.git ~/kaya-prod
 ln -s ~/Desktop/KayaChatBot/models ~/kaya-prod/models   # share the 42GB models (symlink, no copy)
 ln -s ~/Desktop/KayaChatBot/data   ~/kaya-prod/data     # share data/rag_db
 cp  ~/Desktop/KayaChatBot/.env     ~/kaya-prod/.env     # or let CI write it from prod secrets
-sudo systemctl enable docker                            # so prod auto-starts after a reboot
+sudo systemctl enable snap.docker.dockerd                # so prod auto-starts after a reboot
 ```
+
+Docker here is the **snap** build, so the unit is `snap.docker.dockerd.service`,
+not `docker.service` — `systemctl enable docker` returns `not-found` and enables
+nothing. Check with `systemctl is-enabled snap.docker.dockerd`.
 
 ## The pipeline
 
@@ -155,10 +159,27 @@ scripts/app_status.sh              # running containers + GPU usage
 docker compose logs -f kaya-prod
 ```
 
-**Reboot recovery:** `kaya-prod` and `cloudflared` use `restart: unless-stopped`,
-so with `sudo systemctl enable docker` the site comes back automatically after a
-reboot/power-cycle — no manual step. (If the box is *off*, the site is down and
-visitors get a Cloudflare tunnel error until it's back.)
+**Reboot recovery:** all four live services — `kaya-prod`, `kaya-waha`,
+`kaya-llama` and `cloudflared` — use `restart: unless-stopped`, and
+`snap.docker.dockerd` is enabled, so the whole stack comes back on its own after
+a reboot or power cut. Measured on the 2026-08-13 boot: the daemon was up 7s
+after boot and `kaya-llama` 13s after boot, with no human involved. The WhatsApp
+session survives it — WAHA's auth lives in a volume, so there is no QR to
+re-scan. (If the box is *off*, the site is down and visitors get a Cloudflare
+tunnel error until it's back.)
+
+**The one way that breaks.** `unless-stopped` means exactly what it says: a
+container stopped *explicitly* — `docker stop`, `scripts/app_down.sh` — stays
+down through the next boot. A container stopped by the daemon during a normal
+`poweroff` does not count as explicit and comes back. So shut the box down with
+`systemctl poweroff` and leave the containers alone; do not "tidy up" with
+`docker stop` first, or the site will be dark until someone notices. Verify any
+time with:
+
+```bash
+docker inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' $(docker ps -q)
+systemctl is-enabled snap.docker.dockerd
+```
 
 **One GPU rule:** the box is serving-only and the GPU fits one model at a time.
 Running the `dev` container or fine-tuning means stopping prod first
