@@ -30,10 +30,12 @@ PROPOSALS = {
         "Rafa": {"current": ["Rafa hosts the group."],
                  "proposed": ["Rafa hosts the group.", "Rafa trains kickboxing."],
                  "added": ["Rafa trains kickboxing."], "removed": [],
-                 "new_facts": [{"fact": "Rafa trains kickboxing.", "evidence": ["m1", "m2"]}]},
+                 "new_facts": [{"fact": "Rafa trains kickboxing.", "evidence": ["m1", "m2"],
+                                "quote": "comecei kickboxing com o Mateus"}]},
         "Gil": {"current": ["Gil runs."], "proposed": ["Gil runs.", "Gil owns a dog."],
                 "added": ["Gil owns a dog."], "removed": [],
-                "new_facts": [{"fact": "Gil owns a dog.", "evidence": ["m1"]}]},
+                "new_facts": [{"fact": "Gil owns a dog.", "evidence": ["m1"],
+                               "quote": "tenho um cão novo"}]},
     },
 }
 
@@ -128,34 +130,25 @@ def test_pinning_needs_a_real_member(data):
 
 
 # ── the evidence shown ───────────────────────────────────────────────────────
-def test_the_quote_shown_is_the_relevant_one():
-    """"if you do not recognise the evidence, reject it" only works when the
-    evidence is the evidence."""
-    index = {"m1": "Rafa: comecei kickboxing com o Mateus",
-             "m2": "Gil: boas malta tudo bem"}
+def test_the_quote_is_shown_verbatim(data, capsys):
+    """The extractor now copies the supporting words out of the messages and
+    they are verified before the proposal is written, so the review shows the
+    real thing. It used to rank the chunk's messages by word overlap, which
+    handed an invented fact an unrelated line as its "evidence"."""
+    run(data, "--member", "Rafa")
 
-    quotes = review.best_quotes("Rafa trains kickboxing with Mateus.", "Rafa",
-                                ["m1", "m2"], index, 1)
-
-    assert quotes == ["Rafa: comecei kickboxing com o Mateus"]
+    assert "comecei kickboxing com o Mateus" in capsys.readouterr().out
 
 
-def test_a_single_common_word_is_not_treated_as_evidence():
-    """"many times before" matching "before" quoted an unrelated line as the
-    reason for a fact, which is worse than quoting none."""
-    index = {"m1": "Bernardo: we have seen this many times before"}
+def test_a_proposal_with_no_quote_is_flagged(data, capsys):
+    """Written before quotes were required — say so rather than showing nothing."""
+    document = json.loads((data / "bio_proposals.json").read_text(encoding="utf-8"))
+    document["proposals"]["Rafa"]["new_facts"][0].pop("quote", None)
+    (data / "bio_proposals.json").write_text(json.dumps(document), encoding="utf-8")
 
-    assert review.best_quotes("Manuel arrived in Portugal for one night before leaving.",
-                              "Manuel", ["m1"], index, 2) == []
+    run(data, "--member", "Rafa")
 
-
-def test_lines_naming_the_member_are_the_fallback():
-    """Cross-language overlap mostly fails — the facts are English and the group
-    writes Portuguese — so a line that names them is the next best guess."""
-    index = {"m1": "Gil: o Manuel chega amanhã", "m2": "Gil: alguém quer jantar?"}
-
-    assert review.best_quotes("Manuel is visiting.", "Manuel", ["m1", "m2"], index, 1) == \
-        ["Gil: o Manuel chega amanhã"]
+    assert "no quote recorded" in capsys.readouterr().out
 
 
 def test_nothing_pending_is_not_an_error(tmp_path):

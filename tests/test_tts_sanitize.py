@@ -56,3 +56,16 @@ class TestSanitizeForSpeech:
         runs = split_by_language(spoken)
         assert runs
         assert "bbc" not in " ".join(text for _, text in runs)
+
+
+def test_a_retrieval_wrapper_is_never_spoken():
+    """Second layer. clean_response strips it from the written reply; this is
+    what stands between a leak and Piper reading "Áudio enviado por Kaya Bot"
+    out loud, which is exactly what happened."""
+    from src.chat.tts import sanitize_for_speech
+
+    spoken = sanitize_for_speech(
+        "[Áudio enviado por Kaya Bot] Nem preciso de teoria para saber isso.")
+
+    assert "Áudio enviado" not in spoken
+    assert spoken.strip() == "Nem preciso de teoria para saber isso."

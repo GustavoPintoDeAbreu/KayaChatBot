@@ -50,6 +50,13 @@ _BARE_DOMAIN_RE = re.compile(
     re.IGNORECASE,
 )
 _MARKDOWN_RE = re.compile(r"\*\*|__|`+|^#{1,6}\s*|^\s*[-*+]\s+", re.MULTILINE)
+# Anywhere in the line, not just at the start: by the time a reply reaches
+# speech it has already been cleaned, so anything left is a leak worth removing
+# wherever it sits rather than a deliberate aside.
+_SCAFFOLD_RE = re.compile(
+    r"\[\s*(?:(?:á|a)udio|imagem|foto|v[íi]deo|a\s+responder\s+a)\b[^\]]*\]",
+    re.IGNORECASE,
+)
 _EMOJI_RE = re.compile(
     "["
     "\U0001F000-\U0001FAFF"
@@ -77,6 +84,12 @@ def sanitize_for_speech(text: str, citation_prefix: str = "🌐 Fontes:") -> str
         and not line.strip().lstrip("🌐 ").lower().startswith(("fontes:", "sources:"))
     ]
     out = "\n".join(kept)
+    # A retrieval wrapper the model copied out of its context — "[Áudio enviado
+    # por Kaya Bot]", "[Imagem enviada por X em DATA]". clean_response strips it
+    # from the written reply; this is the second layer, because the one time it
+    # got through, Piper read it aloud and the group filed a bug about the audio
+    # being "badly formatted".
+    out = _SCAFFOLD_RE.sub(" ", out)
     out = _URL_RE.sub(" ", out)
     out = _BARE_DOMAIN_RE.sub(" ", out)
     out = _MARKDOWN_RE.sub("", out)

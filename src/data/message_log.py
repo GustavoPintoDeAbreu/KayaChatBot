@@ -90,6 +90,8 @@ class MessageLog:
         scope: str,
         reply_to_id: str = "",
         reply_to_text: str = "",
+        sender_id: str = "",
+        sender_phone: str = "",
     ) -> bool:
         """Log one message. Returns False if it was already logged this process.
 
@@ -99,6 +101,15 @@ class MessageLog:
         outros" — unreadable to a human and an invitation to invent for anything
         extracting facts from it. Only a short excerpt is stored: the parent is
         already in this log as its own record.
+
+        ``sender_id``/``sender_phone`` are who actually sent it. Only the
+        resolved display name used to be kept, and a display name is chosen by
+        the person and shared with other people: one member was mapped to
+        another's name for weeks, and every message he sent was logged, retrieved
+        and attributed to the wrong man with no way to tell afterwards. Two
+        members answering to the same first name had the same problem. The number
+        is the identity; the name is a lookup that can be corrected later, but
+        only if the number was written down at the time.
         """
         if not text or not text.strip():
             return False
@@ -115,6 +126,10 @@ class MessageLog:
             "timestamp": int(timestamp or 0),
             "scope": scope,
         }
+        if sender_id:
+            record["sender_id"] = sender_id
+        if sender_phone:
+            record["sender_phone"] = sender_phone
         if reply_to_id or reply_to_text:
             record["reply_to_id"] = reply_to_id
             record["reply_to_text"] = reply_to_text

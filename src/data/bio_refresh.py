@@ -91,20 +91,25 @@ NEVER record:
 A fact must be supported by the messages. If a chunk contains nothing durable
 about a member, omit that member entirely. Prefer omitting to guessing.
 
+EVERY fact must be backed by a quote. Copy the supporting words from the
+messages EXACTLY as they appear, in the original language, character for
+character — do not translate, correct or shorten them. If you cannot copy a
+line that shows the fact is true, do not state the fact.
+
 Return ONLY a valid JSON object, no markdown and no explanation:
 {
   "members": {
     "MemberName": {
-      "facts": ["one short factual sentence", "another"],
-      "occupation": "job or studies, or null",
-      "living_place": "city/country, or null",
-      "interests": ["only things they actually do"]
+      "facts": [
+        {"fact": "one short factual sentence", "quote": "the exact words from a message above"}
+      ]
     }
   }
 }
 
 Write the facts in English, one clause each, naming the member explicitly
-("Rafa trains kickboxing"), so they read correctly on their own.
+("Rafa trains kickboxing"), so they read correctly on their own. The quote stays
+in whatever language it was written in.
 Only include members named in the list you are given."""
 
 DISTIL_SYSTEM = """You maintain the fact list for one member of a Portuguese friend group.
@@ -243,10 +248,10 @@ def read_new_messages(
         if not text or is_about_the_bot(text, bot_tokens):
             continue
 
-        sender = resolver.resolve(row.get("sender") or "")
+        sender = resolve_sender(row, resolver, config)
         if not resolver.is_member(sender):
-            unresolved[row.get("sender") or "?"] = unresolved.get(
-                row.get("sender") or "?", 0) + 1
+            label = row.get("sender") or "?"
+            unresolved[label] = unresolved.get(label, 0) + 1
             continue
 
         kept.append({
@@ -260,6 +265,31 @@ def read_new_messages(
         })
 
     return kept, unresolved, newest
+
+
+def resolve_sender(row: Dict[str, Any], resolver: SenderResolver,
+                   config: Dict[str, Any]) -> str:
+    """Who wrote this message. By number where one was recorded.
+
+    A phone or @lid identifies a person; a display name does not. Two members
+    answer to the same first name, and a third is known to the group by a
+    nickname while his display name is somebody else's real name — resolving by
+    name alone gets both of those wrong, silently and permanently.
+
+    Rows logged before the id was recorded fall back to the name, so the
+    existing corpus keeps working; it just cannot be repaired.
+    """
+    contacts = {str(k).strip().lower(): v
+                for k, v in ((config.get("whatsapp", {}) or {}).get("contacts") or {}).items()}
+    for identity in (row.get("sender_id"), row.get("sender_phone")):
+        key = str(identity or "").strip().lower()
+        if not key:
+            continue
+        local = key.split("@", 1)[0]
+        for candidate in (key, f"{local}@c.us", local):
+            if candidate in contacts:
+                return contacts[candidate]
+    return resolver.resolve(row.get("sender") or "")
 
 
 def member_alias_map(members: List[Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -336,9 +366,40 @@ def _parse_json(raw: str) -> Any:
         return None
 
 
+def _searchable(text: str) -> str:
+    """Text flattened for substring checking: case, spacing and punctuation out.
+
+    Deliberately forgiving about how the quote was copied, and unforgiving about
+    whether it was copied at all.
+    """
+    import re as _re
+
+    return _re.sub(r"[^\w]", "", (text or "").lower())
+
+
+def verify_quote(quote: str, haystack: str, min_chars: int = 12) -> bool:
+    """Whether a quote was really copied out of the messages.
+
+    This is the whole grounding mechanism. The refresh proposed "Bernardo lives
+    near Leipzig" and the word Leipzig appears in none of the 769 logged group
+    messages — it was invented, and the review tool then showed an unrelated
+    line as its evidence, which made it look supported. A fact that cannot point
+    at the words behind it does not get to be a fact.
+
+    A very short quote is rejected because almost any fragment appears somewhere
+    in a long chunk, and a quote that proves nothing is worse than none.
+    """
+    needle = _searchable(quote)
+    return len(needle) >= min_chars and needle in _searchable(haystack)
+
+
 def extract_facts(backend: Any, config: Dict[str, Any], messages: List[Dict[str, Any]],
-                  members: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """New durable facts per member, each carrying the messages behind it."""
+                  members: List[Dict[str, Any]]) -> Tuple[Dict[str, List[Dict[str, Any]]], int]:
+    """New durable facts per member. ``(facts, dropped)``.
+
+    Each fact carries the quote that supports it, and one that cannot be found in
+    the source messages is discarded rather than proposed.
+    """
     cfg = _config(config)
     aliases = member_alias_map(members)
     profiles = {m["name"]: m for m in members}
@@ -346,12 +407,14 @@ def extract_facts(backend: Any, config: Dict[str, Any], messages: List[Dict[str,
     max_chunks = int(cfg.get("max_chunks_per_cycle", 4))
 
     found: Dict[str, List[Dict[str, Any]]] = {}
+    dropped = 0
     for chunk in chunk_messages(messages, chunk_words)[:max_chunks]:
         mentioned = get_mentioned_members(chunk, aliases)
         if not mentioned:
             continue
+        transcript = format_chunk_for_prompt(chunk)
         prompt = build_extraction_prompt(
-            format_chunk_for_prompt(chunk), profiles, mentioned,
+            transcript, profiles, mentioned,
             ["name", "occupation", "living_place", "interests"])
         parsed = _parse_json(
             _generate(backend, config, DURABLE_FACTS_SYSTEM, prompt,
@@ -364,11 +427,22 @@ def extract_facts(backend: Any, config: Dict[str, Any], messages: List[Dict[str,
         for name, payload in (parsed.get("members") or {}).items():
             if name not in profiles or not isinstance(payload, dict):
                 continue
-            for fact in (payload.get("facts") or []):
-                if isinstance(fact, str) and fact.strip():
-                    found.setdefault(name, []).append(
-                        {"fact": fact.strip(), "evidence": evidence})
-    return found
+            for entry in (payload.get("facts") or []):
+                # Tolerate the older shape (a bare string), but a fact with no
+                # quote cannot be verified and so cannot be kept.
+                fact = (entry.get("fact") if isinstance(entry, dict) else entry) or ""
+                quote = entry.get("quote", "") if isinstance(entry, dict) else ""
+                if not str(fact).strip():
+                    continue
+                if not verify_quote(str(quote), transcript):
+                    dropped += 1
+                    logger.info("dropped an unsupported fact about %s: %r (quote %r)",
+                                name, str(fact)[:80], str(quote)[:60])
+                    continue
+                found.setdefault(name, []).append(
+                    {"fact": str(fact).strip(), "quote": str(quote).strip(),
+                     "evidence": evidence})
+    return found, dropped
 
 
 def distil_key_facts(backend: Any, config: Dict[str, Any], member: Dict[str, Any],
@@ -450,6 +524,7 @@ def run_cycle(config: Dict[str, Any], backend: Any,
     report: Dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "messages_read": 0, "unresolved_senders": {}, "proposals": {}, "skipped": "",
+        "unsupported_dropped": 0,
     }
 
     try:
@@ -460,7 +535,8 @@ def run_cycle(config: Dict[str, Any], backend: Any,
             report["skipped"] = "nothing new"
             return report
 
-        new_facts = extract_facts(backend, config, messages, members)
+        new_facts, dropped = extract_facts(backend, config, messages, members)
+        report["unsupported_dropped"] = dropped
         # How many facts are STORED, which is not how many are shown. The prompt
         # cap (rag.max_facts_per_member) is applied at injection time by
         # build_member_prompt_suffix, so distilling down to it would make every
@@ -499,8 +575,9 @@ def run_cycle(config: Dict[str, Any], backend: Any,
     _write_proposals(config, report, proposals_path)
     state.advance(newest, len(report["proposals"]))
     report["seconds"] = round(time.time() - started, 1)
-    logger.info("bio refresh: %d msg, %d proposal(s), %.0fs",
-                report["messages_read"], len(report["proposals"]), time.time() - started)
+    logger.info("bio refresh: %d msg, %d proposal(s), %d unsupported dropped, %.0fs",
+                report["messages_read"], len(report["proposals"]),
+                report["unsupported_dropped"], time.time() - started)
     return report
 
 

@@ -312,6 +312,14 @@ def strip_clause_dashes(text: str) -> str:
     return re.sub(r"\s+,", ",", "\n".join(out))
 
 
+# Retrieval scaffolding, as the corpus and the prompt render it. Anchored to the
+# start: a bracketed aside mid-sentence is the model's own writing, not a leak.
+_RETRIEVAL_SCAFFOLD = re.compile(
+    r"^\s*\[\s*(?:(?:á|a)udio|imagem|foto|v[íi]deo|a\s+responder\s+a)\b[^\]]*\]\s*",
+    re.IGNORECASE,
+)
+
+
 def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str:
     """Clean a raw generated response.
 
@@ -350,6 +358,14 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
         cleaned,
         flags=re.IGNORECASE,
     )
+
+    # 1d. Drop a retrieval wrapper the model copied out of its own context.
+    #     The corpus renders past media as "[Áudio enviado por X em DATA] …"
+    #     (see scripts/ingest_media.py) and replies as "[a responder a X: …]".
+    #     Those are scaffolding for the model to read, never something to say —
+    #     and a voice reply beginning "[Áudio enviado por Kaya Bot]" was read out
+    #     loud, word for word, by Piper.
+    cleaned = _RETRIEVAL_SCAFFOLD.sub("", cleaned).lstrip()
 
     # 1c. Drop a leading meta-narration leak ("A <user> está a tentar…", "o bot…").
     cleaned = _strip_meta_narration(cleaned, user_name)
@@ -420,7 +436,10 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
     intro = (
         "\n\nO que sabes sobre cada membro do grupo Kaya (usa isto para responder, "
         "incluindo palpites e avaliações sobre o grupo; fala deles de forma natural, "
-        "não como uma lista formatada):\n"
+        "não como uma lista formatada). Cada facto pertence à pessoa na cuja linha "
+        "está e a mais ninguém: nunca atribuas a alguém um facto que está listado "
+        "noutra pessoa. Se não souberes algo sobre quem te perguntam, di-lo, em vez "
+        "de usares o que sabes de outro membro:\n"
     )
     # The roster has to state that it is complete. Asked "a que Kaya-Avenger devo
     # ligar?", the bot answered "liga à Mel" — Mel is not in the group and never

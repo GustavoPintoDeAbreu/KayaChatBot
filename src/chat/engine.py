@@ -270,6 +270,17 @@ class KayaEngine:
             max_words = int(self._inf.get("history_max_words", 40))
             trimmed = [truncate_history_line(line, max_words) for line in recent_lines]
             parts.append("Conversa recente:\n" + "\n".join(trimmed))
+        # Who is writing, said outright. In a group every history line looks like
+        # "Nome: texto", so a final line in the same shape is a weak signal — and
+        # it failed: asked "why he roasting ME in my iq guess", the bot carried on
+        # working through the member list and answered about somebody else
+        # entirely instead of resolving "me" to the person who had just written.
+        if speaker_label and speaker_label != "User":
+            parts.append(
+                f"Quem está a escrever agora é o {speaker_label}. "
+                f'"eu", "me", "mim" e "meu" nesta mensagem referem-se ao '
+                f"{speaker_label}."
+            )
         parts.append(f"{speaker_label}: {message}")
         return "\n\n".join(parts), context
 
