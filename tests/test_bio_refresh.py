@@ -434,3 +434,36 @@ def test_punctuation_and_case_do_not_break_a_real_quote():
     assert bio_refresh.verify_quote(
         "Eu vou me inscrever, amanha no JIU JITSU!",
         "[t] Bernardo: eu vou me inscrever amanha no jiu jitsu") is True
+
+
+# ── a capped cycle must not consume what it did not read (2026-08-14) ───────
+def test_the_watermark_stops_where_extraction_stopped(workspace):
+    """max_chunks_per_cycle is a cost ceiling, not a licence to discard. The
+    watermark advanced past EVERYTHING read, so on a backlog larger than the cap
+    the remainder was marked processed and never extracted from — 700 messages
+    read, four chunks used, the rest gone. ingest.build_chunks returns
+    consumed_through for exactly this reason."""
+    rows = [msg(f"m{n}", "Rafa", f"o Rafa anda a treinar kickboxing numero {n}",
+                ts=1000 + n) for n in range(60)]
+    write_log(workspace, rows)
+
+    run(workspace, ScriptedBackend(EXTRACTION, DISTIL),
+        max_chunks_per_cycle=1, chunk_size_words=20)
+
+    watermark = bio_refresh.BioRefreshState(str(workspace / "state.json")).watermark
+    assert watermark < rows[-1]["timestamp"], \
+        "a capped cycle marked messages it never extracted from as read"
+
+
+def test_the_next_cycle_picks_up_where_the_last_one_stopped(workspace):
+    rows = [msg(f"m{n}", "Rafa", f"o Rafa anda a treinar kickboxing numero {n}",
+                ts=1000 + n) for n in range(60)]
+    write_log(workspace, rows)
+    run(workspace, ScriptedBackend(EXTRACTION, DISTIL),
+        max_chunks_per_cycle=1, chunk_size_words=20)
+    first = bio_refresh.BioRefreshState(str(workspace / "state.json")).watermark
+
+    run(workspace, ScriptedBackend(EXTRACTION, DISTIL),
+        max_chunks_per_cycle=1, chunk_size_words=20)
+
+    assert bio_refresh.BioRefreshState(str(workspace / "state.json")).watermark > first

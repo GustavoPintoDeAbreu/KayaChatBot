@@ -366,6 +366,16 @@ def _parse_json(raw: str) -> Any:
         return None
 
 
+def _ts(message: Dict[str, Any]) -> int:
+    """Unix seconds for a message that read_new_messages has already ISO-ified."""
+    from datetime import datetime as _dt
+
+    try:
+        return int(_dt.fromisoformat(str(message.get("timestamp"))).timestamp())
+    except (TypeError, ValueError):
+        return 0
+
+
 def _searchable(text: str) -> str:
     """Text flattened for substring checking: case, spacing and punctuation out.
 
@@ -408,7 +418,16 @@ def extract_facts(backend: Any, config: Dict[str, Any], messages: List[Dict[str,
 
     found: Dict[str, List[Dict[str, Any]]] = {}
     dropped = 0
+    consumed_through = 0
     for chunk in chunk_messages(messages, chunk_words)[:max_chunks]:
+        # How far the caller may advance its watermark. Everything READ used to
+        # count, so on a backlog larger than max_chunks the rest was consumed and
+        # thrown away: the messages were marked as processed and never extracted
+        # from. ingest.build_chunks solves the same problem the same way.
+        consumed_through = max(
+            consumed_through,
+            max(_ts(m) for m in chunk) if chunk else 0,
+        )
         mentioned = get_mentioned_members(chunk, aliases)
         if not mentioned:
             continue
@@ -442,7 +461,7 @@ def extract_facts(backend: Any, config: Dict[str, Any], messages: List[Dict[str,
                 found.setdefault(name, []).append(
                     {"fact": str(fact).strip(), "quote": str(quote).strip(),
                      "evidence": evidence})
-    return found, dropped
+    return found, dropped, consumed_through
 
 
 def distil_key_facts(backend: Any, config: Dict[str, Any], member: Dict[str, Any],
@@ -535,8 +554,13 @@ def run_cycle(config: Dict[str, Any], backend: Any,
             report["skipped"] = "nothing new"
             return report
 
-        new_facts, dropped = extract_facts(backend, config, messages, members)
+        new_facts, dropped, consumed_through = extract_facts(
+            backend, config, messages, members)
         report["unsupported_dropped"] = dropped
+        # Only advance through what was actually extracted from. A cycle capped
+        # at max_chunks_per_cycle leaves the rest for next time instead of
+        # marking it read.
+        newest = consumed_through or newest
         # How many facts are STORED, which is not how many are shown. The prompt
         # cap (rag.max_facts_per_member) is applied at injection time by
         # build_member_prompt_suffix, so distilling down to it would make every
