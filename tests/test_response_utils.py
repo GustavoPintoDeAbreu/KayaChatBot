@@ -303,3 +303,41 @@ def test_the_member_details_are_still_there():
 
 def test_no_members_means_no_suffix():
     assert build_member_prompt_suffix({"members": []}) == ""
+
+
+# ── how much there is about each member (2026-08-13) ─────────────────────────
+UNEVEN = {"members": [
+    {"name": "Gil", "aliases": [], "key_facts": [f"Gil facto {n}." for n in range(6)]},
+    {"name": "Murgeiro", "aliases": [], "key_facts": ["Murgeiro facto único."]},
+]}
+
+
+def test_key_facts_can_be_capped_per_member():
+    """Shuffling fixed WHICH member is listed first, not how much there is about
+    each. "Pick someone" resolves to whoever the prompt has most material on."""
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=4)
+
+    assert "Gil facto 3" in suffix
+    assert "Gil facto 4" not in suffix
+    assert "Gil facto 5" not in suffix
+
+
+def test_a_thin_profile_is_untouched_by_the_cap():
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=4)
+
+    assert "Murgeiro facto único" in suffix
+
+
+def test_no_cap_keeps_every_fact():
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=0)
+
+    assert "Gil facto 5" in suffix
+
+
+def test_profiles_are_framed_as_history_not_as_now():
+    """Challenged on the "ladies man" label, the bot explained it was "um título
+    honorífico que ficou registado" — accurate about the data, and a bad way to
+    talk about people. The facts carry no dates, so the framing has to."""
+    suffix = build_member_prompt_suffix(UNEVEN)
+
+    assert "não uma fotografia de agora" in suffix

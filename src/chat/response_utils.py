@@ -366,7 +366,8 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
     return strip_clause_dashes("\n".join(kept_lines).strip())
 
 
-def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str:
+def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
+                               max_facts: int = 0) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -381,6 +382,12 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
     this so no single member is always listed first (the early/first-mention slot
     gets disproportionate model attention, which fed the "favours one member" bias);
     deterministic callers (benchmark, training-data generation) leave it False.
+
+    ``max_facts`` caps how many key_facts each member contributes, because
+    shuffling only fixed the ORDER, not the amount. The profiles are wildly
+    uneven — 6 facts for the most-discussed member down to 1 for the quietest —
+    and "pick someone from the group" reliably resolves to whoever the prompt
+    has the most material about. 0 means no cap (the previous behaviour).
     """
     members = list(members_data.get("members", []))
     if shuffle:
@@ -394,6 +401,8 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
             line += f" (também lhe chamam {', '.join(aliases)})"
 
         key_facts = member.get("key_facts") or []
+        if max_facts > 0:
+            key_facts = key_facts[:max_facts]
         notes = member.get("notes", "")
         if key_facts:
             line += ": " + " ".join(
@@ -423,5 +432,15 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
         "Mais ninguém é do grupo. Se aparecer outro nome nas conversas é alguém de "
         "fora, e nunca o deves tratar como membro. Não inventes membros que não "
         "estejam nesta lista."
+        # These facts are accumulated over years of chat and carry no dates, so
+        # the model presents all of them as current. Challenged on calling
+        # somebody the group's "ladies man", it answered that the label was "um
+        # título honorífico que ficou registado na memória coletiva" — which is
+        # an accurate description of the data and a bad way to talk about people.
+        "\n\nEstes perfis são o acumulado de anos de conversa, não uma fotografia "
+        "de agora. Uma etiqueta antiga pode já não valer: se só a viste em "
+        "conversas antigas, trata-a como história (\"durante uns tempos foi...\") "
+        "em vez de a apresentares como o que a pessoa é hoje, e dá prioridade ao "
+        "que aparece nas conversas recentes."
     )
     return intro + "\n".join(lines) + closing

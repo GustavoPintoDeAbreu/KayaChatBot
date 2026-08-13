@@ -121,7 +121,9 @@ def build_system_prompt(
             members_path = Path(config_path).parent / members_file
         if members_path.exists():
             members_data = json.loads(members_path.read_text(encoding="utf-8"))
-            system_prompt += build_member_prompt_suffix(members_data, shuffle=True)
+            system_prompt += build_member_prompt_suffix(
+                members_data, shuffle=True,
+                max_facts=int((config.get("rag", {}) or {}).get("max_facts_per_member", 0)))
 
     system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
     return system_prompt

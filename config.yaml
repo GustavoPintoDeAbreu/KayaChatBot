@@ -761,6 +761,19 @@ rag:
   # fast enough; the model itself is good to ~27k.
   max_context_tokens: 14000
 
+  # How many key_facts each member contributes to the system prompt. 0 = all.
+  #
+  # Shuffling the member order fixed WHICH member is listed first, but not how
+  # much there is about each: the profiles run from 6 facts (503 chars) for the
+  # most-discussed member down to 1 (99 chars) for the quietest. "Pick someone
+  # from the group" then reliably resolves to whoever the prompt has the most
+  # material about, which is how one member ended up in 29.4% of every mention
+  # the bot made over the first group session against an 8% even split.
+  #
+  # A cap narrows the gap; it cannot close it, because the thin profiles need
+  # regenerating (generate_knowledge_base.py, which wants the GPU).
+  max_facts_per_member: 4
+
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true
 
