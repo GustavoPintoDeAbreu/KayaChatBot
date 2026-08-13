@@ -807,6 +807,44 @@ rag:
     collection_name: "kaya_knowledge_base"
     top_k: 2  # Fewer than conversation chunks — facts are dense (truncated to 3 sentences per chunk)
 
+# Keeping member biographies current (src/data/bio_refresh.py).
+#
+# group_members.json was generated once and froze, so the bot describes people
+# by what they were talking about last July. This reads what the group has
+# actually been saying and PROPOSES updates to key_facts — the field the system
+# prompt injects, which until now nothing wrote.
+#
+# It never edits a profile. A cycle writes proposals and scripts/review_bios.py
+# is where a person accepts them: these are statements about real people,
+# produced by a model, and the group reads them back in the bot's answers.
+#
+# Only the shared group is read. A profile reaches every chat, so a fact learned
+# in a DM would become group-readable — see src/chat/scope.py.
+bio_refresh:
+  enabled: true
+  # A busy two hours is ~100 messages, roughly one chunk plus a call per member
+  # touched. Generation goes to the llama-server already serving, taking the GPU
+  # lock per call and skipping on GpuBusyError, so a cycle cannot delay a reply.
+  interval_minutes: 120
+  # False deliberately: a restart must not spend GPU on backlog while the group
+  # is mid-conversation. The next scheduled cycle picks it up.
+  on_boot: false
+  lock_timeout_seconds: 20
+  # Cost ceiling per cycle. The first run over a 586-message backlog took ~90s
+  # at 3 chunks; a normal cycle is one.
+  max_chunks_per_cycle: 4
+  chunk_size_words: 1200
+  # How many facts are STORED, which is not how many are shown:
+  # rag.max_facts_per_member caps what reaches the prompt and is applied at
+  # injection. Distilling down to that made every accepted proposal delete
+  # history — a member went from six facts to four. Store generously, inject
+  # narrowly.
+  max_key_facts: 8
+  extract_max_new_tokens: 900
+  distil_max_new_tokens: 500
+  state_file: "data/bio_refresh_state.json"
+  proposals_file: "data/bio_proposals.json"
+
 # Benchmark Settings
 benchmark:
   scenarios_per_config: 10  # number of test scenarios per configuration

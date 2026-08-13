@@ -330,3 +330,51 @@ def test_storage_is_wider_than_the_prompt_shows(workspace):
     report = run(workspace, ScriptedBackend(EXTRACTION, many))
 
     assert len(report["proposals"]["Rafa"]["proposed"]) == 8
+
+
+# ── the scheduler is wired (2026-08-13) ──────────────────────────────────────
+# whatsapp_server cannot be imported here: it builds the engine at module scope,
+# which loads the model. Parsed from source, like tests/test_landing_page.py —
+# enough to catch the regression that matters, a scheduler defined and never
+# started.
+SERVER = Path(__file__).parent.parent / "src" / "chat" / "whatsapp_server.py"
+
+
+@pytest.fixture(scope="module")
+def server_source():
+    return SERVER.read_text(encoding="utf-8")
+
+
+def test_the_scheduler_is_actually_started(server_source):
+    assert "def _start_bio_scheduler" in server_source
+    assert "    _start_bio_scheduler()" in server_source
+
+
+def test_the_scheduler_is_off_unless_enabled(server_source):
+    body = server_source.split("def _start_bio_scheduler", 1)[1].split("\ndef ", 1)[0]
+    assert 'bcfg.get("enabled", False)' in body
+    assert "return" in body
+
+
+def test_it_runs_on_a_daemon_thread(server_source):
+    """Never at message time: a refresh must not sit between a message and its
+    reply, and must not keep the process alive on shutdown."""
+    body = server_source.split("def _start_bio_scheduler", 1)[1].split("\ndef ", 1)[0]
+    assert "daemon=True" in body
+
+
+def test_a_failed_cycle_cannot_take_the_bot_down(server_source):
+    body = server_source.split("def _start_bio_scheduler", 1)[1].split("\ndef ", 1)[0]
+    assert "except Exception" in body
+
+
+def test_the_shipped_config_proposes_rather_than_writes():
+    """There is no switch that makes it write profiles directly, and the review
+    command is named where somebody will see it."""
+    import yaml
+
+    config = yaml.safe_load(
+        (Path(__file__).parent.parent / "config.yaml").read_text(encoding="utf-8"))
+
+    assert config["bio_refresh"]["on_boot"] is False
+    assert config["bio_refresh"]["max_key_facts"] > config["rag"]["max_facts_per_member"]
