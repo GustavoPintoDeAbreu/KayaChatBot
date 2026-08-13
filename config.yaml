@@ -74,10 +74,22 @@ data:
   # Data split (consumed by merge_datasets.py)
   train_test_split: 0.9  # 90% train, 10% validation
   
-  # Manual sender-name overrides for raw WhatsApp sender strings that cannot
-  # be resolved automatically by token matching.
-  # Key: exact raw sender name (case-sensitive).
+  # Manual sender-name overrides for raw WhatsApp sender strings that token
+  # matching cannot resolve. Key: exact raw sender name (case-sensitive).
   # Value: canonical member name (must match a name in group_members.json).
+  #
+  # A display name is whatever the person set it to, and two shapes defeat the
+  # resolver. One is a handle or username: a single token matching no alias, so
+  # the sender resolves to nobody and their messages are invisible to
+  # person-filtered retrieval. The other is a name whose tokens each match a
+  # DIFFERENT member (a first name that is one member plus a surname that is
+  # another member's nickname); the resolver refuses to guess between two real
+  # people, which is correct, and only an exact override can settle it.
+  #
+  # The overrides themselves live in the gitignored
+  # data/whatsapp_sender_aliases.json — shape {"aliases": {"<raw>": "<member>"}},
+  # merged in by load_config — because a display name is an identifier and
+  # belongs with the contacts and the whitelist rather than in a tracked file.
   sender_aliases: {}
 
   # Persona settings

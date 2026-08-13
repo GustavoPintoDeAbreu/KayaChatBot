@@ -15,6 +15,7 @@ Usage::
     config = load_config(profile_override="gemma4-e4b")  # override profile at runtime
 """
 
+import json
 import copy
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -63,6 +64,8 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
     with open(path, "r", encoding="utf-8") as fh:
         config = yaml.safe_load(fh)
 
+    _merge_sender_aliases(config, Path(path).parent)
+
     # Determine which profile to activate.
     # profile_override="" means "no profile, use top-level values".
     if profile_override is not None:
@@ -92,6 +95,31 @@ def load_config(path: Optional[str] = None, profile_override: Optional[str] = No
 
     _validate_config(config)
     return config
+
+
+def _merge_sender_aliases(config: Dict[str, Any], base_dir: Path) -> None:
+    """Fold gitignored display-name overrides into ``data.sender_aliases``.
+
+    A WhatsApp display name is an identifier, so it belongs with the contacts
+    and the whitelist rather than in a tracked config file — the same reason
+    ``data/whatsapp_shared_chats.json`` exists. ``config.yaml`` keeps the empty
+    key and the explanation of what the mechanism is for; the real names live in
+    ``data/whatsapp_sender_aliases.json``.
+
+    Merged here rather than in the WhatsApp bridge because both the live bot and
+    the extraction pipeline resolve senders, and they must agree on who somebody
+    is. A missing or unreadable file simply means no overrides.
+    """
+    path = base_dir / "data" / "whatsapp_sender_aliases.json"
+    if not path.exists():
+        return
+    try:
+        overrides = json.loads(path.read_text(encoding="utf-8")).get("aliases", {})
+    except (OSError, ValueError) as exc:
+        print(f"⚠️  Could not read {path}: {exc}")
+        return
+    section = config.setdefault("data", {})
+    section["sender_aliases"] = {**(section.get("sender_aliases") or {}), **overrides}
 
 
 def _validate_config(config: Dict[str, Any]) -> None:
