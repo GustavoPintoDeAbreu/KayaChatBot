@@ -882,10 +882,28 @@ class WhatsAppAdapter:
         return f"[{label}: \"{body}\"]"
 
     def _learn_contact(self, candidates, name: str) -> None:
-        """Remember phone -> member name, persisting so it survives a restart."""
+        """Remember phone -> member name, persisting so it survives a restart.
+
+        A learned mapping is a GUESS: it comes from the sender's display name,
+        which the person chooses and which two people can share. One member is
+        known to the group by a nickname while his display name is another
+        member's actual name, so this quietly learned him as that other member
+        and every message he sent was attributed to the wrong man for weeks.
+
+        It still learns — that is how most of the file got populated — but a
+        newly learned name that ALREADY belongs to a different id is the smell,
+        and it is now said out loud. Two ids for one member is normal (a phone
+        and a @lid); two *people* behind one member is the failure.
+        """
         key = next((c for c in candidates if c), None)
         if not key or key in self.contacts:
             return
+        existing_ids = [i for i, n in self.contacts.items() if n == name and i != key]
+        if existing_ids:
+            print(f"⚠️  learned {key} -> {name} from a display name, but {name} is "
+                  f"already {', '.join(existing_ids)}. If this is a different "
+                  f"person they need their own entry — check with "
+                  f"scripts/map_senders.py.")
         self.contacts[key] = name
         if not self._contacts_path:
             return
@@ -1074,6 +1092,9 @@ class WhatsAppAdapter:
                 reply_to_id=msg.reply_to_id,
                 reply_to_text=truncate_history_line(
                     msg.quoted_text.strip(), self.quoted_max_words),
+                # Who actually sent it, not just what they are currently called.
+                sender_id=msg.sender_id,
+                sender_phone=msg.sender_phone,
             )
 
         self._note_photo(msg)

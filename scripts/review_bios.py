@@ -55,86 +55,7 @@ def load_json(path: Path, default: Any) -> Any:
         return default
 
 
-def evidence_index(directory: Path) -> Dict[str, str]:
-    """message id -> "Sender: text", for showing WHY a fact was proposed."""
-    index: Dict[str, str] = {}
-    log = directory / "live_messages" / "shared.jsonl"
-    if not log.exists():
-        return index
-    try:
-        with open(log, "r", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if row.get("id"):
-                    index[row["id"]] = f"{row.get('sender', '?')}: {row.get('text', '')}"
-    except OSError:
-        pass
-    return index
-
-
-_STOPWORDS = frozenset(
-    "the a an and or of to in is are was were for on at with que de da do e o as os um uma "
-    "no na nos nas para com por se lhe ele ela isso este esta muito mais já não sim".split()
-)
-
-
-def best_quotes(fact: str, member: str, ids: List[str], index: Dict[str, str],
-                limit: int) -> List[str]:
-    """The messages most likely to be the reason for this fact.
-
-    A proposal carries every message id in the chunk it came from, which is a
-    whole conversation. Showing the first few of those is showing nothing — the
-    reviewer needs the lines that actually mention the thing. Ranked by word
-    overlap with the fact, with the member's own messages preferred, because "if
-    you do not recognise the evidence, reject it" only works when the evidence
-    is the evidence.
-    """
-    wanted = {w for w in _tokens(fact) if w not in _STOPWORDS and len(w) > 3}
-    wanted.discard(member.lower())
-
-    scored, about, own = [], [], []
-    for mid in ids:
-        line = index.get(mid)
-        if not line:
-            continue
-        speaker, _, body = line.partition(": ")
-        mine = speaker.strip() == member
-        overlap = len(wanted & set(_tokens(body)))
-        # Two content words, not one: a single match is usually an ordinary word
-        # the stopword list happens not to carry ("before", "many"), and quoting
-        # an unrelated line as the reason for a fact is worse than quoting none.
-        if overlap >= 2 or (overlap and mine):
-            scored.append((overlap + (1 if mine else 0), line))
-        elif member.lower() in body.lower():
-            about.append(line)
-        elif mine:
-            own.append(line)
-
-    scored.sort(key=lambda row: -row[0])
-    # The facts are written in English and the group writes Portuguese, so word
-    # overlap catches proper nouns and numbers and little else. Falling back to
-    # lines that NAME the member, then to lines they wrote themselves, is a far
-    # better guess than the first lines of a conversation about something else.
-    lines: List[str] = []
-    for pool in ([line for _, line in scored], about, own):
-        for line in pool:
-            if len(lines) >= limit:
-                return lines
-            if line not in lines:
-                lines.append(line)
-    return lines
-
-
-def _tokens(text: str) -> set:
-    import re
-
-    return set(re.sub(r"[^\w\s]", " ", (text or "").lower()).split())
-
-
-def show(name: str, proposal: Dict[str, Any], index: Dict[str, str], quotes: int) -> None:
+def show(name: str, proposal: Dict[str, Any]) -> None:
     current = proposal.get("current") or []
     proposed = proposal.get("proposed") or []
     added = set(proposal.get("added") or [])
@@ -154,18 +75,17 @@ def show(name: str, proposal: Dict[str, Any], index: Dict[str, str], quotes: int
         if entry.get("fact") not in added or entry.get("fact") in seen:
             continue
         seen.add(entry["fact"])
-        lines = best_quotes(entry["fact"], name, entry.get("evidence") or [],
-                            index, quotes)
         print(f"   {DIM}why: {entry['fact']}{OFF}")
-        if lines:
-            for line in lines:
-                print(f"     {DIM}| {line[:110]}{OFF}")
+        # The quote the extractor copied out of the messages, already verified
+        # to be there. This used to be guessed by ranking the chunk's messages
+        # on word overlap, which meant an invented fact was handed an unrelated
+        # line as its "evidence" and looked supported.
+        quote = (entry.get("quote") or "").strip()
+        if quote:
+            print(f"     {DIM}| {quote[:150]}{OFF}")
         else:
-            # Said out loud rather than left blank. A fact with nothing behind it
-            # is the model elaborating on the profile it was shown, and it is the
-            # one to reject — but only if the reviewer can see that it is one.
-            print(f"     {RED}| nothing in these messages supports this — "
-                  f"check it{OFF}")
+            print(f"     {RED}| no quote recorded — proposed before quotes were "
+                  f"required, treat with suspicion{OFF}")
 
 
 def snapshot(members_path: Path) -> Path:
@@ -210,8 +130,6 @@ def main() -> int:
     parser.add_argument("--reject", default="", metavar="NAME|all")
     parser.add_argument("--pin", default="", metavar="FACT",
                         help="with --member: keep this fact through every future refresh")
-    parser.add_argument("--quotes", type=int, default=2,
-                        help="messages shown per proposed fact (default 2)")
     args = parser.parse_args()
 
     directory = data_dir(args.data_dir)
@@ -284,11 +202,10 @@ def main() -> int:
     if not proposals:
         print(f"nothing pending in {proposals_path}")
     else:
-        index = evidence_index(directory)
         for name, proposal in proposals.items():
             if args.member and name != args.member:
                 continue
-            show(name, proposal, index, args.quotes)
+            show(name, proposal)
         print(f"\n{len(proposals)} member(s) pending. "
               f"--accept <name>|all, --reject <name>|all")
 

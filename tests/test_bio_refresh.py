@@ -159,7 +159,10 @@ def test_the_watermark_stops_a_message_being_read_twice(workspace):
 
 
 # ── the cycle ────────────────────────────────────────────────────────────────
-EXTRACTION = json.dumps({"members": {"Rafa": {"facts": ["Rafa trains kickboxing."]}}})
+# A fact now has to carry the words it came from, and they have to be in the
+# chunk — see verify_quote.
+EXTRACTION = json.dumps({"members": {"Rafa": {"facts": [
+    {"fact": "Rafa trains kickboxing.", "quote": "o Rafa anda a treinar kickboxing"}]}}})
 DISTIL = json.dumps(["Rafa trains kickboxing.", "Rafa hosts the group."])
 
 
@@ -183,6 +186,8 @@ def test_the_proposal_carries_the_messages_behind_it(workspace):
     report = run(workspace, ScriptedBackend(EXTRACTION, DISTIL))
 
     assert report["proposals"]["Rafa"]["new_facts"][0]["evidence"] == ["m1"]
+    assert report["proposals"]["Rafa"]["new_facts"][0]["quote"] == \
+        "o Rafa anda a treinar kickboxing"
 
 
 def test_proposals_are_written_to_disk(workspace):
@@ -196,12 +201,13 @@ def test_proposals_are_written_to_disk(workspace):
 
 def test_a_second_cycle_does_not_discard_the_first(workspace):
     """Review happens when somebody gets round to it."""
-    write_log(workspace, [msg("m1", "Rafa", "o Rafa treina kickboxing", ts=1000)])
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing", ts=1000)])
     run(workspace, ScriptedBackend(EXTRACTION, DISTIL))
 
     write_log(workspace, [msg("m2", "Gil", "o Gil mudou-se para Lisboa", ts=2000)])
     run(workspace, ScriptedBackend(
-        json.dumps({"members": {"Gil": {"facts": ["Gil moved to Lisbon."]}}}),
+        json.dumps({"members": {"Gil": {"facts": [
+            {"fact": "Gil moved to Lisbon.", "quote": "o Gil mudou-se para Lisboa"}]}}}),
         json.dumps(["Gil moved to Lisbon."])))
 
     saved = json.loads((workspace / "proposals.json").read_text(encoding="utf-8"))
@@ -324,7 +330,7 @@ def test_storage_is_wider_than_the_prompt_shows(workspace):
     """rag.max_facts_per_member caps what the PROMPT shows and is applied at
     injection. Distilling to it would make every accepted proposal delete
     history — the first dry run cut a member from six facts to four."""
-    write_log(workspace, [msg("m1", "Rafa", "o Rafa treina kickboxing")])
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing")])
     many = json.dumps([f"Rafa fact {n}." for n in range(9)])
 
     report = run(workspace, ScriptedBackend(EXTRACTION, many))
@@ -378,3 +384,53 @@ def test_the_shipped_config_proposes_rather_than_writes():
 
     assert config["bio_refresh"]["on_boot"] is False
     assert config["bio_refresh"]["max_key_facts"] > config["rag"]["max_facts_per_member"]
+
+
+# ── grounding: a fact must point at the words behind it (2026-08-13) ─────────
+def test_a_fact_whose_quote_is_absent_is_dropped(workspace):
+    """The refresh proposed "Bernardo lives near Leipzig" and the word appears
+    in none of the 769 logged messages. It was invented, and the review then
+    showed an unrelated line as its evidence, which made it look supported."""
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing")])
+    invented = json.dumps({"members": {"Rafa": {"facts": [
+        {"fact": "Rafa lives near Leipzig.", "quote": "o Rafa mora perto de Leipzig"}]}}})
+
+    report = run(workspace, ScriptedBackend(invented))
+
+    assert report["proposals"] == {}
+    assert report["unsupported_dropped"] == 1
+
+
+def test_a_supported_fact_survives_alongside_an_invented_one(workspace):
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing")])
+    mixed = json.dumps({"members": {"Rafa": {"facts": [
+        {"fact": "Rafa lives near Leipzig.", "quote": "mora perto de Leipzig"},
+        {"fact": "Rafa trains kickboxing.", "quote": "o Rafa anda a treinar kickboxing"}]}}})
+
+    report = run(workspace, ScriptedBackend(mixed, DISTIL))
+
+    assert report["proposals"]["Rafa"]["added"] == ["Rafa trains kickboxing."]
+    assert report["unsupported_dropped"] == 1
+
+
+def test_a_fact_with_no_quote_at_all_is_dropped(workspace):
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing")])
+    bare = json.dumps({"members": {"Rafa": {"facts": ["Rafa trains kickboxing."]}}})
+
+    report = run(workspace, ScriptedBackend(bare))
+
+    assert report["proposals"] == {}
+    assert report["unsupported_dropped"] == 1
+
+
+def test_a_trivially_short_quote_does_not_count():
+    """Almost any fragment appears somewhere in a long chunk, and a quote that
+    proves nothing is worse than no quote."""
+    assert bio_refresh.verify_quote("sim", "[t] Rafa: sim, claro") is False
+
+
+def test_punctuation_and_case_do_not_break_a_real_quote():
+    """The model retypes rather than copies; grounding must survive that."""
+    assert bio_refresh.verify_quote(
+        "Eu vou me inscrever, amanha no JIU JITSU!",
+        "[t] Bernardo: eu vou me inscrever amanha no jiu jitsu") is True

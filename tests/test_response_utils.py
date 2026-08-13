@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.chat.response_utils import (
@@ -341,3 +343,29 @@ def test_profiles_are_framed_as_history_not_as_now():
     suffix = build_member_prompt_suffix(UNEVEN)
 
     assert "não uma fotografia de agora" in suffix
+
+
+# ── retrieval scaffolding must not become speech (2026-08-13) ────────────────
+# The corpus renders past media as "[Áudio enviado por X em DATA] …". The model
+# copied that wrapper out of its own context into a reply, and Piper read it out
+# loud; the group filed it as "reading quoted messages is badly formatted
+# resulting in weird audio". Four replies in 312 leaked one, all four voice.
+@pytest.mark.parametrize("leaked,expected", [
+    ("[Áudio enviado por Kaya Bot] Nem preciso de teoria para saber isso.",
+     "Nem preciso de teoria para saber isso."),
+    ("[Áudio] Olá malta, aqui é o vosso bot.", "Olá malta, aqui é o vosso bot."),
+    ("[Imagem enviada por Gil em 2026-08-12] Está lá o eclipse.",
+     "Está lá o eclipse."),
+    ('[a responder a Gil: "boas"] Tudo bem contigo.', "Tudo bem contigo."),
+])
+def test_a_copied_retrieval_wrapper_is_stripped(leaked, expected):
+    assert clean_response(leaked, user_name="Gustavo") == expected
+
+
+@pytest.mark.parametrize("text", [
+    "O Rafa treina kickboxing [e ganhou].",
+    "Vamos ao [jantar] logo.",
+])
+def test_the_bots_own_brackets_survive(text):
+    """Anchored to the start: a bracketed aside mid-sentence is its own writing."""
+    assert clean_response(text, user_name="Gustavo") == text

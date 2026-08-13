@@ -185,3 +185,28 @@ def test_reasoning_can_be_switched_off():
     engine.respond("pensa bem, quem é o mais burro?", "Pedro", [], "sys")
 
     assert len(backend.answer_calls) == 1
+
+
+# ── who is writing (bug: "rafa is peaking to you and you think its peter") ───
+def test_the_turn_says_who_is_writing():
+    """Rafa asked "why he roasting ME in my iq guess" and the bot answered about
+    another member entirely — it kept working through the member list instead of
+    resolving "me" to the person who had just written. Every history line in a
+    group looks like "Nome: texto", so a final line in the same shape is a weak
+    signal; this says it outright."""
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("why he roasting me in my iq guess", "Rafa", [], "sys")
+
+    turn = user_turn(backend)
+    assert "Quem está a escrever agora é o Rafa" in turn
+    assert '"eu", "me", "mim" e "meu"' in turn
+
+
+def test_the_generic_caller_gets_no_speaker_line():
+    """The web UI and benchmarks pass "User", where naming a speaker is noise."""
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais burro?", "User", [], "sys")
+
+    assert "Quem está a escrever agora" not in user_turn(backend)
