@@ -471,3 +471,79 @@ def test_a_corrupt_log_does_not_stop_startup(tmp_path):
     (log_dir / "bad.jsonl").write_text("{not json", encoding="utf-8")
 
     assert unregistered_groups(log_dir, []) == ["120363@g.us"]
+
+
+# ── the reply edge in the corpus (bug 7acbc092, 2026-08-13) ──────────────────
+# 158 of 504 messages in the live shared log are four words or fewer, and most
+# are replies. Without the parent, "Ao contrário de outros" is unreadable — to a
+# person and to anything extracting facts from it.
+def _reply_msg(chat_id, mid, sender, text, ts, reply_to=None, quoted=""):
+    from src.data.message_log import message_uid
+
+    row = {"id": message_uid(chat_id, mid), "chat_id": chat_id, "sender": sender,
+           "text": text, "timestamp": ts}
+    if reply_to:
+        row["reply_to_id"] = reply_to
+        row["reply_to_text"] = quoted
+    return row
+
+
+CHAT = "120@g.us"
+PARENT_TEXT = "Os judeus é que mandam nisto tudo"
+
+
+def test_a_reply_carries_its_parent_into_the_chunk():
+    from src.data.ingest import build_chunks
+
+    chunks, _ = build_chunks(
+        [_reply_msg(CHAT, "m2", "Gil", "A culpa é do", 200,
+                    reply_to="m1", quoted=PARENT_TEXT)], "shared")
+
+    assert f'Gil (a responder a "{PARENT_TEXT}"): A culpa é do' in chunks[0]["text"]
+
+
+def test_a_parent_already_in_the_chunk_is_not_repeated():
+    """A back-and-forth must not restate every message twice."""
+    from src.data.ingest import build_chunks
+
+    chunks, _ = build_chunks([
+        _reply_msg(CHAT, "m1", "Pedro", PARENT_TEXT, 100),
+        _reply_msg(CHAT, "m2", "Gil", "A culpa é do", 200,
+                   reply_to="m1", quoted=PARENT_TEXT),
+    ], "shared")
+
+    assert chunks[0]["text"].count(PARENT_TEXT) == 1
+    assert "a responder a" not in chunks[0]["text"]
+
+
+def test_a_message_that_is_not_a_reply_is_unchanged():
+    from src.data.ingest import build_chunks
+
+    chunks, _ = build_chunks([_reply_msg(CHAT, "m3", "Rafa", "boas", 300)], "shared")
+
+    assert chunks[0]["text"] == "Rafa: boas"
+
+
+def test_the_log_records_the_reply_edge(tmp_path):
+    from src.data.message_log import MessageLog
+
+    log = MessageLog(base_dir=str(tmp_path))
+    log.append(chat_id=CHAT, message_id="m2", sender="Gil", text="A culpa é do",
+               timestamp=200, scope="shared", reply_to_id="m1",
+               reply_to_text=PARENT_TEXT)
+
+    row = json.loads((tmp_path / "shared.jsonl").read_text(encoding="utf-8").strip())
+    assert row["reply_to_id"] == "m1"
+    assert row["reply_to_text"] == PARENT_TEXT
+
+
+def test_a_plain_message_gains_no_reply_keys(tmp_path):
+    """Every message carrying empty reply fields would bloat the log for nothing."""
+    from src.data.message_log import MessageLog
+
+    log = MessageLog(base_dir=str(tmp_path))
+    log.append(chat_id=CHAT, message_id="m3", sender="Rafa", text="boas",
+               timestamp=300, scope="shared")
+
+    row = json.loads((tmp_path / "shared.jsonl").read_text(encoding="utf-8").strip())
+    assert "reply_to_id" not in row

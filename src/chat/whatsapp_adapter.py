@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.chat import feedback
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
+from src.chat.response_utils import truncate_history_line
 from src.chat.scope import scope_for_chat
 from src.data.message_log import MessageLog
 from src.chat.waha_client import extract_sent_id
@@ -63,6 +64,13 @@ class InboundMessage:
     sender_phone: str = ""
     mentioned_ids: List[str] = field(default_factory=list)
     reply_to_participant: Optional[str] = None
+    # What this message is a reply to. Only the participant used to be read —
+    # enough to decide whether to answer, and the quoted text was thrown away.
+    # So "A culpa é do", sent as a reply, reached the model with nothing to
+    # attach it to and came back as "A culpa é do quem? Completa lá a frase."
+    reply_to_id: str = ""
+    quoted_text: str = ""
+    quoted_sender: str = ""
     # Voice notes arrive with empty text; the audio has to be fetched and
     # transcribed before the message means anything.
     media_url: str = ""
@@ -98,6 +106,59 @@ def _context_info(data: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _baileys_text(message: Any) -> str:
+    """Pull the text out of a Baileys message object, whatever type it is.
+
+    NOWEB keys the body by message type — ``conversation`` for a plain message,
+    ``extendedTextMessage.text`` for one with context, ``caption`` for media —
+    and a quoted message is just another message object, so the same walk works
+    for both. A quoted photo contributes its caption, or nothing.
+    """
+    if isinstance(message, str):
+        return message.strip()
+    if not isinstance(message, dict):
+        return ""
+    direct = message.get("conversation") or message.get("text") or message.get("caption")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    for value in message.values():
+        if isinstance(value, dict):
+            found = _baileys_text(value)
+            if found:
+                return found
+    return ""
+
+
+def _quoted(payload: Dict[str, Any], context: Dict[str, Any]) -> tuple:
+    """``(reply_to_id, quoted_text, quoted_sender)`` for a reply, or blanks.
+
+    Both engine shapes, because the bridge has to work with either: NOWEB hangs
+    the original off ``contextInfo.quotedMessage`` with its id in ``stanzaId``,
+    while WEBJS sends a flatter ``replyTo``/``quotedMsg`` carrying ``body``.
+    WAHA does not always include the quoted body — a reply to something it never
+    saw comes through with the participant only — so every field is optional and
+    the caller must cope with an id and no text.
+    """
+    reply_to = payload.get("replyTo") or payload.get("quotedMsg") or {}
+    if not isinstance(reply_to, dict):
+        reply_to = {}
+
+    text = ""
+    for candidate in (reply_to.get("body"), reply_to.get("text"),
+                      context.get("quotedMessage")):
+        text = _baileys_text(candidate)
+        if text:
+            break
+
+    quoted_id = str(
+        context.get("stanzaId") or reply_to.get("id") or reply_to.get("_serialized") or ""
+    )
+    sender = _normalize_jid(
+        reply_to.get("participant") or reply_to.get("author") or context.get("participant") or ""
+    )
+    return quoted_id, text, sender
+
+
 def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
     """Parse a WAHA webhook event into an ``InboundMessage``.
 
@@ -131,6 +192,7 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
     if isinstance(reply_to, dict):
         reply_to_participant = reply_to.get("participant") or reply_to.get("author")
     reply_to_participant = reply_to_participant or context.get("participant")
+    quoted_id, quoted_text, quoted_sender = _quoted(payload, context)
 
     mentioned = (
         payload.get("mentionedIds")
@@ -166,6 +228,9 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         sender_phone=sender_phone,
         mentioned_ids=[_normalize_jid(m) for m in mentioned],
         reply_to_participant=_normalize_jid(reply_to_participant) if reply_to_participant else None,
+        reply_to_id=quoted_id,
+        quoted_text=quoted_text,
+        quoted_sender=quoted_sender,
         # A voice note carries no body text — the words live in this file, which
         # has to be fetched and transcribed before the message means anything.
         media_url=str((payload.get("media") or {}).get("url") or ""),
@@ -307,6 +372,9 @@ class WhatsAppAdapter:
         self.whitelist_numbers = {
             _phone_from_alt(n) for n in (whitelist_cfg.get("allowed", []) or []) if n
         }
+        # Words kept from the message a reply quotes. It is context above the
+        # real message, not the message itself.
+        self.quoted_max_words = int(wcfg.get("quoted_max_words", 30))
         self.clear_commands = {"/clear", "/limpar"}
         # Slash commands that carry an argument: "/bug o áudio não funcionou".
         # Kept literal rather than routed — the router mistaking an ordinary
@@ -732,6 +800,37 @@ class WhatsAppAdapter:
 
         return pushname or "Alguém"
 
+    def _name_for_jid(self, jid: str) -> str:
+        """Best known name for a bare JID. "" when it maps to nobody."""
+        normalized = _normalize_jid(jid)
+        if not normalized:
+            return ""
+        if normalized in self.bot_jids:
+            return "Kaya Bot"
+        local = normalized.split("@", 1)[0]
+        for candidate in (normalized, f"{local}@c.us", local):
+            if candidate in self.contacts:
+                return self.contacts[candidate]
+        return ""
+
+    def quoted_context(self, msg: InboundMessage) -> str:
+        """The message this one replies to, as a line to put above it.
+
+        Without it a reply is a fragment. "A culpa é do" was answered "A culpa é
+        do quem? Completa lá a frase, papi" because the quoted message was
+        parsed for its sender and then discarded. Roughly a third of the group's
+        messages are four words or fewer, and most of those are replies.
+
+        Truncated, because the parent is context and not the message being
+        answered. Empty when WAHA sent no quoted body, which it does not always.
+        """
+        if not msg.quoted_text.strip():
+            return ""
+        who = self._name_for_jid(msg.quoted_sender)
+        body = truncate_history_line(msg.quoted_text.strip(), self.quoted_max_words)
+        label = f"a responder a {who}" if who else "a responder a"
+        return f"[{label}: \"{body}\"]"
+
     def _learn_contact(self, candidates, name: str) -> None:
         """Remember phone -> member name, persisting so it survives a restart."""
         key = next((c for c in candidates if c), None)
@@ -922,6 +1021,9 @@ class WhatsAppAdapter:
                 text=msg.text,
                 timestamp=msg.timestamp,
                 scope=scope_for_chat(msg.chat_id, self.shared_chats),
+                reply_to_id=msg.reply_to_id,
+                reply_to_text=truncate_history_line(
+                    msg.quoted_text.strip(), self.quoted_max_words),
             )
 
         self._note_photo(msg)
@@ -971,8 +1073,13 @@ class WhatsAppAdapter:
                 kwargs["summary"] = self.summary_writer.store.summary_for(msg.chat_id)
             except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
                 logger.warning("could not read the summary for this chat: %s", exc)
+        # A reply carries the message it answers, or it is a fragment. This is
+        # added AFTER the command checks, so "/bug" quoting something still reads
+        # as the command and not as a message about it.
+        quoted = self.quoted_context(msg)
+        asked = f"{quoted}\n{text}" if quoted else text
         try:
-            result = self.responder(text, speaker, recent, **kwargs)
+            result = self.responder(asked, speaker, recent, **kwargs)
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
@@ -1011,8 +1118,12 @@ class WhatsAppAdapter:
         if not reply or not reply.strip():
             return None
 
-        # Persist both sides so the next turn in this chat has context.
-        self.session_store.append(msg.chat_id, f"{speaker}: {text}")
+        # Persist both sides so the next turn in this chat has context. The
+        # quoted line goes in too: the parent is usually NOT in this history
+        # (the bot only records turns it answered), so dropping it here would
+        # make the follow-up turn as contextless as this one was.
+        self.session_store.append(
+            msg.chat_id, f"{speaker}: {quoted} {text}" if quoted else f"{speaker}: {text}")
         self.session_store.append(msg.chat_id, f"Kaya Bot: {reply}")
 
         # Quote the asker's message in groups so it's clear who the bot answers.

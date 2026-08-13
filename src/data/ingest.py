@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.data.message_log import MessageLog
+from src.data.message_log import MessageLog, message_uid
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +151,25 @@ def build_chunks(
         if not current:
             return
         lines, participants, ids = [], [], []
+        # The log's own id is a hash of (chat_id, message_id) while reply_to_id
+        # is the raw WhatsApp id, so the parent has to be hashed the same way
+        # before the two can be compared.
+        chunk_ids = {m["id"] for m in current}
         for m in current:
             sender = (m.get("sender") or "Alguém").strip()
-            lines.append(f"{sender}: {m.get('text','').strip()}")
+            text = strip_failed_descriptions((m.get("text") or "").strip())
+            # What a reply was answering, inlined as a prefix. Skipped when the
+            # parent is already a line in this same chunk, so a back-and-forth
+            # does not get every message stated twice.
+            quoted = (m.get("reply_to_text") or "").strip()
+            parent_uid = (
+                message_uid(m.get("chat_id", ""), m["reply_to_id"])
+                if m.get("reply_to_id") else ""
+            )
+            if quoted and parent_uid not in chunk_ids:
+                lines.append(f'{sender} (a responder a "{quoted}"): {text}')
+            else:
+                lines.append(f"{sender}: {text}")
             if sender not in participants:
                 participants.append(sender)
             ids.append(m["id"])

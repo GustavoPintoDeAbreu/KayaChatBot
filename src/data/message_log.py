@@ -88,8 +88,18 @@ class MessageLog:
         text: str,
         timestamp: Optional[int],
         scope: str,
+        reply_to_id: str = "",
+        reply_to_text: str = "",
     ) -> bool:
-        """Log one message. Returns False if it was already logged this process."""
+        """Log one message. Returns False if it was already logged this process.
+
+        ``reply_to_*`` record what a reply was answering. Roughly a third of the
+        group's messages are four words or fewer and most of those are replies,
+        so without the edge the corpus is full of fragments like "Ao contrário de
+        outros" — unreadable to a human and an invitation to invent for anything
+        extracting facts from it. Only a short excerpt is stored: the parent is
+        already in this log as its own record.
+        """
         if not text or not text.strip():
             return False
         uid = message_uid(chat_id, message_id or text[:64])
@@ -105,6 +115,9 @@ class MessageLog:
             "timestamp": int(timestamp or 0),
             "scope": scope,
         }
+        if reply_to_id or reply_to_text:
+            record["reply_to_id"] = reply_to_id
+            record["reply_to_text"] = reply_to_text
         try:
             path = self.path_for(scope)
             path.parent.mkdir(parents=True, exist_ok=True)
