@@ -425,7 +425,20 @@ chat:
     timeout_seconds: 1800
     # Editing puts a real member's face into an invented scene. Only chats whose
     # members chose to have the bot in the room may ask; an arbitrary DM may not.
-    # Empty list = everywhere (not recommended).
+    #
+    # Consent and memory scope are different questions, and answering both with
+    # allowed_scopes is what caused the filed bug: "shared" means "this chat's
+    # history is group-wide memory", a flag living in the gitignored
+    # data/whatsapp_shared_chats.json that is read once at import. The Kaya group
+    # was missing from it, so an edit asked for IN the group came back as "Só
+    # faço imagens no grupo, não por aqui."
+    #
+    # Most specific wins; an unset key does not vote.
+    #   allowed_chats  — these chat ids, whatever their memory scope
+    #   allow_groups   — any group (its members chose to have the bot there)
+    #   allowed_scopes — the original rule, kept as the fallback
+    allowed_chats: []
+    allow_groups: true
     allowed_scopes: ["shared"]
 
   # ── Rolling per-chat summary (src/chat/summary.py) ──────────────────────────

@@ -126,11 +126,37 @@ def is_busy() -> bool:
     return _job_lock.locked()
 
 
-def allowed_here(config: Dict[str, Any], scope: str) -> bool:
-    """Whether this chat may ask for an image at all."""
+def allowed_here(config: Dict[str, Any], scope: str, chat_id: str = "",
+                 is_group: bool = False) -> bool:
+    """Whether this chat may ask for an image at all.
+
+    Consent and memory scope are two different questions, and answering both with
+    one value is what produced the filed bug. `allowed_scopes: ["shared"]` reads
+    as "only the group", but ``shared`` means "this chat's history is group-wide
+    memory" — a flag carried in a gitignored file that is read once at import.
+    The Kaya group was missing from it, so a picture requested IN the group was
+    refused with "Só faço imagens no grupo, não por aqui."
+
+    So the question is now asked directly, most specific answer first:
+
+      ``allowed_chats``   these chat ids, whatever their memory scope
+      ``allow_groups``    any group (a group's members chose to have a bot there)
+      ``allowed_scopes``  the original rule, kept as the fallback
+
+    An unset key does not vote. All three unset still means everywhere.
+    """
     icfg = _config(config)
     if not icfg.get("enabled", False):
         return False
+
+    allowed_chats = icfg.get("allowed_chats")
+    if allowed_chats:
+        return (chat_id or "").strip().lower() in {
+            str(c).strip().lower() for c in allowed_chats
+        }
+    if icfg.get("allow_groups") and is_group:
+        return True
+
     allowed = icfg.get("allowed_scopes")
     if not allowed:
         return True

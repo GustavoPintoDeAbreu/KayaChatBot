@@ -101,6 +101,22 @@ if _scopes_path.exists():
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_scopes_path}: {exc}")
 
+
+# Nothing else ever mentions that file, so a group missing from it fails
+# silently: its history is written to a private scope and image editing is
+# refused in the very room it exists for. Name them at startup.
+try:
+    from src.chat.scope import unregistered_groups as _unregistered_groups
+
+    for _chat_id in _unregistered_groups(
+        Path(config_path).parent / "data" / "live_messages",
+        _wcfg.get("shared_chats") or [],
+    ):
+        print(f"⚠️  group {_chat_id} is NOT shared memory: its history stays private "
+              f"to it. Add it to {_scopes_path} and restart if that is not intended.")
+except Exception as _exc:  # noqa: BLE001 — a startup hint is never worth a crash
+    print(f"⚠️  Could not check shared-chat registration: {_exc}")
+
 # Merge the DM anti-spam whitelist from a gitignored local file (PII stays out of
 # git). Shape: {"allowed": ["351XXXXXXXXX", ...]}. Only used when
 # whatsapp.whitelist.enabled is true; see config.yaml whatsapp.whitelist.

@@ -562,7 +562,8 @@ class WhatsAppAdapter:
         # Declining is better than promising. A chat that may not ask, or a box
         # with the feature switched off, gets told so rather than left waiting for
         # a picture that is never coming.
-        if self.image_generate is None or not imagegen.allowed_here(self.config, scope):
+        if self.image_generate is None or not imagegen.allowed_here(
+                self.config, scope, chat_id=msg.chat_id, is_group=msg.is_group):
             reply = self.command_replies.get("image_not_allowed", "")
             if reply:
                 self._deliver(msg.chat_id, reply)
