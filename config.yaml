@@ -487,6 +487,17 @@ chat:
     seed: null
     # The card the LLM is NOT on. Serving holds one card; this takes the other.
     device: "0"
+    # Image generation is the ONLY thing on that card — serving, Whisper and
+    # vision all live on the other one — so pausing it frees a whole 24GB while
+    # the bot keeps answering. That is what lets heavy GPU work (regenerating
+    # member profiles, a bake-off) run without stopping prod.
+    #
+    # scripts/gpu_lease.py acquire|release writes this file. While it holds a
+    # live lease no new render starts; requests are QUEUED, not dropped, and the
+    # asker is told the wait. The lease carries an expiry so a crashed job
+    # cannot leave image generation dead — the worst case is that it comes back
+    # by itself at the TTL.
+    lease_file: "data/gpu0_lease.json"
     timeout_seconds: 1800
     # Editing puts a real member's face into an invented scene. Only chats whose
     # members chose to have the bot in the room may ask; an arbitrary DM may not.
