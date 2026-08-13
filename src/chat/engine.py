@@ -27,6 +27,8 @@ from src.chat.response_utils import (
     build_member_prompt_suffix,
     clean_response,
     detect_language,
+    is_near_duplicate,
+    previous_bot_replies,
     truncate_history_line,
     wants_long_answer,
 )
@@ -195,6 +197,9 @@ class KayaEngine:
         self.rag_enabled = bool(rag_cfg.get("enabled", False)) and retriever is not None
         self.knowledge_approach = rag_cfg.get("knowledge_approach", "both")
         self._inf = config.get("inference", {})
+        # How many of its own recent replies the model is shown and checked
+        # against. 0 disables the check entirely.
+        self._repeat_window = int(self._inf.get("no_repeat_last_replies", 4))
         if backend is None:
             from src.chat.inference_backend import build_backend
 
@@ -402,6 +407,17 @@ class KayaEngine:
                 user_turn += "\n\n(Reply in English.)"
             else:
                 user_turn += "\n\n(Responde em português europeu.)"
+            # What it already said, so it does not say it again. `repetition_penalty`
+            # and `no_repeat_ngram_size` act only WITHIN one generation and cannot
+            # see the previous turn at all — which is how "So attack" and "Godamn"
+            # got the byte-identical reply one turn apart.
+            said_before = previous_bot_replies(recent_lines, limit=self._repeat_window)
+            if said_before:
+                user_turn += (
+                    "\n\n(Já disseste isto há pouco — não repitas nem estas frases nem "
+                    "esta construção: " + " | ".join(
+                        truncate_history_line(line, 20) for line in said_before) + ")"
+                )
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_turn},
@@ -409,8 +425,25 @@ class KayaEngine:
             raw = self.backend.generate(
                 messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
+            text = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
 
-        text = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
+            # One retry, hotter. Only one: this is inside the GPU lock, and
+            # whatsapp_server DROPS a message on a contended lock rather than
+            # queueing it, so a second retry would be paid for by somebody else's
+            # reply going missing.
+            if said_before and is_near_duplicate(text, said_before):
+                print("↻ reply repeated a recent one; regenerating once")
+                hotter = {**self._inf,
+                          "temperature": min(1.3, float(self._inf.get("temperature", 0.8)) + 0.25)}
+                retry = self.backend.generate(
+                    messages, max_new_tokens=max_new_tokens, sampling=hotter
+                )
+                retry_text = clean_response(retry, user_name=speaker, bot_name="Kaya Bot")
+                # Keep the retry only if it is actually different; a second
+                # duplicate is not an improvement over the first.
+                if retry_text and not is_near_duplicate(retry_text, said_before):
+                    text = retry_text
+
         return Reply(
             text=text,
             route=route,

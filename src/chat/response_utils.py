@@ -74,6 +74,49 @@ def truncate_history_line(line: str, max_words: int = 40) -> str:
     return f"{who}{sep}{snippet}" if sep else snippet
 
 
+def previous_bot_replies(recent_lines, bot_name: str = "Kaya Bot", limit: int = 4):
+    """The bot's own last replies, newest first, pulled out of the history lines.
+
+    ``recent_lines`` is the same ``"<who>: <text>"`` list the prompt is built
+    from, so this needs no extra plumbing — the replies are already there.
+    """
+    prefix = f"{bot_name}: "
+    replies = [line[len(prefix):].strip() for line in (recent_lines or [])
+               if line.startswith(prefix)]
+    return [reply for reply in reversed(replies) if reply][:limit]
+
+
+def _normalize_for_comparison(text: str) -> str:
+    return re.sub(r"[^\w\s]", "", (text or "").lower()).strip()
+
+
+def is_near_duplicate(text: str, previous, threshold: float = 0.9) -> bool:
+    """Whether ``text`` repeats something the bot already said.
+
+    ``repetition_penalty`` and ``no_repeat_ngram_size`` only act WITHIN one
+    generation, so they cannot see the previous turn at all. The live log shows
+    what that costs: "So attack" and, one turn later, "Godamn" both received the
+    byte-identical "Escolhe um alvo e diz quem eu tenho de partir primeiro."
+
+    Similarity rather than equality, because the near-misses read just as badly
+    as the exact ones.
+    """
+    from difflib import SequenceMatcher
+
+    candidate = _normalize_for_comparison(text)
+    if not candidate:
+        return False
+    for earlier in previous or []:
+        other = _normalize_for_comparison(earlier)
+        if not other:
+            continue
+        if candidate == other:
+            return True
+        if SequenceMatcher(None, candidate, other).ratio() >= threshold:
+            return True
+    return False
+
+
 def coerce_text(content) -> str:
     """Flatten a chat message ``content`` into a plain string.
 

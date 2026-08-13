@@ -9,6 +9,8 @@ from src.chat.response_utils import (
     clean_response,
     coerce_text,
     detect_language,
+    is_near_duplicate,
+    previous_bot_replies,
     strip_clause_dashes,
     truncate_history_line,
     wants_long_answer,
@@ -230,3 +232,42 @@ class TestStripClauseDashes:
         )
         assert "—" not in cleaned
         assert "chama-se Kobe" in cleaned
+
+
+# ── saying the same thing twice (2026-08-13) ─────────────────────────────────
+def test_previous_bot_replies_are_pulled_from_the_history():
+    lines = ["Pedro: So attack",
+             "Kaya Bot: Escolhe um alvo.",
+             "Gustavo: Godamn",
+             "Kaya Bot: Diz lá quem."]
+    assert previous_bot_replies(lines) == ["Diz lá quem.", "Escolhe um alvo."]
+
+
+def test_previous_bot_replies_respects_the_limit():
+    lines = [f"Kaya Bot: resposta {n}" for n in range(6)]
+    assert len(previous_bot_replies(lines, limit=2)) == 2
+
+
+def test_previous_bot_replies_ignores_everyone_else():
+    assert previous_bot_replies(["Gil: Kaya Bot: não sou eu"]) == []
+
+
+def test_the_repeat_from_the_live_log_is_caught():
+    """"So attack" and "Godamn", one turn apart, got the identical reply."""
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert is_near_duplicate("Escolhe um alvo e diz quem eu tenho de partir primeiro.", said)
+
+
+def test_punctuation_and_case_do_not_hide_a_repeat():
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert is_near_duplicate("escolhe um alvo e diz quem eu tenho de partir primeiro", said)
+
+
+def test_a_genuinely_different_reply_is_allowed():
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert not is_near_duplicate("Diz-me lá quem queres ver destruído hoje.", said)
+
+
+def test_nothing_said_before_is_never_a_duplicate():
+    assert not is_near_duplicate("qualquer coisa", [])
+    assert not is_near_duplicate("", ["alguma coisa"])

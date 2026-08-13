@@ -245,6 +245,13 @@ inference:
   top_k: 64
   repetition_penalty: 1.2      # >1 discourages verbatim regurgitation of prior turns
   no_repeat_ngram_size: 3      # Hard-block any repeated 3-gram (kills copy-the-last-answer loops)
+  # Both of the above act only WITHIN one generation and cannot see the previous
+  # turn, so they never caught the repetition people actually notice: "So attack"
+  # and "Godamn", one turn apart, got the byte-identical reply. This many of the
+  # bot's own recent replies are shown to it as "do not repeat these", and the
+  # answer is regenerated once (hotter) if it comes back near-identical anyway.
+  # 0 disables the check.
+  no_repeat_last_replies: 4
   # Words kept per line of verbatim history. Not a context-saving measure: a prior
   # bot turn pasted back in full invites the model to copy it wholesale (the
   # observed "stuck" / repetition bug). With whatsapp.history_turns at 60 this is
