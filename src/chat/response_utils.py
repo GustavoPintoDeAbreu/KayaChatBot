@@ -369,4 +369,15 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
         "incluindo palpites e avaliações sobre o grupo; fala deles de forma natural, "
         "não como uma lista formatada):\n"
     )
-    return intro + "\n".join(lines)
+    # The roster has to state that it is complete. Asked "a que Kaya-Avenger devo
+    # ligar?", the bot answered "liga à Mel" — Mel is not in the group and never
+    # was. The list named the members but never said they were the only ones, so
+    # any name that turned up in a retrieved chunk was fair game.
+    names = ", ".join(member["name"] for member in members)
+    closing = (
+        f"\n\nO grupo Kaya tem {len(members)} membros e são exatamente estes: {names}. "
+        "Mais ninguém é do grupo. Se aparecer outro nome nas conversas é alguém de "
+        "fora, e nunca o deves tratar como membro. Não inventes membros que não "
+        "estejam nesta lista."
+    )
+    return intro + "\n".join(lines) + closing

@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.chat.response_utils import (
+    build_member_prompt_suffix,
     clean_response,
     coerce_text,
     detect_language,
@@ -271,3 +272,34 @@ def test_a_genuinely_different_reply_is_allowed():
 def test_nothing_said_before_is_never_a_duplicate():
     assert not is_near_duplicate("qualquer coisa", [])
     assert not is_near_duplicate("", ["alguma coisa"])
+
+
+# ── the roster has to say it is complete (2026-08-13) ────────────────────────
+MEMBERS = {"members": [
+    {"name": "Gil", "aliases": ["gilão"], "key_facts": ["Gil corre."]},
+    {"name": "Rafa", "aliases": [], "key_facts": ["Rafa treina kickboxing."]},
+]}
+
+
+def test_the_suffix_names_the_roster_as_complete():
+    """Asked which "Kaya-Avenger" to call, the bot answered "liga à Mel".
+
+    Mel is not in the group. The list named the members but never said they
+    were the only ones, so any name in a retrieved chunk was fair game.
+    """
+    suffix = build_member_prompt_suffix(MEMBERS)
+
+    assert "2 membros" in suffix
+    assert "Gil, Rafa" in suffix or "Rafa, Gil" in suffix
+    assert "Mais ninguém é do grupo" in suffix
+
+
+def test_the_member_details_are_still_there():
+    suffix = build_member_prompt_suffix(MEMBERS)
+
+    assert "Gil corre" in suffix
+    assert "Rafa treina kickboxing" in suffix
+
+
+def test_no_members_means_no_suffix():
+    assert build_member_prompt_suffix({"members": []}) == ""
