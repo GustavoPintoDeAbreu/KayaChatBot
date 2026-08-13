@@ -15,19 +15,32 @@ claim both GPUs.
 Browser (any computer)
    │  https://kaya.example.com
    ▼
-Cloudflare Access  ──►  login page (allowed emails only)   [protection layer 1]
-   │
-   ▼
 Cloudflare Tunnel  ──►  cloudflared container (no inbound ports on the box)
    │  http://kaya-prod:7860  (compose network)
    ▼
-kaya-prod / kaya-dev container (Gradio + WhatsApp webhook)
-   │  Gradio username/password                              [protection layer 2]
+kaya-prod / kaya-dev container — one process, three routes
+   │
+   ├─ /             public landing page, no login
+   │                src/chat/static/landing.html
+   │
+   ├─ /app          Gradio chat, username/password       [the protection layer]
+   │                KAYA_WEB_USER / KAYA_WEB_PASS
+   │
+   └─ /whatsapp/*   WAHA webhook — open by necessity
    ▼
 RAG (GPU) ──► generation backend
                 ├─ hf:   in-process Unsloth model (dev default)
                 └─ gguf: llama.cpp `llama` container over HTTP (prod, ~15× faster)
 ```
+
+**The password on `/app` is the only thing guarding the group's memory.** There
+used to be a second layer — Cloudflare Access, an emailed one-time code — and
+the diagram above used to claim the Gradio password sat behind it. It did not:
+`mount_gradio_app` was called without `auth=`, and prod runs `whatsapp_server`
+rather than `web_app.__main__`, so the configured credentials were never
+applied. That is fixed, and Cloudflare Access was then removed deliberately: one
+real layer, no code in your inbox. If you re-enable Access, scope it to `/app`
+so the landing page stays public.
 
 - **dev**: `dev.kaya.example.com` → `kaya-dev:7861`
 - **prod**: `kaya.example.com` → `kaya-prod:7860`
