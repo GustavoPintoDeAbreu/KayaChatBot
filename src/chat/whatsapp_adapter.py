@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from src.chat import feedback
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
 from src.chat.scope import scope_for_chat
 from src.data.message_log import MessageLog
@@ -307,6 +308,19 @@ class WhatsAppAdapter:
             _phone_from_alt(n) for n in (whitelist_cfg.get("allowed", []) or []) if n
         }
         self.clear_commands = {"/clear", "/limpar"}
+        # Slash commands that carry an argument: "/bug o áudio não funcionou".
+        # Kept literal rather than routed — the router mistaking an ordinary
+        # message for a silent bug report is worse than typing seven characters.
+        self.bug_commands = {"/bug", "/erro"}
+        self.feedback_commands = {"/feedback", "/sugestao", "/sugestão"}
+        # Every command token, used to keep these messages OUT of the memory log
+        # (see _is_command — the log is written before the reply gate).
+        self.all_commands = (
+            self.clear_commands | self.bug_commands | self.feedback_commands
+        )
+        # Where a new report is announced. A JID (…@c.us); empty disables it.
+        # Real numbers stay out of git, so this comes from KAYA_REPORT_JID.
+        self.report_jid = _normalize_jid(str(wcfg.get("report_to") or ""))
         # Making a picture takes minutes, so it never happens on the webhook
         # thread: the bot acknowledges, works in the background and sends the
         # result when it exists. None disables the feature entirely.
@@ -369,6 +383,14 @@ class WhatsAppAdapter:
             "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
             "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
             "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
+            # Reports are collected for a week before anything is acted on, so the
+            # confirmation has to say the message landed somewhere a person reads.
+            "bug_logged": "Registado. Obrigado, o Gustavo vai ver isto.",
+            "bug_usage": ("Escreve /bug e a seguir o que aconteceu. "
+                          "Exemplo: /bug não respondeu ao meu áudio."),
+            "feedback_logged": "Registado. Obrigado pelo feedback.",
+            "feedback_usage": ("Escreve /feedback e a seguir a tua sugestão. "
+                               "Exemplo: /feedback devias ser mais curto nas respostas."),
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -722,6 +744,80 @@ class WhatsAppAdapter:
                 cleaned = re.sub(rf"@{re.escape(number)}\b", "", cleaned)
         return cleaned.strip()
 
+    def _is_command(self, text: str) -> bool:
+        """Is this message a slash command rather than something the group said?
+
+        Used to keep commands out of the memory log, which is written *before* the
+        reply gate — so without this a ``/bug`` becomes a searchable "message the
+        group sent" and comes back out of retrieval a week later.
+        """
+        first = (text or "").strip().lower().split(maxsplit=1)
+        return bool(first) and first[0] in self.all_commands
+
+    def _notify(self, chat_id: str, text: str) -> None:
+        """Send a side-channel message. A failed notification never breaks a report."""
+        if not chat_id or not text:
+            return
+        try:
+            self.waha_client.send_text(chat_id, text)
+        except Exception as exc:  # noqa: BLE001 — the report is already on disk
+            print(f"⚠️  could not deliver notification to {chat_id}: {exc}")
+
+    def _reporter_dm(self, msg: InboundMessage) -> str:
+        """The reporter's own chat, so a group report can be acknowledged privately."""
+        phone = _phone_from_alt(msg.sender_phone) or _phone_from_alt(msg.sender_id)
+        if phone:
+            return f"{phone}@c.us"
+        return msg.sender_id or ""
+
+    def _handle_report(self, msg: InboundMessage, text: str, speaker: str,
+                       command: str) -> Dict[str, Any]:
+        """Record a ``/bug`` or ``/feedback`` and confirm it, without generating.
+
+        The body is everything after the command word. A bare command explains
+        itself and stores nothing — no pending-capture state, so an unrelated next
+        message can never be swallowed into somebody's bug report.
+        """
+        is_bug = command == "bug"
+        parts = text.strip().split(maxsplit=1)
+        body = parts[1].strip() if len(parts) > 1 else ""
+
+        if not body:
+            reply = self.command_replies["bug_usage" if is_bug else "feedback_usage"]
+            self.waha_client.send_text(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "command": command, "logged": False}
+
+        recent = self.session_store.recent(msg.chat_id, 6) if is_bug else []
+        if is_bug:
+            feedback.log_bug_report(
+                source="whatsapp", description=body, contact=speaker,
+                env=os.environ.get("KAYA_ENV"), version=os.environ.get("KAYA_VERSION"),
+                recent_turns=list(recent),
+                path=feedback.bug_log_path(self.config),
+            )
+        else:
+            feedback.log_note(
+                source="whatsapp", text=body, contact=speaker,
+                env=os.environ.get("KAYA_ENV"), version=os.environ.get("KAYA_VERSION"),
+                path=feedback.feedback_log_path(self.config),
+            )
+
+        reply = self.command_replies["bug_logged" if is_bug else "feedback_logged"]
+        self.waha_client.send_text(msg.chat_id, reply)
+
+        label = "Bug" if is_bug else "Feedback"
+        where = "no grupo" if msg.is_group else "por DM"
+        self._notify(self.report_jid, f"{label} de {speaker} ({where}):\n{body}")
+        # Reported from the group, the confirmation above is public and scrolls
+        # away; a DM is the copy the reporter keeps. From a DM it would be the
+        # same message twice, so it is not sent.
+        if msg.is_group:
+            self._notify(self._reporter_dm(msg), f"{label} registado: {body}")
+
+        return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                "command": command, "logged": True}
+
     # ── main entry ─────────────────────────────────────────────────────────────
     def handle_event(self, event: Dict[str, Any], system_prompt: str = "") -> Optional[Dict[str, Any]]:
         """Process one webhook event end-to-end. Returns a result dict or ``None``.
@@ -770,10 +866,18 @@ class WhatsAppAdapter:
                             else f"[Imagem: {description}]")
                 print(f"🖼️  described image ({len(description)} chars)")
 
+        # A slash command is an instruction to the bot, not something the group
+        # said, and this log is what gets embedded into long-term memory. It is
+        # written BEFORE the reply gate below, so commands have to be excluded
+        # here or they come back out of retrieval later as things people "said" —
+        # which is exactly what a week of collected bug reports must not become.
+        # Mention-stripped first: in a group the text arrives as "@Kaya /bug ...".
+        _command_message = self._is_command(self._strip_bot_mention(msg.text))
+
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth
         # keeping, and it would otherwise be dropped by the gate below.
-        if self.log_messages and not msg.from_me and msg.text.strip():
+        if self.log_messages and not msg.from_me and msg.text.strip() and not _command_message:
             self.message_log.append(
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
@@ -795,6 +899,14 @@ class WhatsAppAdapter:
 
         # ``/clear`` (or ``/limpar``): wipe this chat's recent context so the bot
         # stops fixating on prior turns. Handled before generation; not stored.
+        # ``/bug`` and ``/feedback``: recorded, confirmed, never generated on. The
+        # collection channel for the listening week — see src/chat/feedback.py.
+        _word = text.strip().lower().split(maxsplit=1)[0] if text.strip() else ""
+        if _word in self.bug_commands:
+            return self._handle_report(msg, text, speaker, "bug")
+        if _word in self.feedback_commands:
+            return self._handle_report(msg, text, speaker, "feedback")
+
         if text.strip().lower() in self.clear_commands:
             self.session_store._store(msg.chat_id).clear()
             reply = "Contexto limpo — esqueci as mensagens recentes desta conversa."

@@ -55,6 +55,13 @@ def test_no_real_member_names_are_published(landing):
     assert not leaked, f"real member name(s) on the public page: {leaked}"
 
 
+def test_the_report_commands_are_documented(landing):
+    """The collection channel is useless if nobody is told it exists."""
+    for command in ("/bug", "/feedback"):
+        assert landing.count(f"<code>{command}</code>") >= 2, (
+            f"{command} must appear in both the English and Portuguese pages")
+
+
 def test_page_is_self_contained(landing):
     """No external requests: the page must render with the network off."""
     assert not re.search(r'(?:src|href)="https?://', landing)

@@ -118,6 +118,14 @@ if _whitelist_path.exists():
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_whitelist_path}: {exc}")
 
+# Where /bug and /feedback reports are announced. A bare phone or a full JID; the
+# adapter normalises it. Env-only for the same reason as the whitelist above — it
+# is somebody's real number, so it lives in .env rather than config.yaml.
+_report_to = os.environ.get("KAYA_REPORT_JID", "").strip()
+if _report_to:
+    _wcfg["report_to"] = _report_to
+    print("✓ Bug/feedback reports will be announced by DM")
+
 MOCK_MODE = os.environ.get("KAYA_WHATSAPP_MOCK", "").lower() in ("1", "true", "yes") or bool(
     _wcfg.get("mock_mode", False)
 )

@@ -69,6 +69,29 @@ curl -s localhost:7860/whatsapp/outbox
 6. Test: DM the bot → reply. Add it to a group, `@`-mention it → reply; send
    unrelated chatter → silence; reply to its message → reply.
 
+## Commands
+
+Literal slash commands, matched before the message ever reaches the model. In a
+group they still need an @-mention like anything else.
+
+| Command | Aliases | What it does |
+|---|---|---|
+| `/clear` | `/limpar` | Forget this chat's recent verbatim context |
+| `/bug <what happened>` | `/erro` | File a bug report |
+| `/feedback <your idea>` | `/sugestao` | Leave a suggestion |
+
+`/bug` and `/feedback` take the rest of the message as the body; sent bare, they
+reply with usage and store nothing (no pending-capture state, so an unrelated
+next message can never be swallowed into someone's report). `/bug` lands in
+`data/feedback/bug_reports.jsonl`, `/feedback` writes a `type: note` record into
+`message_feedback.jsonl`; both show in the web UI's **Feedback** tab. Set
+`KAYA_REPORT_JID` in `.env` to have each new report announced by DM.
+
+**Commands are never stored as memory.** The message log — the thing that gets
+embedded into ChromaDB — is written *before* the reply gate, so
+`whatsapp_adapter._is_command` excludes them explicitly. Without that a week of
+bug reports would come back out of retrieval as things the group said.
+
 ## Behaviour & limits
 
 - **DM:** answered only for numbers in the anti-spam whitelist when

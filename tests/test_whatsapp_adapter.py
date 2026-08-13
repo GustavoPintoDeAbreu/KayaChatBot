@@ -5,6 +5,7 @@ No GPU/model/network: the engine is replaced by a stub ``responder`` and WAHA by
 ``scripts/whatsapp_simulator.py`` does, against a temp session dir.
 """
 import itertools
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.chat.memory import KeyedSessionMemory
+from src.chat.scope import scope_for_chat
 from src.chat.waha_client import MockWahaClient
 from src.chat.whatsapp_adapter import WhatsAppAdapter, parse_waha_message
 
@@ -1313,3 +1315,158 @@ def test_the_exclusion_window_counts_inbound_messages_not_lines(tmp_path):
         f"window starts at {start}, earlier than the oldest message actually in "
         f"the prompt ({earliest_allowed}) — chunks in between would be excluded "
         f"from retrieval without being carried verbatim")
+
+
+# ── /bug and /feedback (2026-08-13) ──────────────────────────────────────────
+# The collection channel for the listening week. Two things are load-bearing:
+# the reports must reach disk, and they must NOT reach the memory log — that log
+# is embedded into ChromaDB, so a logged "/bug" comes back out of retrieval later
+# as something the group supposedly said.
+
+def make_report_adapter(tmp_path, client=None, **overrides):
+    """An adapter whose feedback sinks and message log live under tmp_path."""
+    from src.chat.memory import ChatPreferences
+    from src.data.message_log import MessageLog
+
+    log = MessageLog(base_dir=str(tmp_path / "msglog"))
+    config = {
+        "whatsapp": {
+            "bot_jid": BOT_JID,
+            "group": {"respond_on_mention": True, "respond_on_reply": True},
+            "send_seen": False,
+            "log_messages": True,
+            "shared_chats": [GROUP],
+            "report_to": "351999999999@c.us",
+            **overrides,
+        },
+        "chat": {
+            "bug_report": {"log_file": str(tmp_path / "bugs.jsonl")},
+            "feedback": {"log_file": str(tmp_path / "feedback.jsonl")},
+        },
+    }
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: f"reply[{speaker}]",
+        waha_client=client or MockWahaClient(echo=False),
+        config=config,
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        message_log=log,
+    )
+    return adapter, adapter.waha_client, log
+
+
+def _rows(path):
+    if not Path(path).exists():
+        return []
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_bug_command_records_the_report(tmp_path):
+    adapter, client, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/bug o áudio não funcionou"))
+
+    assert result["command"] == "bug" and result["logged"] is True
+    rows = _rows(tmp_path / "bugs.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["description"] == "o áudio não funcionou"
+    assert rows[0]["source"] == "whatsapp"
+    # never generated on: the stub responder would have echoed "reply["
+    assert not result["reply"].startswith("reply[")
+
+
+def test_feedback_command_records_a_note(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/feedback devias ser mais curto"))
+
+    assert result["command"] == "feedback" and result["logged"] is True
+    rows = _rows(tmp_path / "feedback.jsonl")
+    assert len(rows) == 1 and rows[0]["type"] == "note"
+    assert rows[0]["text"] == "devias ser mais curto"
+
+
+def test_confirmations_carry_no_emoji(tmp_path):
+    """Explicitly asked for: these replies are plain text."""
+    adapter, client, _ = make_report_adapter(tmp_path)
+    adapter.handle_event(dm_event("/bug partiu-se"))
+    adapter.handle_event(dm_event("/feedback mais piadas"))
+
+    for sent in client.sent:
+        assert all(ord(ch) < 0x2000 for ch in sent["text"]), sent["text"]
+
+
+def test_a_bare_command_explains_itself_and_stores_nothing(tmp_path):
+    """No pending-capture state, so an unrelated next message is never swallowed."""
+    adapter, client, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/bug"))
+
+    assert result["command"] == "bug" and result["logged"] is False
+    assert "/bug" in client.sent[-1]["text"]
+    assert _rows(tmp_path / "bugs.jsonl") == []
+
+
+def test_reports_never_reach_the_memory_log(tmp_path):
+    """The whole point: these must not become searchable group memory."""
+    adapter, _, log = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("/bug isto está partido"))
+    adapter.handle_event(dm_event("/feedback sê mais curto"))
+    adapter.handle_event(dm_event("/clear"))
+    adapter.handle_event(dm_event("uma mensagem normal"))
+
+    # after_ts=-1 because dm_event carries no timestamp and read() filters on
+    # `> after_ts`; a real WhatsApp message always has one.
+    logged = [m["text"] for m in log.read(scope_for_chat(ALICE, {GROUP}), after_ts=-1)]
+    assert "uma mensagem normal" in logged
+    assert not any(text.strip().startswith("/") for text in logged), logged
+
+
+def test_bug_in_the_group_is_recognised_behind_a_mention(tmp_path):
+    """In a group the text arrives as "@<bot> /bug ..." and must still parse."""
+    adapter, _, log = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(
+        group_event(f"@{BOT_JID.split('@')[0]} /bug não respondeu", mention=True))
+
+    assert result["command"] == "bug" and result["logged"] is True
+    assert _rows(tmp_path / "bugs.jsonl")[0]["description"] == "não respondeu"
+    assert not any("/bug" in m["text"] for m in log.read("shared", after_ts=-1))
+
+
+def test_group_report_also_reaches_the_reporter_privately(tmp_path):
+    adapter, client, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(
+        group_event(f"@{BOT_JID.split('@')[0]} /bug não respondeu", mention=True))
+
+    targets = [s["chat_id"] for s in client.sent]
+    assert GROUP in targets                      # the public confirmation
+    assert "351999999999@c.us" in targets        # Gustavo
+    assert ALICE in targets                      # the reporter's own copy
+
+
+def test_a_dm_report_is_not_confirmed_twice(tmp_path):
+    adapter, client, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("/bug partiu-se"))
+
+    assert [s["chat_id"] for s in client.sent].count(ALICE) == 1
+
+
+def test_a_failed_notification_still_records_the_report(tmp_path):
+    """The report is already on disk; a dead side-channel must not lose it."""
+    class HalfDeadClient(MockWahaClient):
+        def send_text(self, chat_id, text):
+            if chat_id == "351999999999@c.us":
+                raise RuntimeError("WAHA is down")
+            return super().send_text(chat_id, text)
+
+    adapter, client, _ = make_report_adapter(tmp_path, client=HalfDeadClient(echo=False))
+
+    result = adapter.handle_event(dm_event("/bug partiu-se"))
+
+    assert result["logged"] is True
+    assert len(_rows(tmp_path / "bugs.jsonl")) == 1
+    assert "Registado" in client.sent[-1]["text"]
