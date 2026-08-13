@@ -1,7 +1,8 @@
 # KayaChatBot
 
 An AI assistant bot for the **Kaya** Portuguese friend group chat. It answers from
-the group's collective memory via always-on RAG over real WhatsApp history.
+the group's collective memory — RAG over real WhatsApp history, retrieved when
+the question calls for it and deliberately skipped when it does not.
 
 **Production runs a stock `gemma-4-12b-it` at Q6_K with no fine-tune**, served by
 llama.cpp with a 32K context window (RAG budget 14,000 tokens). An August 2026
@@ -19,10 +20,12 @@ devices, not a 48 GB pool — see `CLAUDE.md` for what that does and does not al
 KayaChatBot is the AI memory of the Kaya group. It is **not** a group member — it is an assistant with access to the group's collective memory. It learns facts, events, and relationships from the group's conversation history so it can answer questions like "what did we talk about at the beach trip?" or just have a casual chat. It communicates naturally in **European Portuguese or English**.
 
 **Key Features:**
-- Extracts and cleans messages from WhatsApp exports
-- Generates synthetic training conversations fully on-prem with a local teacher model (no group data leaves the box)
-- **Always-on RAG**: Retrieves relevant context for every message (not just detected questions)
+- **Lives in WhatsApp**: a WAHA bridge puts the bot in the real group chat (`WHATSAPP.md`), plus a Gradio web UI
+- **Intent-routed retrieval**: every message is classified first, and the mode picks retrieval, prompt and reply length together — banter gets no group context at all
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
+- **Remembers the thread**: 60 turns verbatim plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
+- **Voice in and out**: voice notes are transcribed with faster-whisper; replies can be spoken with Piper, per-language and sticky per chat
+- **Sees and makes pictures**: inbound photos are described into text (and so become searchable later); FLUX.1 Kontext edits a photo, Z-Image Turbo invents one
 - **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
 - Fine-tunes a chosen model profile using LoRA with 4-bit quantization (not used by the live model)
@@ -30,8 +33,26 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 
 ## 🤖 RAG & Knowledge System
 
-### Always-On Retrieval
-RAG is enabled for every message. The bot never answers from fine-tune memory alone — it always retrieves context first.
+### Retrieval Follows Intent
+
+Retrieval used to run on *every* message, and that was a bug: `Ahahhha` came back
+with a 77-word analysis of group dynamics, and `hey` with a roast aimed at a
+randomly chosen member. Handed a pile of member profiles and told to elaborate,
+the model finds someone to talk about.
+
+`src/chat/router.py` now classifies each message first, and the mode selects
+retrieval, prompt and reply length together:
+
+| Mode | What it is | Group retrieval |
+|---|---|---|
+| `banter` | Social noise — laughter, emoji, greetings, insults, "roast me" | **None** |
+| `mixed` | Names a person or event without asking to be informed | Yes, answers short |
+| `factual` | A question about the group, its members or its history | Yes, full context |
+| `general` | A question about the world — football, cooking, code, advice | **None**, and no member profiles |
+
+Any router failure falls back to `factual`, i.e. the old always-on behaviour, so
+a bad classification degrades to a correct-but-verbose answer rather than a wrong
+one.
 
 ### Dual Knowledge Sources
 | Source | File | How it's used |
@@ -55,19 +76,25 @@ rag:
 
 ### Smart Context Retrieval
 - Uses BAAI/bge-m3 multilingual embeddings
-- Person-aware filtering: queries mentioning "Peter" retrieve Peter's messages
+- Person-aware filtering: a query naming a member post-filters retrieval by the `participants`/`mentioned` metadata, so it gets that member's messages rather than whatever is semantically nearest
 - Semantic search across conversation chunks
+- A 14,000-token context budget, enforced by truncating the lowest-priority context first (conversation chunks, then knowledge, then recent summaries)
+- Dates are only surfaced when the question is about timing (`_has_temporal_intent`); ordinary answers stay date-free
 - Real-time retrieval stats during chat
 
 ### Example Usage
 ```
-User: What do you know about Peter?
+User: o que sabes sobre o <member>?          → factual
 📚 Retrieved 3 conversation chunks + 1 knowledge fact
-Kaya Bot: Peter is a member of the Kaya group. He enjoys music and...
+Kaya Bot: <grounded answer, with what it actually found>
 
-User: olá pessoal
-📚 Retrieved 3 conversation chunks
+User: olá pessoal                             → banter
+📚 Retrieved nothing — by design
 Kaya Bot: oi! tudo bem? 😊
+
+User: quem é melhor, Ronaldo ou Messi?        → general
+📚 Retrieved nothing, and no member profiles injected
+Kaya Bot: <answers the question, not a report about the group>
 ```
 
 ## 📁 Project Structure
@@ -89,13 +116,25 @@ KayaChatBot/
 │   ├── finetuning/                   # Model training
 │   │   └── train.py
 │   ├── chat/                         # Inference & interaction
-│   │   ├── chat.py                   # Interactive chat loop (always-on RAG)
+│   │   ├── chat.py                   # Interactive CLI chat loop (hf backend only, dev tool)
 │   │   ├── web_app.py                # Gradio web UI (suggestions, feedback, metrics)
 │   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
+│   │   ├── whatsapp_adapter.py       # Event parsing, mention/whitelist gating, speaker identity
 │   │   ├── engine.py                 # Shared generation engine (web + WhatsApp)
-│   │   ├── inference_backend.py       # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
+│   │   ├── router.py                 # Intent classification: banter/mixed/factual/general + commands
+│   │   ├── retriever.py              # RAG retrieval (conversations + KB)
+│   │   ├── summary.py                # Per-chat rolling summary, written off the reply path
+│   │   ├── scope.py                  # What is group-wide memory vs private to one chat
+│   │   ├── stt.py / tts.py           # faster-whisper transcription, Piper speech
+│   │   ├── vision.py / imagegen.py   # Describing photos; making and editing them
+│   │   ├── web_search.py             # Grok web results, synthesized locally into the reply
+│   │   ├── inference_backend.py      # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
 │   │   ├── inference.py
-│   │   └── retriever.py              # RAG retrieval (conversations + KB)
+│   │   └── gpu_lock.py               # One generation at a time; summaries skip rather than queue
+│   ├── testing/                      # Benchmarks and the multi-person conversation simulator
+│   │   ├── persona_sim.py            # Drives the real webhook with invented people
+│   │   ├── scenarios.py              # Beat lists + smoke/standard/long_haul presets
+│   │   └── sim_world.py
 │   ├── llm_providers/                # LLM provider abstractions
 │   │   ├── azure_provider.py
 │   │   ├── xai_provider.py
@@ -285,11 +324,15 @@ test_mode:
 
 ### Model & Training
 
-Model and training settings come from the **active model profile** (`active_model_profile` in `config.yaml`, currently `gemma4-e4b-seq4096`), deep-merged over the top-level `model:`/`training:` sections by `src/config_loader.py`:
+Model and training settings come from the **active model profile** (`active_model_profile` in `config.yaml`, currently `gemma4-12b-stock`), deep-merged over the top-level `model:`/`training:` sections by `src/config_loader.py`. The live profile has **no adapter** — it is a stock model served from a GGUF:
 
 ```yaml
-active_model_profile: "gemma4-e4b-seq4096"
+active_model_profile: "gemma4-12b-stock"
+```
 
+A training profile, by contrast, names an output directory for its LoRA adapter:
+
+```yaml
 model_profiles:
   gemma4-e4b-seq4096:
     model:
@@ -302,6 +345,17 @@ model_profiles:
       learning_rate: 0.00005
       max_steps: 450
 ```
+
+### Inference Backend
+
+```yaml
+inference:
+  backend: "gguf"   # llama.cpp server (default, ~15× faster, and the only backend
+                    # that works with the adapter-free live profile)
+  #        "hf"     # Unsloth FastModel in-process — needs a profile with an adapter
+```
+
+`KAYA_INFERENCE_BACKEND` overrides this; `KAYA_LLAMA_URL` overrides the server address.
 
 ## 🧪 Testing
 
@@ -335,6 +389,33 @@ kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 kaya_chatbot_env/bin/python -m pytest tests/ -v
 ```
 
+### End-to-End: one capability at a time
+```bash
+kaya_chatbot_env/bin/python scripts/preflight_e2e.py
+```
+
+### End-to-End: a whole evening in the group
+
+The unit suite proves the wiring; this reproduces several people talking over
+each other, a photo arriving mid-argument, and a thread long enough to overflow
+the retrieval budget. It POSTs synthetic WAHA events at a `kaya-sim` container
+running the **real** webhook path in mock mode — only the outbound WhatsApp
+client is faked — so routing, the GPU lock, scoping and the async image path are
+the production ones.
+
+```bash
+kaya_chatbot_env/bin/python scripts/seed_sim_data.py     # once — builds ./data_sim
+docker compose --profile sim up -d kaya-sim
+
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset smoke      # ~40s, no images
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset standard   # ~10min, full surface
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset long_haul  # ~28min, overflows the budget
+```
+
+`kaya-sim` reads `./data_sim`, never `./data` — invented conversations must not
+end up in the real vector store. Reports land in `reports/sim/<stamp>/index.html`
+and the run exits non-zero on a failed assertion, so it can gate a deploy.
+
 ## 💡 Tips & Best Practices
 
 ### Knowledge Base Quality
@@ -357,8 +438,9 @@ kaya_chatbot_env/bin/python -m pytest tests/ -v
 - Training loss should decrease steadily
 
 ### Inference
-- First load takes ~1 minute (model initialization)
-- Subsequent responses: ~2-3 seconds
+- On the `gguf` backend the app process holds only the tokenizer and the retriever (~2 GB); the weights live in the `llama` container
+- Typical latencies: banter ~5 s, a question that searches memory 7–13 s, describing a photo ~4 s, generating an image 56–75 s, editing a photo ~180 s
+- Generation is serialized by a GPU lock, so four people asking at once queue (8–35 s) rather than drop
 - Adjust `inference.temperature` in `config.yaml` for response creativity
 
 ## 📦 Pydantic Models
@@ -379,7 +461,10 @@ Docker configuration is available (`Dockerfile`, `docker-compose.yml`) with prof
 docker-compose up --build                          # prod web app
 docker compose --profile dev up -d kaya-dev        # dev UI on :7861
 docker compose --profile test run --rm kaya-test   # test suite in-container
+docker compose --profile sim up -d kaya-sim        # conversation simulator target
 ```
+
+Run one environment at a time — a served model may claim both GPUs.
 
 ## 🔒 Security
 

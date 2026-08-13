@@ -18,11 +18,16 @@ is deliberate, not a missing call. Factual answers are unchanged (verified: gold
 excluding greetings moved −0.053, inside the ±0.07 noise band). Any router failure
 falls back to `factual`, i.e. the old behaviour.
 
-**A fourth mode, `general` (2026-08-12).** `factual` used to swallow every question
+**The modes are `banter`, `mixed`, `general`, `factual`** (`router.MODES`).
+`mixed` is chat that names a person or an event without asking to be informed
+("o Rafa outra vez a fazer disso") — it retrieves, but answers short; it is the
+reason a reminiscence does not come back as a report.
+
+**`general` was added 2026-08-12.** `factual` used to swallow every question
 that was not banter, including the ones with nothing to do with the group, so
 "quem é melhor, Ronaldo ou Messi?" retrieved group context plus every member
 profile and came back as a sourced report about Kaya. `general` answers the world
-with **no group retrieval and no member profiles**. `retrieval_enabled` is now
+with **no group retrieval and no member profiles**. `retrieval_enabled` is
 `mode not in (BANTER, GENERAL)`.
 
 **Live model (since 2026-08-08): a STOCK `gemma-4-12b-it` at Q6_K, with no LoRA.**
@@ -78,6 +83,14 @@ kaya_chatbot_env/bin/python -m pytest tests/ -v
 kaya_chatbot_env/bin/python -m pytest tests/rag/ -v
 kaya_chatbot_env/bin/python -m pytest tests/pipeline/ -v
 kaya_chatbot_env/bin/python scripts/validate_pipeline.py
+
+# Multi-person conversation simulator (real webhook path, mock outbound)
+kaya_chatbot_env/bin/python scripts/seed_sim_data.py   # once, builds ./data_sim
+docker compose --profile sim up -d kaya-sim
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset smoke      # ~40s, no images
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset standard   # ~10min
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset long_haul  # ~28min
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --only images,audio
 
 # Model bake-off (candidate models across GPU configurations)
 scripts/fetch_bakeoff_models.sh                          # download candidate GGUFs (~262GB)
@@ -262,6 +275,13 @@ on its one measured sample the guard discarded it: 0.811 restored against 0.881
 unrestored. It costs ~90s and a second 17GB load, so it stays off until the
 40-cell grid says it earns them.
 
+**JPEG on the wire, PNG on disk.** `send_image` base64-inlines the bytes into the
+WAHA JSON body and WhatsApp recompresses to JPEG at the far end regardless, so
+`imagegen.run` re-encodes at `jpeg_quality` (92) before returning — a few hundred
+KB instead of several MB. The **worker keeps writing PNG**: `image_bakeoff.py`
+scores those files with ArcFace and must not be measuring compression artefacts.
+A failed re-encode returns the original bytes rather than nothing.
+
 **Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
 
 ### Conversational memory (`src/chat/summary.py`, `src/data/ingest.py`)
@@ -285,6 +305,48 @@ Ingestion is incremental and watermarked. `build_chunks` returns
 is left for the next pass, because a chunk closed mid-conversation is a chunk
 that can never be extended. The watermark is clamped to `consumed_through`, so an
 unsettled tail is not marked as read.
+
+### Conversation simulator (`src/testing/persona_sim.py`, `scripts/run_conversation_sim.py`)
+
+The unit suite proves the wiring and `preflight_e2e.py` proves each capability in
+isolation. Neither reproduces **an evening in the group**: several people talking
+over each other, a photo arriving mid-argument, an edit requested while the last
+one is still rendering, and a thread long enough to overflow the 14000-token
+retrieval budget. That is what this is for.
+
+**It drives the real webhook.** Every message is a synthetic WAHA event POSTed to
+the `kaya-sim` service, which runs the production `whatsapp_server` under
+`KAYA_WHATSAPP_MOCK=1`: parsing, routing, the GPU lock, scoping, media and the
+async image path are all the real ones — only the outbound WhatsApp client is a
+mock. In mock mode the webhook **awaits** generation and returns the result dict,
+so a beat asserts on the routing decision instead of guessing it from the reply.
+
+**Deterministic spine, improvised filler.** Free-form LLM chatter cannot be
+asserted on, so a scenario is a list of beats: `say` beats carry exact text and
+expectations, `improv` beats ask the Grok personas for natural conversation so
+the context the bot sees is real rather than a list of probes. Assertions live on
+the scripted beats only.
+
+Three things are load-bearing:
+
+- **`kaya-sim` deliberately does not `extends: kaya-base`.** The base hard-mounts
+  `./data`, and the simulator invents conversations that would then be logged as
+  group memory and ingested into the real vector store. It gets `./data_sim`,
+  seeded by `scripts/seed_sim_data.py`.
+- **Its GPU split mirrors prod** — app on the LLM's card, image worker on the
+  other. Arranging it the other way left FLUX ~19GB instead of 23.5GB and every
+  *edit* OOMed while generation still worked, which reads as "edits are broken"
+  when it is really "the rig was arranged differently from production".
+- **Message ids are unique per run** (`uuid4` prefix, not a counter). The sim
+  container outlives a run, so a restarting counter made the adapter's replay
+  guard — which is correct — treat the second run as the first run's backlog and
+  ignore every message.
+
+Presets: `smoke` (3 people, no image rendering, ~40s), `standard` (4 people, the
+full feature surface, ~10 min), `long_haul` (5 people, overflows the retrieval
+budget and the session window, ~28 min). Reports land in `reports/sim/<stamp>/`
+with an `index.html` contact sheet; the run exits non-zero on any failed
+assertion, so it can gate a deploy. Personas cost a few cents to ~€1 per run.
 
 ### Config System (`src/config_loader.py`)
 
