@@ -165,7 +165,7 @@ def allowed_here(config: Dict[str, Any], scope: str, chat_id: str = "",
 
 def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
         image_path: Optional[str] = None,
-        restore_face: bool = False) -> Optional[bytes]:
+        restore_face: bool = False, heavy: bool = False) -> Optional[bytes]:
     """Produce one image. Returns JPEG bytes, or None on any failure.
 
     Blocking and slow — minutes for an edit. Callers must run it off the thread
@@ -174,6 +174,10 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
     ``restore_face`` asks the worker to put the original face back after the
     edit. It is decided per request by ``build_edit_instruction``, because an
     edit that is *supposed* to change the face must not have it restored.
+
+    ``heavy`` says this edit changes what the people are doing rather than how
+    they look, and comes from the same call. Those need more guidance: "make
+    these two kiss" at the costume-swap setting came back as the original photo.
     """
     if not is_available(config):
         return None
@@ -201,6 +205,9 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 command += ["--editor", str(icfg["editor"])]
             if restore_face:
                 command += ["--restore-face"]
+            if heavy:
+                command += ["--guidance-scale",
+                            str(icfg.get("heavy_guidance_scale", 3.5))]
 
             env = dict(os.environ)
             if env_device:
@@ -310,16 +317,27 @@ _INSTRUCTION_SYSTEM = (
     "to alter the person's own face or head (zombie, monster, black eye, broken "
     "nose, much fatter or older, a different person), or 'FACE: keep' if it only "
     "changes clothing, setting, body or background.\n"
+    "Then, on a THIRD line, write exactly 'EDIT: heavy' if the request changes what "
+    "the people are DOING — their pose, their position, how they interact, adding "
+    "or removing a person or an object they hold — or 'EDIT: light' if it only "
+    "dresses, recolours or restyles what is already there.\n"
     "Examples:\n"
     "põe o Rafa vestido de rei -> Dress the person in a medieval king's robe and golden crown.\n"
     "FACE: keep\n"
+    "EDIT: light\n"
     "mete-lhe um capacete de astronauta -> Put an astronaut helmet on the person.\n"
     "FACE: keep\n"
+    "EDIT: light\n"
     "transforma-o num zombie -> Turn the person into a rotting zombie with grey peeling skin.\n"
-    "FACE: change"
+    "FACE: change\n"
+    "EDIT: light\n"
+    "põe estes dois a beijarem-se -> Make the two men kiss each other on the lips.\n"
+    "FACE: keep\n"
+    "EDIT: heavy"
 )
 
 _FACE_LINE = re.compile(r"^\s*FACE\s*:\s*(keep|change)\s*$", re.IGNORECASE)
+_EDIT_LINE = re.compile(r"^\s*EDIT\s*:\s*(light|heavy)\s*$", re.IGNORECASE)
 
 
 def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
@@ -330,43 +348,55 @@ def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
     them verbatim. One small local generation, and the raw text on any failure:
     a worse prompt is much better than no picture.
 
-    Returns ``(instruction, restore_face)``. The second value answers a question
-    the same call can settle for free: is this edit supposed to change the
-    person's face? Restoring the original face onto a zombie would undo the whole
-    request, so the restore pass only runs when the answer is "keep".
+    Returns ``(instruction, restore_face, heavy)``. The extra values answer two
+    questions the same call settles for free.
 
-    A malformed or missing FACE line means **no restore** — today's behaviour.
-    A stage that changes what an edit produces must not be triggered by a reply
-    that could not be parsed.
+    Is this edit supposed to change the person's face? Restoring the original
+    face onto a zombie would undo the whole request, so the restore pass only
+    runs when the answer is "keep".
+
+    And how far does the picture have to move? A costume swap and "make these
+    two kiss" were being asked for at the same guidance, and the second one came
+    back unchanged. A pose or interaction change needs to be pushed harder.
+
+    A malformed or missing FACE line means **no restore**, and a malformed EDIT
+    line means the ordinary guidance — both are today's behaviour. A stage that
+    changes what an edit produces must not be triggered by a reply that could
+    not be parsed.
     """
     icfg = _config(config)
     if not icfg.get("translate_prompt", True) or not text.strip() or backend is None:
-        return text, False
+        return text, False, False
     try:
         rewritten = backend.generate(
             [
                 {"role": "system", "content": _INSTRUCTION_SYSTEM},
                 {"role": "user", "content": text},
             ],
-            max_new_tokens=80,
+            max_new_tokens=96,
             sampling={"temperature": 0.2, "top_p": 0.9, "top_k": 0,
                       "repetition_penalty": 1.0},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("prompt rewrite failed (%s); using the original text", exc)
-        return text, False
+        return text, False, False
 
     lines = [ln.strip() for ln in (rewritten or "").splitlines() if ln.strip()]
     restore = False
+    heavy = False
     instruction = ""
     for line in lines:
-        match = _FACE_LINE.match(line)
-        if match:
-            restore = match.group(1).lower() == "keep"
+        face = _FACE_LINE.match(line)
+        edit = _EDIT_LINE.match(line)
+        if face:
+            restore = face.group(1).lower() == "keep"
+        elif edit:
+            heavy = edit.group(1).lower() == "heavy"
         elif not instruction:
             instruction = line.strip('"').strip()
 
     if not instruction or len(instruction.split()) > 60:
-        return text, False
-    logger.info("edit prompt: %r -> %r (restore_face=%s)", text, instruction, restore)
-    return instruction, restore
+        return text, False, False
+    logger.info("edit prompt: %r -> %r (restore_face=%s, heavy=%s)",
+                text, instruction, restore, heavy)
+    return instruction, restore, heavy

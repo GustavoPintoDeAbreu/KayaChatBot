@@ -271,15 +271,18 @@ def _imagegen(mode: str, prompt: str, image_path=None):
 
     # Generation from scratch has no original face to restore.
     restore_face = False
+    heavy = False
     if mode == "edit":
         with gpu_section(config):
             # The same call also answers whether this edit is meant to change the
             # person's face — restoring the original face onto a zombie would undo
-            # the request.
-            prompt, restore_face = imagegen.build_edit_instruction(
+            # the request — and how far the picture has to move. A pose or
+            # interaction change ("põe estes dois a beijarem-se") needs to be
+            # pushed harder than a costume swap, and was coming back unchanged.
+            prompt, restore_face, heavy = imagegen.build_edit_instruction(
                 config, prompt, engine.backend)
     return imagegen.run(config, prompt, mode=mode, image_path=image_path,
-                        restore_face=restore_face)
+                        restore_face=restore_face, heavy=heavy)
 
 
 from src.chat.summary import SummaryWriter

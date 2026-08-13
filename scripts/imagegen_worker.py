@@ -51,6 +51,15 @@ DEFAULT_IDENTITY_CLAUSE = (
     "exactly the same as in the original photo. Do not change who they are."
 )
 
+# The same clause for a photo with more than one person in it. The singular one
+# was being sent for group shots too — "the person's face" in a picture of three
+# people names nobody, and both failed edits from the live group ("make these
+# guys kissing", "put a gun in the left guy's hand") were two-subject photos.
+DEFAULT_IDENTITY_CLAUSE_PLURAL = (
+    "Keep every person's face, facial features, hairline, skin tone and identity "
+    "exactly the same as in the original photo. Do not change who any of them are."
+)
+
 # The face-restore pass. A LoRA trained for FLUX.2 Klein 9B that takes a
 # body/scene image plus a face image and transfers the face — which is exactly
 # the second half of a two-stage edit. rank-64 (316MB) by default; the repo also
@@ -83,6 +92,25 @@ def load_image(path: str, longest: int = 1024):
     width = max(image.width // 16 * 16, 16)
     height = max(image.height // 16 * 16, 16)
     return image.crop((0, 0, width, height))
+
+
+def _face_count(image_path: str) -> int:
+    """How many faces are in the source photo. 0 if it cannot be told.
+
+    Degrades to the singular clause without insightface, which is the behaviour
+    that shipped — a worse prompt, never a missing picture.
+    """
+    try:
+        from PIL import Image, ImageOps
+
+        from src.chat import face_utils
+
+        with Image.open(image_path) as handle:
+            image = ImageOps.exif_transpose(handle).convert("RGB")
+        return len(face_utils.detect(image))
+    except Exception as exc:  # noqa: BLE001
+        print(f"could not count faces ({exc}); assuming one", file=sys.stderr)
+        return 0
 
 
 def bnb_8bit(keep):
@@ -406,6 +434,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--candidates", type=int, default=0)
+    parser.add_argument("--guidance-scale", type=float, default=0.0,
+                        help="override the configured guidance; the caller raises "
+                             "it for edits that change what people are DOING")
     parser.add_argument("--no-face-crop", action="store_true")
     parser.add_argument("--no-identity-clause", action="store_true")
     parser.add_argument("--restore-face", action="store_true",
@@ -438,7 +469,14 @@ def main() -> None:
         raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
 
     prompt = bare_prompt = args.prompt
-    clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
+    # A group shot needs the plural clause: "the person's face" in a photo of
+    # three people names nobody, and both edits that failed in the live group
+    # were two-subject photos.
+    if _face_count(args.image) > 1:
+        clause = str(icfg.get("identity_clause_plural",
+                              DEFAULT_IDENTITY_CLAUSE_PLURAL) or "")
+    else:
+        clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
     if clause and not args.no_identity_clause:
         prompt = f"{prompt.rstrip().rstrip('.')}. {clause}"
 
@@ -447,7 +485,7 @@ def main() -> None:
         "face_crop": not args.no_face_crop and bool(icfg.get("face_crop", True)),
         "face_min_ratio": float(icfg.get("face_min_ratio", 0.22)),
         "face_target_ratio": float(icfg.get("face_target_ratio", 0.32)),
-        "guidance_scale": float(icfg.get("guidance_scale", 2.5)),
+        "guidance_scale": args.guidance_scale or float(icfg.get("guidance_scale", 2.5)),
         # An edit that comes back identical to the source is a failure. Below
         # this much change it is retried harder, and if that fails too the
         # caller says so instead of sending the original back as the "edit".
