@@ -332,6 +332,14 @@ chat:
     voices:
       pt: "models/piper/pt/pt_PT/tugão/medium/pt_PT-tugão-medium.onnx"
       en: "models/piper/en/en_GB/alan/medium/en_GB-alan-medium.onnx"
+    # Those runs used to be concatenated frame-to-frame, so one voice stopped
+    # mid-breath and the next started on the very next sample. The group's first
+    # reaction to a voice note was that the bot "parece que se está a atropelar
+    # enquanto fala". This is the pause written at each boundary, in seconds.
+    run_gap_seconds: 0.18
+    # Piper speaking rate: >1 slower, <1 faster. null keeps the voice's own
+    # default. Here so pace can be tuned without a code change.
+    length_scale: null
     # Incoming voice notes are transcribed with faster-whisper and then flow
     # through the normal text path, router included.
     transcribe_enabled: true

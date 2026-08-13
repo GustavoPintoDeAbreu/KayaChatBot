@@ -162,6 +162,32 @@ def _load(config: Dict[str, Any], lang: str = "pt"):
     return _voices[key]
 
 
+def _synthesis_config(config: Dict[str, Any]):
+    """Piper's per-request knobs, or None when nothing is configured.
+
+    ``length_scale`` is speaking rate: >1 slower, <1 faster. Exposed because the
+    group's first reaction to a voice note was that the bot "parece que se está a
+    atropelar enquanto fala", and pace should be tunable without a code change.
+    """
+    acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
+    length_scale = acfg.get("length_scale")
+    if length_scale is None:
+        return None
+    try:
+        from piper import SynthesisConfig
+
+        return SynthesisConfig(length_scale=float(length_scale))
+    except Exception as exc:  # noqa: BLE001 — an unusable knob must not lose the audio
+        logger.warning("could not apply length_scale (%s); using the voice default", exc)
+        return None
+
+
+def _silence(params, seconds: float) -> bytes:
+    """A gap of digital silence in the same format as the surrounding audio."""
+    frames = int(params.framerate * max(0.0, seconds))
+    return b"\x00" * frames * params.nchannels * params.sampwidth
+
+
 def synthesize_wav(text: str, config: Dict[str, Any]) -> Optional[bytes]:
     """Text -> WAV bytes, each sentence spoken by its own language's voice."""
     if not text or not text.strip():
@@ -171,12 +197,16 @@ def synthesize_wav(text: str, config: Dict[str, Any]) -> Optional[bytes]:
         if not runs:
             return None
 
+        syn_config = _synthesis_config(config)
+        acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
+        gap = float(acfg.get("run_gap_seconds", 0.18))
+
         frames, params = [], None
         for lang, chunk in runs:
             voice = _load(config, lang)
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
-                voice.synthesize_wav(chunk, wf)
+                voice.synthesize_wav(chunk, wf, syn_config=syn_config)
             buf.seek(0)
             with wave.open(buf, "rb") as wf:
                 if params is None:
@@ -194,8 +224,16 @@ def synthesize_wav(text: str, config: Dict[str, Any]) -> Optional[bytes]:
         out = io.BytesIO()
         with wave.open(out, "wb") as wf:
             wf.setparams(params)
-            for f in frames:
-                wf.writeframes(f)
+            # A gap at every run boundary. The runs were being written
+            # frame-to-frame, so a Portuguese sentence and the English one after
+            # it collided with no pause at all — one voice stops mid-breath and
+            # another starts on the next sample, which is what "parece que se
+            # está a atropelar" describes.
+            pause = _silence(params, gap)
+            for index, frame in enumerate(frames):
+                if index and pause:
+                    wf.writeframes(pause)
+                wf.writeframes(frame)
         return out.getvalue()
     except Exception as exc:  # noqa: BLE001 — a failed voice reply must fall back to text
         logger.warning("TTS failed: %s", exc)
