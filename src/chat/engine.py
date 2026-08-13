@@ -16,7 +16,7 @@ preamble) without duplicating the member-profile / date assembly.
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -45,11 +45,18 @@ class Reply:
     reply means Piper reads two bare domains aloud at the end of the message. The
     caller decides where the sources go: appended for text, sent separately (or
     dropped) for speech.
+
+    ``telemetry`` is how the turn was produced — which route fired, whether
+    retrieval ran, which members ended up being talked about. The interaction log
+    recorded latency and delivery medium but never the route, so a bad answer
+    could not be attributed to a bad classification rather than a bad generation.
+    Kept as a dict because it is written straight into the log's ``**extra``.
     """
 
     text: str
     route: Optional["router.Route"] = None
     citation: str = ""
+    telemetry: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def text_with_citation(self) -> str:
@@ -308,7 +315,8 @@ class KayaEngine:
             # the delivery medium changes. Other commands are pure state changes
             # and are executed by the caller without generating anything.
             if route.command and route.command != router.CMD_AUDIO_ONCE:
-                return Reply(text="", route=route)
+                return Reply(text="", route=route,
+                             telemetry=self._telemetry(route, "", message, ""))
 
             # Off-topic / current-events questions get live facts from Grok's web
             # search. This runs AFTER routing, and only for the two informational
@@ -344,7 +352,11 @@ class KayaEngine:
                             f"{web_result.answer}"
                         )
                     else:
-                        return Reply(text=web_result.answer, route=route, citation=citation)
+                        return Reply(
+                            text=web_result.answer, route=route, citation=citation,
+                            telemetry=self._telemetry(
+                                route, "", message, web_result.answer),
+                        )
 
             # 2. Mode picks the length budget, unless the caller forced one.
             if not explicit_cap:
@@ -364,7 +376,7 @@ class KayaEngine:
                 system_prompt = build_mode_system_prompt(self.config, mode_prompt)
 
             # 4. Mode picks retrieval: off for banter, reduced for mixed.
-            user_turn, _context = self.build_user_turn(
+            user_turn, context = self.build_user_turn(
                 message,
                 recent_lines,
                 speaker_label=speaker,
@@ -398,11 +410,41 @@ class KayaEngine:
                 messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
 
+        text = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
         return Reply(
-            text=clean_response(raw, user_name=speaker, bot_name="Kaya Bot"),
+            text=text,
             route=route,
             citation=citation,
+            telemetry=self._telemetry(route, context, message, text),
         )
+
+    def _telemetry(self, route: "router.Route", context: str, message: str,
+                   reply: str) -> Dict[str, Any]:
+        """What the interaction log records about how this turn was produced.
+
+        ``reply_members`` is the one that matters and the reason this exists: the
+        live logs showed the same two people being talked about turn after turn,
+        and there was no way to show it short of reading the thread. Counting who
+        the bot actually names — not who the question named — is what makes that
+        measurable, and what a later change has to move.
+
+        Never raises: telemetry must not be able to cost somebody their reply.
+        """
+        info: Dict[str, Any] = {
+            "route_mode": route.mode,
+            "route_command": route.command or "",
+            "route_fallback": route.fallback,
+            "route_raw": route.raw,
+            "retrieval_enabled": route.retrieval_enabled,
+            "retrieved_chars": len(context or ""),
+        }
+        try:
+            if self.retriever:
+                info["query_members"] = self.retriever.named_members(message)
+                info["reply_members"] = self.retriever.named_members(reply)
+        except Exception as exc:  # noqa: BLE001 — a log field is never worth a failure
+            print(f"⚠️  telemetry member scan failed: {exc}")
+        return info
 
     def _synthesize_web_locally(self) -> bool:
         """Whether a web result is rewritten by the local model or sent verbatim.

@@ -352,6 +352,8 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
             web_search_used=bool(result.get("citation")),
             delivered_as=result.get("delivered_as", "text"),
             spoken_text=result.get("spoken_text", ""),
+            # route_mode, retrieval and who the reply named — see Reply.telemetry.
+            **(result.get("telemetry") or {}),
         )
 
 

@@ -946,6 +946,7 @@ class WhatsAppAdapter:
         reply = result if isinstance(result, str) else getattr(result, "text", "")
         route = None if isinstance(result, str) else getattr(result, "route", None)
         citation = "" if isinstance(result, str) else getattr(result, "citation", "")
+        telemetry = {} if isinstance(result, str) else getattr(result, "telemetry", {})
         command = getattr(route, "command", None) if route else None
 
         # A one-off voice request changes only how THIS reply is delivered, so it
@@ -1019,6 +1020,10 @@ class WhatsAppAdapter:
             # the sources line was being read aloud.
             "delivered_as": delivered_as,
             "spoken_text": spoken,
+            # How the turn was classified and what it retrieved. Merged verbatim
+            # into the interaction log so a bad answer can be attributed to the
+            # route rather than guessed at from the reply.
+            "telemetry": telemetry,
         }
 
     def _remember_sent(self, message_id: str, info: Dict[str, Any]) -> None:

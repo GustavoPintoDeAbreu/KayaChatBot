@@ -353,10 +353,11 @@ def test_clear_command_not_generated_as_reply(tmp_path):
 class RoutedReply:
     """Mimics ``engine.Reply``: reply text plus how the message was routed."""
 
-    def __init__(self, text="", command=None, mode="banter", citation=""):
+    def __init__(self, text="", command=None, mode="banter", citation="", telemetry=None):
         self.text = text
         self.citation = citation
         self.route = type("Route", (), {"mode": mode, "command": command})()
+        self.telemetry = telemetry or {}
 
     @property
     def text_with_citation(self):
@@ -1470,3 +1471,30 @@ def test_a_failed_notification_still_records_the_report(tmp_path):
     assert result["logged"] is True
     assert len(_rows(tmp_path / "bugs.jsonl")) == 1
     assert "Registado" in client.sent[-1]["text"]
+
+
+# ── routing telemetry (2026-08-13) ───────────────────────────────────────────
+def test_the_result_carries_the_routing_telemetry(tmp_path):
+    """How a turn was routed has to reach the interaction log.
+
+    The log recorded latency and delivery medium but never the route, so the
+    "it is obsessed with the Gil" complaint could not be measured — only
+    re-read. whatsapp_server merges this dict into log_interaction's extras.
+    """
+    telemetry = {"route_mode": "factual", "route_fallback": False,
+                 "reply_members": ["Gil"], "query_members": []}
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="o Gil outra vez", mode="factual", telemetry=telemetry))
+
+    result = adapter.handle_event(dm_event("quem é o mais paneleiro?"), system_prompt="")
+
+    assert result["telemetry"] == telemetry
+
+
+def test_a_plain_string_responder_still_works(tmp_path):
+    """Tests and the simulators return a bare string, not a Reply."""
+    adapter, _ = make_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("olá"))
+
+    assert result["telemetry"] == {}
