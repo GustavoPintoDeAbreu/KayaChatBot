@@ -441,6 +441,52 @@ def _preload_audio_models() -> None:
     threading.Thread(target=_warm, name="kaya-whisper-warm", daemon=True).start()
 
 
+def _start_bio_scheduler() -> None:
+    """Keep proposing profile updates from what the group has been saying.
+
+    Same shape as the ingest scheduler below and for the same reason: a daemon
+    thread, never at message time. It generates against the llama-server that is
+    already serving, taking the GPU lock per call and giving up on
+    ``GpuBusyError``, so a refresh can never cost somebody their reply.
+
+    Nothing it produces reaches the bot on its own — a cycle writes proposals and
+    ``scripts/review_bios.py`` is where a human accepts them.
+
+    ``on_boot`` defaults to False: a restart should not spend GPU on backlog
+    while the group is mid-conversation.
+    """
+    bcfg = config.get("bio_refresh") or {}
+    if not bcfg.get("enabled", False):
+        return
+
+    from src.data.bio_refresh import run_cycle
+
+    def _once(label: str) -> None:
+        try:
+            report = run_cycle(config, engine.backend)
+            if report.get("skipped"):
+                print(f"ℹ️  {label} bio refresh skipped: {report['skipped']}")
+            else:
+                print(f"✓ {label} bio refresh: {report['messages_read']} message(s), "
+                      f"{len(report['proposals'])} proposal(s) pending review")
+        except Exception as exc:  # noqa: BLE001 — must never take the bot down
+            print(f"⚠️  {label} bio refresh failed: {exc}")
+
+    def _loop() -> None:
+        if bcfg.get("on_boot", False):
+            _once("Boot")
+        interval = float(bcfg.get("interval_minutes", 0) or 0)
+        if interval <= 0:
+            return
+        while True:
+            time.sleep(interval * 60)
+            _once("Periodic")
+
+    threading.Thread(target=_loop, name="kaya-bio-refresh", daemon=True).start()
+    print(f"✓ Biography refresh scheduled (every {bcfg.get('interval_minutes', 0)} min, "
+          f"proposals only — review with scripts/review_bios.py)")
+
+
 def _start_ingest_scheduler() -> None:
     """Catch up on what was missed while down, then keep folding in new messages.
 
@@ -480,6 +526,7 @@ def _start_ingest_scheduler() -> None:
 if not MOCK_MODE:
     _preload_audio_models()
     _start_ingest_scheduler()
+    _start_bio_scheduler()
 
 
 @app.post("/whatsapp/webhook")
