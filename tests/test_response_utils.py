@@ -6,9 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.chat.response_utils import (
+    build_member_prompt_suffix,
     clean_response,
     coerce_text,
     detect_language,
+    is_near_duplicate,
+    previous_bot_replies,
     strip_clause_dashes,
     truncate_history_line,
     wants_long_answer,
@@ -230,3 +233,111 @@ class TestStripClauseDashes:
         )
         assert "—" not in cleaned
         assert "chama-se Kobe" in cleaned
+
+
+# ── saying the same thing twice (2026-08-13) ─────────────────────────────────
+def test_previous_bot_replies_are_pulled_from_the_history():
+    lines = ["Pedro: So attack",
+             "Kaya Bot: Escolhe um alvo.",
+             "Gustavo: Godamn",
+             "Kaya Bot: Diz lá quem."]
+    assert previous_bot_replies(lines) == ["Diz lá quem.", "Escolhe um alvo."]
+
+
+def test_previous_bot_replies_respects_the_limit():
+    lines = [f"Kaya Bot: resposta {n}" for n in range(6)]
+    assert len(previous_bot_replies(lines, limit=2)) == 2
+
+
+def test_previous_bot_replies_ignores_everyone_else():
+    assert previous_bot_replies(["Gil: Kaya Bot: não sou eu"]) == []
+
+
+def test_the_repeat_from_the_live_log_is_caught():
+    """"So attack" and "Godamn", one turn apart, got the identical reply."""
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert is_near_duplicate("Escolhe um alvo e diz quem eu tenho de partir primeiro.", said)
+
+
+def test_punctuation_and_case_do_not_hide_a_repeat():
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert is_near_duplicate("escolhe um alvo e diz quem eu tenho de partir primeiro", said)
+
+
+def test_a_genuinely_different_reply_is_allowed():
+    said = ["Escolhe um alvo e diz quem eu tenho de partir primeiro."]
+    assert not is_near_duplicate("Diz-me lá quem queres ver destruído hoje.", said)
+
+
+def test_nothing_said_before_is_never_a_duplicate():
+    assert not is_near_duplicate("qualquer coisa", [])
+    assert not is_near_duplicate("", ["alguma coisa"])
+
+
+# ── the roster has to say it is complete (2026-08-13) ────────────────────────
+MEMBERS = {"members": [
+    {"name": "Gil", "aliases": ["gilão"], "key_facts": ["Gil corre."]},
+    {"name": "Rafa", "aliases": [], "key_facts": ["Rafa treina kickboxing."]},
+]}
+
+
+def test_the_suffix_names_the_roster_as_complete():
+    """Asked which "Kaya-Avenger" to call, the bot answered "liga à Mel".
+
+    Mel is not in the group. The list named the members but never said they
+    were the only ones, so any name in a retrieved chunk was fair game.
+    """
+    suffix = build_member_prompt_suffix(MEMBERS)
+
+    assert "2 membros" in suffix
+    assert "Gil, Rafa" in suffix or "Rafa, Gil" in suffix
+    assert "Mais ninguém é do grupo" in suffix
+
+
+def test_the_member_details_are_still_there():
+    suffix = build_member_prompt_suffix(MEMBERS)
+
+    assert "Gil corre" in suffix
+    assert "Rafa treina kickboxing" in suffix
+
+
+def test_no_members_means_no_suffix():
+    assert build_member_prompt_suffix({"members": []}) == ""
+
+
+# ── how much there is about each member (2026-08-13) ─────────────────────────
+UNEVEN = {"members": [
+    {"name": "Gil", "aliases": [], "key_facts": [f"Gil facto {n}." for n in range(6)]},
+    {"name": "Murgeiro", "aliases": [], "key_facts": ["Murgeiro facto único."]},
+]}
+
+
+def test_key_facts_can_be_capped_per_member():
+    """Shuffling fixed WHICH member is listed first, not how much there is about
+    each. "Pick someone" resolves to whoever the prompt has most material on."""
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=4)
+
+    assert "Gil facto 3" in suffix
+    assert "Gil facto 4" not in suffix
+    assert "Gil facto 5" not in suffix
+
+
+def test_a_thin_profile_is_untouched_by_the_cap():
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=4)
+
+    assert "Murgeiro facto único" in suffix
+
+
+def test_no_cap_keeps_every_fact():
+    suffix = build_member_prompt_suffix(UNEVEN, max_facts=0)
+
+    assert "Gil facto 5" in suffix
+
+
+def test_profiles_are_framed_as_history_not_as_now():
+    """Challenged on the "ladies man" label, the bot explained it was "um título
+    honorífico que ficou registado" — accurate about the data, and a bad way to
+    talk about people. The facts carry no dates, so the framing has to."""
+    suffix = build_member_prompt_suffix(UNEVEN)
+
+    assert "não uma fotografia de agora" in suffix

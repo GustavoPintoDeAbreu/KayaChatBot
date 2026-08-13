@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,34 @@ DESCRIBE_PROMPT = (
     "ambiente. Se houver texto legível na imagem, transcreve-o. Não inventes "
     "nomes de pessoas. Responde só com a descrição."
 )
+
+
+# The describer answering that it cannot see anything. This is a successful HTTP
+# 200 carrying a refusal, so nothing downstream treated it as a failure: the group
+# log ended up holding "[Imagem: Por favor, fornece o vídeo ou a imagem para que
+# eu possa descrevê-la]" twice, as something a member had apparently said — and
+# from there it is ingested into the vector store as group memory.
+#
+# Animated WebP stickers are the usual cause: the mimetype is image/*, so the
+# photo path takes them, and the projector cannot decode them.
+_NO_IMAGE = re.compile(
+    r"forne[çc]e|fornecer|partilha o ficheiro|envia (a imagem|o v[íi]deo)"
+    r"|n[ãa]o (consigo|posso) (ver|descrever|analisar)"
+    r"|sem (o ficheiro|a imagem|acesso)"
+    r"|(no|without an?) image (was )?(provided|attached)"
+    r"|i (cannot|can't) (see|view|describe)",
+    re.IGNORECASE,
+)
+
+# A real description of a photo runs to a couple of sentences. Anything this
+# short is the model shrugging, not describing.
+_MIN_DESCRIPTION_CHARS = 25
+
+
+def looks_like_a_refusal(text: str) -> bool:
+    """Whether the describer said it could not see the image rather than describing it."""
+    stripped = (text or "").strip()
+    return len(stripped) < _MIN_DESCRIPTION_CHARS or bool(_NO_IMAGE.search(stripped))
 
 
 def _config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,11 +74,42 @@ def _server_url(config: Dict[str, Any]) -> str:
     return os.environ.get("KAYA_LLAMA_URL") or gguf.get("server_url", "http://llama:8080")
 
 
+def flatten_animation(image: bytes, mimetype: str) -> tuple:
+    """An animated sticker as a single still frame. ``(bytes, mimetype)``.
+
+    WhatsApp stickers arrive as ``image/webp`` and are often animated, which the
+    projector cannot decode — so the model was handed something it could not see
+    and answered that it had received no image. One frame is all a description
+    needs, and a static sticker passes through untouched.
+
+    Returns the input unchanged if anything goes wrong: the describer failing is
+    better than the message being dropped.
+    """
+    if "webp" not in (mimetype or "").lower():
+        return image, mimetype
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image)) as sticker:
+            if not getattr(sticker, "is_animated", False):
+                return image, mimetype
+            sticker.seek(0)
+            buffer = io.BytesIO()
+            sticker.convert("RGB").save(buffer, format="PNG")
+        return buffer.getvalue(), "image/png"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not flatten an animated sticker (%s)", exc)
+        return image, mimetype
+
+
 def describe_bytes(image: bytes, config: Dict[str, Any],
                    mimetype: str = "image/jpeg") -> Optional[str]:
     """Describe one image. None on any failure — never raises."""
     if not image:
         return None
+    image, mimetype = flatten_animation(image, mimetype)
     vcfg = _config(config)
     try:
         import requests
@@ -76,7 +136,13 @@ def describe_bytes(image: bytes, config: Dict[str, Any],
     except Exception as exc:  # noqa: BLE001 — a failed description must not drop the message
         logger.warning("image description failed: %s", exc)
         return None
-    return content or None
+    if looks_like_a_refusal(content):
+        # None, not the text: the caller writes whatever comes back into the
+        # message log as "[Imagem: …]", and a refusal stored there becomes a
+        # searchable thing the group said.
+        logger.warning("describer could not see the image: %r", content[:120])
+        return None
+    return content
 
 
 def describe_url(url: str, mimetype: str, config: Dict[str, Any],

@@ -170,6 +170,25 @@ class ConversationRetriever:
 
         return mentioned
 
+    def named_members(self, text: str) -> List[str]:
+        """Canonical member names appearing in ``text``, deduplicated.
+
+        ``extract_query_persons`` returns matched *aliases*, which is what the
+        retrieval post-filter wants (it compares them against chunk metadata).
+        Counting who a turn is about needs the canonical name instead, so "gilão"
+        and "gil" are one person rather than two.
+        """
+        lowered = (text or "").lower()
+        found = []
+        for member in self._members_data:
+            name = member.get("name")
+            if not name:
+                continue
+            aliases = {name.lower(), *(a.lower() for a in member.get("aliases", []))}
+            if any(re.search(rf"\b{re.escape(alias)}\b", lowered) for alias in aliases):
+                found.append(name)
+        return found
+
     def retrieve(self, query: str, top_k: Optional[int] = None,
                  query_embedding: Optional[Any] = None,
                  scope: Optional[str] = None,

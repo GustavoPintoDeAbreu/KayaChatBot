@@ -38,6 +38,9 @@ class StubRetriever:
     def extract_query_persons(self, query):
         return []
 
+    def named_members(self, text):
+        return []
+
     def retrieve_all(self, *a, **kw):
         return ""
 

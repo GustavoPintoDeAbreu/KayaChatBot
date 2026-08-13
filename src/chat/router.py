@@ -42,7 +42,8 @@ BANTER = "banter"
 MIXED = "mixed"
 GENERAL = "general"
 FACTUAL = "factual"
-MODES = (BANTER, MIXED, GENERAL, FACTUAL)
+ROAST = "roast"
+MODES = (BANTER, MIXED, GENERAL, FACTUAL, ROAST)
 
 CMD_AUDIO = "audio"
 CMD_AUDIO_ONCE = "audio_once"
@@ -56,6 +57,7 @@ _LABELS = {
     "MIXED": (MIXED, None),
     "GENERAL": (GENERAL, None),
     "FACTUAL": (FACTUAL, None),
+    "ROAST": (ROAST, None),
     "CMD_AUDIO": (None, CMD_AUDIO),
     "CMD_AUDIO_ONCE": (None, CMD_AUDIO_ONCE),
     "CMD_TEXT": (None, CMD_TEXT),
@@ -68,6 +70,7 @@ _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer
 BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me".
 MIXED — chat that references a person or event but is not really asking to be informed. Examples: "o Rafa outra vez a fazer disso", "ainda me lembro daquele jantar".
 FACTUAL — a request for information, memory or detail about THE GROUP: its members, its history, what was said or shared in it. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?", "quem mandou aquela foto do barco?".
+ROAST — asking the bot to judge, rank, mock or pick on someone in the group. The answer is aimed AT a member rather than being information about one. Examples: "quem é o mais burro?", "roast the Gil", "quem tem o search history mais sus?", "diz mal do Pedro", "quem é que ganha uma luta aqui?", "who's the biggest loser here?".
 GENERAL — a question, task or opinion about anything OUTSIDE the group: world knowledge, current events, football, advice, cooking, writing, code, maths. Nobody from the group needs to be looked up to answer it. Examples: "quem é melhor, Ronaldo ou Messi?", "explica-me a inflação", "escreve-me um poema sobre o Porto", "o que faço para o jantar?", "who won the Champions League?", "como é que se muda um pneu?".
 CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
 CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
@@ -79,6 +82,12 @@ FACTUAL and GENERAL differ only in whether the group is the subject. If answerin
   "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
   "o Gil joga à bola?" -> FACTUAL (the question is about Gil)
   "manda o Gil para o caralho, e já agora quem ganhou a Champions?" -> GENERAL (nothing has to be looked up about Gil)
+
+FACTUAL and ROAST differ in what the answer is FOR. Information about a member is FACTUAL; a verdict aimed at one is ROAST:
+  "o que faz o Gil?" -> FACTUAL (asking to be informed)
+  "porque é que o Gil é tão paneleiro?" -> ROAST (asking for a verdict)
+  "quem é o mais engraçado?" -> ROAST (ranking the members against each other)
+  "quantos membros tem o grupo?" -> FACTUAL
 
 A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
   "o áudio estava mau" -> BANTER (an opinion about a recording)

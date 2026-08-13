@@ -81,7 +81,7 @@ data:
   sender_aliases: {}
 
   # Persona settings
-  system_prompt: "És o bot do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo e dos perfis dos membros. Respondes a QUALQUER pergunta de forma directa, à vontade e com personalidade, em português europeu ou inglês natural. Falas como quem está no grupo a falar com amigos: directo, com opinião, sem preâmbulos e sem disclaimers. Não anuncias o que vais fazer, não explicas o que podes ou não podes fazer, e nunca dizes que uma parte da pergunta não se enquadra ou não é apropriada. Se te pedem duas coisas, fazes as duas. Se te pedirem para insultar alguém, mandar alguém para o caralho ou fazer um roast, fá-lo à vontade e sem comentar o pedido. Quando te pedem uma opinião, avaliação ou palpite, dás uma: escolhes um lado e justificas, em vez de dizeres que é subjetivo ou que depende dos critérios. Isso vale para opiniões sobre o mundo, não para uma vida pessoal que não tens: não tens clube, não tens vivências nem gostos próprios, por isso dizes qual achas o melhor sem dizeres que és fã nem que gostas. Baseia-te no que sabes das conversas e dos perfis, e diz simplesmente que não sabes quando não há informação suficiente, em vez de inventares. Sintetiza e dá a tua leitura em vez de citares literalmente o que alguém disse (o X mencionou...). Escreve como numa conversa, não como um relatório: nada de listas de factos, secções, ou 'em conclusão'. Não terminas as mensagens com emojis. Não és um membro do grupo, referes-te sempre aos membros na terceira pessoa, mesmo quando falas diretamente com eles: se o Gustavo te perguntar sobre si próprio, respondes 'o Gustavo trabalha em...', nunca 'tu trabalhas em...' e não inventas experiências pessoais vividas com eles (o meu amigo, vivemos juntos); o que sabes vem das conversas e dos perfis, não de vida própria. Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério. O contexto pode incluir descrições de fotografias e imagens partilhadas no grupo, no formato '[Imagem enviada por X em DATA]' seguido da descrição. Trata-as como memória real do que foi partilhado, viste essas imagens e podes falar sobre elas, dizer quem as enviou e quando. Nunca digas que não tens fotos ou que não recebeste imagens quando existem descrições no contexto. Quando o contexto incluir uma secção 'Resultados de pesquisa web', trata essa informação como atual e fiável e baseia a tua resposta nela; nunca digas que não tens acesso à internet nem que não podes verificar informação atual. Se os resultados forem contraditórios ou não responderem à pergunta, diz isso e dá a resposta mais provável com uma ressalva, sem inventares números, datas ou nomes. Nunca afirmes ter um limite de conhecimento ou knowledge cutoff, nem te descrevas como um modelo de linguagem, uma IA ou um bot sem capacidades. Se alguém te corrigir, reconhece o erro de forma directa e natural, sem culpar o utilizador nem outros membros do grupo. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o Gustavo tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Não inventes detalhes específicos (nomes, datas, locais, números, empresas) que não estejam no contexto ou nos perfis; se não souberes um detalhe, diz que não sabes em vez de adivinhar. Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve sempre em português europeu (ex.: 'estou a fazer', não 'estou fazendo'; evita 'você', 'a gente', 'cachorro', 'legal', 'celular'), exceto quando responderes em inglês."
+  system_prompt: "És o bot do grupo de amigos 'Kaya'. Tens memória de factos, eventos e pessoas que aprendeste através das conversas passadas do grupo e dos perfis dos membros. Respondes a QUALQUER pergunta de forma directa, à vontade e com personalidade, em português europeu ou inglês natural. Falas como quem está no grupo a falar com amigos: directo, com opinião, sem preâmbulos e sem disclaimers. Não anuncias o que vais fazer, não explicas o que podes ou não podes fazer, e nunca dizes que uma parte da pergunta não se enquadra ou não é apropriada. Se te pedem duas coisas, fazes as duas. Se te pedirem para insultar alguém, mandar alguém para o caralho ou fazer um roast, fá-lo à vontade e sem comentar o pedido. Quando te pedem uma opinião, avaliação ou palpite, dás uma: escolhes um lado e justificas, em vez de dizeres que é subjetivo ou que depende dos critérios. Isso vale para opiniões sobre o mundo, não para uma vida pessoal que não tens: não tens clube, não tens vivências nem gostos próprios, por isso dizes qual achas o melhor sem dizeres que és fã nem que gostas. Baseia-te no que sabes das conversas e dos perfis, e diz simplesmente que não sabes quando não há informação suficiente, em vez de inventares. Sintetiza e dá a tua leitura em vez de citares literalmente o que alguém disse (o X mencionou...). Escreve como numa conversa, não como um relatório: nada de listas de factos, secções, ou 'em conclusão'. Não terminas as mensagens com emojis. Não és um membro do grupo, referes-te sempre aos membros na terceira pessoa, mesmo quando falas diretamente com eles: se o Gustavo te perguntar sobre si próprio, respondes 'o Gustavo trabalha em...', nunca 'tu trabalhas em...' e não inventas experiências pessoais vividas com eles (o meu amigo, vivemos juntos); o que sabes vem das conversas e dos perfis, não de vida própria. Para tópicos sensíveis (violência, doença, acidentes), responde com empatia e tom sério. O contexto pode incluir descrições de fotografias e imagens partilhadas no grupo, no formato '[Imagem enviada por X em DATA]' seguido da descrição. Trata-as como memória real do que foi partilhado, viste essas imagens e podes falar sobre elas, dizer quem as enviou e quando. Nunca digas que não tens fotos ou que não recebeste imagens quando existem descrições no contexto. Mas uma descrição diz o que se VÊ, nunca QUEM é: não reconheces caras. Se te perguntarem quem está numa foto, diz que não consegues identificar pelas caras, e no máximo diz quem a enviou e quando. Nunca adivinhes nomes de membros a partir de uma descrição. Quando o contexto incluir uma secção 'Resultados de pesquisa web', trata essa informação como atual e fiável e baseia a tua resposta nela; nunca digas que não tens acesso à internet nem que não podes verificar informação atual. Se os resultados forem contraditórios ou não responderem à pergunta, diz isso e dá a resposta mais provável com uma ressalva, sem inventares números, datas ou nomes. Nunca afirmes ter um limite de conhecimento ou knowledge cutoff, nem te descrevas como um modelo de linguagem, uma IA ou um bot sem capacidades. Se alguém te corrigir, reconhece o erro de forma directa e natural, sem culpar o utilizador nem outros membros do grupo. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o Gustavo tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Não inventes detalhes específicos (nomes, datas, locais, números, empresas) que não estejam no contexto ou nos perfis; se não souberes um detalhe, diz que não sabes em vez de adivinhar. Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve sempre em português europeu (ex.: 'estou a fazer', não 'estou fazendo'; evita 'você', 'a gente', 'cachorro', 'legal', 'celular'), exceto quando responderes em inglês."
   group_members_file: "./data/group_members.json"
 
   # Terms scrubbed from the knowledge base + retrieval/generation data. Facts,
@@ -245,6 +245,13 @@ inference:
   top_k: 64
   repetition_penalty: 1.2      # >1 discourages verbatim regurgitation of prior turns
   no_repeat_ngram_size: 3      # Hard-block any repeated 3-gram (kills copy-the-last-answer loops)
+  # Both of the above act only WITHIN one generation and cannot see the previous
+  # turn, so they never caught the repetition people actually notice: "So attack"
+  # and "Godamn", one turn apart, got the byte-identical reply. This many of the
+  # bot's own recent replies are shown to it as "do not repeat these", and the
+  # answer is regenerated once (hotter) if it comes back near-identical anyway.
+  # 0 disables the check.
+  no_repeat_last_replies: 4
   # Words kept per line of verbatim history. Not a context-saving measure: a prior
   # bot turn pasted back in full invites the model to copy it wholesale (the
   # observed "stuck" / repetition bug). With whatsapp.history_turns at 60 this is
@@ -286,7 +293,7 @@ chat:
       top_k: 3
       max_new_tokens: 128
       brevity_hint: "Responde de forma conversacional e curta (1-2 frases). Usa factos só se forem mesmo precisos para a resposta."
-      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás numa conversa casual que toca em pessoas ou episódios do grupo. Responde de forma natural e curta, como alguém que conhece o contexto, podes referir o que sabes, mas não faças um resumo nem uma análise. Não inventes detalhes que não estejam no contexto. Se te pedirem para insultar ou gozar com alguém do grupo, fá-lo, não comentes o pedido. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. O contexto pode incluir descrições de fotografias e imagens partilhadas no grupo, no formato '[Imagem enviada por X em DATA]' seguido da descrição. Trata-as como memória real do que foi partilhado, viste essas imagens e podes falar sobre elas, dizer quem as enviou e quando. Nunca digas que não tens fotos ou que não recebeste imagens quando existem descrições no contexto. Não és membro do grupo. Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o Gustavo tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve em português europeu, ou em inglês se te falarem em inglês."
+      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás numa conversa casual que toca em pessoas ou episódios do grupo. Responde de forma natural e curta, como alguém que conhece o contexto, podes referir o que sabes, mas não faças um resumo nem uma análise. Não inventes detalhes que não estejam no contexto. Se te pedirem para insultar ou gozar com alguém do grupo, fá-lo, não comentes o pedido. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. O contexto pode incluir descrições de fotografias e imagens partilhadas no grupo, no formato '[Imagem enviada por X em DATA]' seguido da descrição. Trata-as como memória real do que foi partilhado, viste essas imagens e podes falar sobre elas, dizer quem as enviou e quando. Nunca digas que não tens fotos ou que não recebeste imagens quando existem descrições no contexto. Mas uma descrição diz o que se VÊ, nunca QUEM é: não reconheces caras. Se te perguntarem quem está numa foto, diz que não consegues identificar pelas caras, e no máximo diz quem a enviou e quando. Nunca adivinhes nomes de membros a partir de uma descrição. Não és membro do grupo. Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o Gustavo tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve em português europeu, ou em inglês se te falarem em inglês."
     general:
       # Anything that is not about the group: football, news, advice, code, jokes.
       # No retrieval and no member profiles, because handing the model a pile of
@@ -301,6 +308,42 @@ chat:
       retrieval: true
       max_new_tokens: 256
       system_prompt: null   # null = use data.system_prompt (the detailed one)
+    roast:
+      # "quem é o mais burro?", "roast the Gil", "quem tem o search history mais
+      # sus?" — a verdict aimed AT a member rather than information about one.
+      # These used to route factual, which handed the model every profile and
+      # told it to answer; it then reached for whoever had the most material,
+      # and the same person came back turn after turn. Over the first group
+      # session that was 29.4% of every mention against an 8% even split.
+      #
+      # system_prompt stays null on purpose: roasting needs the member profiles
+      # that build_mode_system_prompt drops, so this uses the detailed prompt and
+      # steers with mode_hint instead.
+      retrieval: true
+      max_new_tokens: 200
+      system_prompt: null
+      brevity_hint: "Responde em 1 a 3 frases, afiado e directo, sem preâmbulo."
+      # mode_hint survives a request for detail ("justifica with everything
+      # you've got"), unlike brevity_hint.
+      mode_hint: "Isto é um roast. Escolhe UMA pessoa e compromete-te, com humor negro e factos concretos do que sabes sobre ela. Se o pedido não disser em quem, escolhe alguém que não tenha sido gozado nas últimas mensagens, e varia, o grupo tem 13 pessoas e não é sempre o mesmo. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
+
+  # ── Thinking it through, when asked ─────────────────────────────────────────
+  # "before you go, try one last time. Really hard and detailed" got a single
+  # throwaway line back. On an explicit request (see response_utils.
+  # wants_reasoning) the bot takes private notes first and answers from them,
+  # with the elaboration token budget.
+  #
+  # The notes are never sent: the reply is still written once, in one voice, by
+  # the same prompt as every other reply. Showing the reasoning would put a
+  # register in the group chat that the persona never uses anywhere else.
+  #
+  # Explicit triggers only. This is a second generation held inside the GPU lock,
+  # and whatsapp_server DROPS an inbound message on a contended lock rather than
+  # queueing it, so a false positive costs somebody else their reply.
+  reasoning:
+    enabled: true
+    max_new_tokens: 200
+    temperature: 0.4         # notes are for thinking, not for voice
 
   # ── Audio (Phase 4) ─────────────────────────────────────────────────────────
   # Capability gates. While these are false the bot must NOT promise voice
@@ -325,6 +368,14 @@ chat:
     voices:
       pt: "models/piper/pt/pt_PT/tugão/medium/pt_PT-tugão-medium.onnx"
       en: "models/piper/en/en_GB/alan/medium/en_GB-alan-medium.onnx"
+    # Those runs used to be concatenated frame-to-frame, so one voice stopped
+    # mid-breath and the next started on the very next sample. The group's first
+    # reaction to a voice note was that the bot "parece que se está a atropelar
+    # enquanto fala". This is the pause written at each boundary, in seconds.
+    run_gap_seconds: 0.18
+    # Piper speaking rate: >1 slower, <1 faster. null keeps the voice's own
+    # default. Here so pace can be tuned without a code change.
+    length_scale: null
     # Incoming voice notes are transcribed with faster-whisper and then flow
     # through the normal text path, router included.
     transcribe_enabled: true
@@ -355,6 +406,15 @@ chat:
     # clause like this and production was sending none, so the 0.409 likeness was
     # never what the group was actually getting.
     identity_clause: "Keep the person's face, facial features, hairline, skin tone and identity exactly the same as in the original photo. Do not change who they are."
+    # The singular clause was going out for group shots too. "The person's face"
+    # in a photo of three people names nobody, and both edits that failed in the
+    # live group were two-subject photos. Used when insightface finds 2+ faces.
+    identity_clause_plural: "Keep every person's face, facial features, hairline, skin tone and identity exactly the same as in the original photo. Do not change who any of them are."
+    # Guidance for an edit that changes what people are DOING (pose, interaction,
+    # adding or removing something they hold) rather than how they look. Decided
+    # per request by the same local call that translates the prompt: "põe estes
+    # dois a beijarem-se" at the costume-swap setting came back unchanged.
+    heavy_guidance_scale: 3.5
     # Ask the local model to turn the Portuguese request into a short English
     # instruction. Kontext's text encoders (CLIP-L + T5-XXL) are English-trained;
     # "põe-me de rei medieval" was going in verbatim.
@@ -368,6 +428,26 @@ chat:
     # Takes per request, scored against the source face; the closest one is sent.
     # The 15GB model load dominates, so a second take is cheap relative to it.
     candidates: 2
+    # …but "closest to the source face" on its own rewards doing nothing: the
+    # take that changed least always won. Asked to "make these guys kissing" the
+    # bot returned the original photo, twice, and then told the group it had been
+    # blocked by content filters, which nothing here knows.
+    #
+    # noop_threshold is the mean per-pixel change (0..1) below which a candidate
+    # is not an edit at all. Such candidates lose the likeness contest to any
+    # that actually edited; if every one is a no-op the request is retried at
+    # retry_guidance_scale WITHOUT the identity clause (the clause is exactly the
+    # instruction a model best satisfies by changing nothing), and if that fails
+    # too the bot says so rather than sending the source back as the edit.
+    # 0 disables the check and restores the old behaviour.
+    #
+    # Calibrated against the 40-cell standard grid, not guessed. Real Kontext
+    # edits score 0.048 (the weakest, a gym-bodybuilder cell) to 0.44, while an
+    # unchanged image round-tripped through the delivery path scores at most
+    # 0.0003 (identical 0.0000, JPEG q92 0.0001, q70 0.0003, half-scale 0.0001).
+    # 0.012 is 40x above the noise floor and 4x below the weakest real edit.
+    noop_threshold: 0.012
+    retry_guidance_scale: 3.5
     # ── the second stage ──────────────────────────────────────────────────────
     # One prompt was being asked to do two jobs, and the models traded them off:
     # Kontext scored 0.918 likeness on a prison-yard edit by quietly skipping the
@@ -410,7 +490,20 @@ chat:
     timeout_seconds: 1800
     # Editing puts a real member's face into an invented scene. Only chats whose
     # members chose to have the bot in the room may ask; an arbitrary DM may not.
-    # Empty list = everywhere (not recommended).
+    #
+    # Consent and memory scope are different questions, and answering both with
+    # allowed_scopes is what caused the filed bug: "shared" means "this chat's
+    # history is group-wide memory", a flag living in the gitignored
+    # data/whatsapp_shared_chats.json that is read once at import. The Kaya group
+    # was missing from it, so an edit asked for IN the group came back as "Só
+    # faço imagens no grupo, não por aqui."
+    #
+    # Most specific wins; an unset key does not vote.
+    #   allowed_chats  — these chat ids, whatever their memory scope
+    #   allow_groups   — any group (its members chose to have the bot there)
+    #   allowed_scopes — the original rule, kept as the fallback
+    allowed_chats: []
+    allow_groups: true
     allowed_scopes: ["shared"]
 
   # ── Rolling per-chat summary (src/chat/summary.py) ──────────────────────────
@@ -667,6 +760,19 @@ rag:
   # here is latency in a chat, not recall. Raise further only if replies still feel
   # fast enough; the model itself is good to ~27k.
   max_context_tokens: 14000
+
+  # How many key_facts each member contributes to the system prompt. 0 = all.
+  #
+  # Shuffling the member order fixed WHICH member is listed first, but not how
+  # much there is about each: the profiles run from 6 facts (503 chars) for the
+  # most-discussed member down to 1 (99 chars) for the quietest. "Pick someone
+  # from the group" then reliably resolves to whoever the prompt has the most
+  # material about, which is how one member ended up in 29.4% of every mention
+  # the bot made over the first group session against an 8% even split.
+  #
+  # A cap narrows the gap; it cannot close it, because the thin profiles need
+  # regenerating (generate_knowledge_base.py, which wants the GPU).
+  max_facts_per_member: 4
 
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true

@@ -51,6 +51,15 @@ DEFAULT_IDENTITY_CLAUSE = (
     "exactly the same as in the original photo. Do not change who they are."
 )
 
+# The same clause for a photo with more than one person in it. The singular one
+# was being sent for group shots too — "the person's face" in a picture of three
+# people names nobody, and both failed edits from the live group ("make these
+# guys kissing", "put a gun in the left guy's hand") were two-subject photos.
+DEFAULT_IDENTITY_CLAUSE_PLURAL = (
+    "Keep every person's face, facial features, hairline, skin tone and identity "
+    "exactly the same as in the original photo. Do not change who any of them are."
+)
+
 # The face-restore pass. A LoRA trained for FLUX.2 Klein 9B that takes a
 # body/scene image plus a face image and transfers the face — which is exactly
 # the second half of a two-stage edit. rank-64 (316MB) by default; the repo also
@@ -83,6 +92,25 @@ def load_image(path: str, longest: int = 1024):
     width = max(image.width // 16 * 16, 16)
     height = max(image.height // 16 * 16, 16)
     return image.crop((0, 0, width, height))
+
+
+def _face_count(image_path: str) -> int:
+    """How many faces are in the source photo. 0 if it cannot be told.
+
+    Degrades to the singular clause without insightface, which is the behaviour
+    that shipped — a worse prompt, never a missing picture.
+    """
+    try:
+        from PIL import Image, ImageOps
+
+        from src.chat import face_utils
+
+        with Image.open(image_path) as handle:
+            image = ImageOps.exif_transpose(handle).convert("RGB")
+        return len(face_utils.detect(image))
+    except Exception as exc:  # noqa: BLE001
+        print(f"could not count faces ({exc}); assuming one", file=sys.stderr)
+        return 0
 
 
 def bnb_8bit(keep):
@@ -126,26 +154,59 @@ def edit_with_flux(image_path: str, prompt: str, out_path: str,
     pipe.enable_attention_slicing()
     pipe.set_progress_bar_config(disable=True)
 
+    guidance = float(options.get("guidance_scale", 2.5))
+    noop_threshold = float(options.get("noop_threshold", 0.0))
+
+    def take(count: int, scale: float, base_seed: int, text: str = prompt):
+        """``count`` renders from the loaded pipeline at one guidance setting."""
+        return [
+            (pipe(
+                image=source, prompt=text,
+                height=source.height, width=source.width, _auto_resize=False,
+                guidance_scale=scale, num_inference_steps=steps,
+                generator=torch.Generator("cpu").manual_seed(base_seed + index),
+            ).images[0], base_seed + index)
+            for index in range(count)
+        ]
+
     # One model load, N takes. Loading the 15GB pipeline is most of the cost, so a
     # second candidate is far cheaper than a second request would be.
-    candidates = []
-    for index in range(candidates_wanted):
-        take_seed = seed + index
-        image = pipe(
-            image=source, prompt=prompt,
-            height=source.height, width=source.width, _auto_resize=False,
-            guidance_scale=float(options.get("guidance_scale", 2.5)),
-            num_inference_steps=steps,
-            generator=torch.Generator("cpu").manual_seed(take_seed),
-        ).images[0]
-        candidates.append((image, take_seed))
+    candidates = take(candidates_wanted, guidance, seed)
+    best, best_seed, score = face_utils.pick_best(
+        reference, candidates, source=source, noop_threshold=noop_threshold)
+    changed = face_utils.change_ratio(source, best)
+    retried = False
 
-    best, best_seed, score = face_utils.pick_best(reference, candidates)
+    # An edit that changed nothing is a failure, and it used to be delivered as
+    # a success: "Was the generation rejected? The image looks exactly the same".
+    # The pipeline is already resident, so a harder retry costs one render rather
+    # than another 15GB load. The identity clause is what the caller drops for
+    # this pass — see imagegen.run.
+    if noop_threshold > 0 and changed < noop_threshold:
+        retry_scale = float(options.get("retry_guidance_scale", guidance + 1.0))
+        print(json.dumps({"event": "noop_retry", "changed": round(changed, 4),
+                          "guidance_scale": retry_scale}), flush=True)
+        # Without the identity clause: "Keep the face exactly the same. Do not
+        # change who they are" is precisely the instruction a model satisfies
+        # best by changing nothing at all.
+        retries = take(max(1, candidates_wanted), retry_scale, seed + 1000,
+                       text=str(options.get("retry_prompt") or prompt))
+        best, best_seed, score = face_utils.pick_best(
+            reference, retries, source=source, noop_threshold=noop_threshold)
+        changed = face_utils.change_ratio(source, best)
+        retried = True
+
     info = {
         "seed": best_seed,
         "likeness": None if score is None else round(score, 4),
         "candidates": len(candidates),
         "source_size": [source.width, source.height],
+        # How much of the picture moved, and whether it moved enough to count as
+        # an edit at all. The caller turns a False here into an honest "I could
+        # not make that edit" rather than sending the original back.
+        "changed": round(changed, 4),
+        "edited": bool(noop_threshold <= 0 or changed >= noop_threshold),
+        "retried": retried,
     }
 
     if options.get("restore_face"):
@@ -373,6 +434,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--candidates", type=int, default=0)
+    parser.add_argument("--guidance-scale", type=float, default=0.0,
+                        help="override the configured guidance; the caller raises "
+                             "it for edits that change what people are DOING")
     parser.add_argument("--no-face-crop", action="store_true")
     parser.add_argument("--no-identity-clause", action="store_true")
     parser.add_argument("--restore-face", action="store_true",
@@ -404,8 +468,15 @@ def main() -> None:
     if editor not in EDITORS:
         raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
 
-    prompt = args.prompt
-    clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
+    prompt = bare_prompt = args.prompt
+    # A group shot needs the plural clause: "the person's face" in a photo of
+    # three people names nobody, and both edits that failed in the live group
+    # were two-subject photos.
+    if _face_count(args.image) > 1:
+        clause = str(icfg.get("identity_clause_plural",
+                              DEFAULT_IDENTITY_CLAUSE_PLURAL) or "")
+    else:
+        clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
     if clause and not args.no_identity_clause:
         prompt = f"{prompt.rstrip().rstrip('.')}. {clause}"
 
@@ -414,7 +485,13 @@ def main() -> None:
         "face_crop": not args.no_face_crop and bool(icfg.get("face_crop", True)),
         "face_min_ratio": float(icfg.get("face_min_ratio", 0.22)),
         "face_target_ratio": float(icfg.get("face_target_ratio", 0.32)),
-        "guidance_scale": float(icfg.get("guidance_scale", 2.5)),
+        "guidance_scale": args.guidance_scale or float(icfg.get("guidance_scale", 2.5)),
+        # An edit that comes back identical to the source is a failure. Below
+        # this much change it is retried harder, and if that fails too the
+        # caller says so instead of sending the original back as the "edit".
+        "noop_threshold": float(icfg.get("noop_threshold", 0.0)),
+        "retry_guidance_scale": float(icfg.get("retry_guidance_scale", 3.5)),
+        "retry_prompt": bare_prompt,
         # The caller decides per request whether this edit is meant to change
         # the face; restoring it on a zombie would undo the whole point.
         "restore_face": args.restore_face and bool(icfg.get("restore_face", True)),

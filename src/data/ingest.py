@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +89,29 @@ class IngestState:
             logger.warning("Could not save ingest state to %s: %s", self.path, exc)
 
 
+_IMAGE_BLOCK = re.compile(r"\[Imagem:\s*(.*?)\]\s*", re.DOTALL)
+
+
+def strip_failed_descriptions(text: str) -> str:
+    """Drop ``[Imagem: …]`` blocks where the describer said it saw nothing.
+
+    ``vision.describe_bytes`` now refuses to return those, but the message log
+    already holds the ones written before that guard existed — and this log is
+    what becomes long-term memory. Left alone, "[Imagem: Por favor, fornece o
+    vídeo ou a imagem]" is indexed as something a member said.
+
+    A caption alongside a failed description is real and survives; a message that
+    was nothing but the failed block returns empty and is skipped by the caller.
+    """
+    if "[Imagem:" not in (text or ""):
+        return text
+    from src.chat.vision import looks_like_a_refusal
+
+    return _IMAGE_BLOCK.sub(
+        lambda m: "" if looks_like_a_refusal(m.group(1)) else m.group(0), text
+    ).strip()
+
+
 def build_chunks(
     messages: List[Dict[str, Any]],
     scope: str,
@@ -152,7 +176,7 @@ def build_chunks(
         current, chars = [], 0
 
     for msg in messages:
-        text = (msg.get("text") or "").strip()
+        text = strip_failed_descriptions((msg.get("text") or "").strip())
         if not text:
             continue
         current.append(msg)

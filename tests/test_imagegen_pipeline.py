@@ -40,21 +40,21 @@ class TestFaceDecision:
 
     def test_keep_asks_for_a_restore(self):
         backend = FakeBackend("Dress the person as a king.\nFACE: keep")
-        instruction, restore = imagegen.build_edit_instruction(
+        instruction, restore, _heavy = imagegen.build_edit_instruction(
             _config(), "põe-me de rei", backend)
         assert instruction == "Dress the person as a king."
         assert restore is True
 
     def test_change_skips_the_restore(self):
         backend = FakeBackend("Turn the person into a rotting zombie.\nFACE: change")
-        instruction, restore = imagegen.build_edit_instruction(
+        instruction, restore, _heavy = imagegen.build_edit_instruction(
             _config(), "faz dele um zombie", backend)
         assert instruction == "Turn the person into a rotting zombie."
         assert restore is False
 
     def test_the_face_line_never_reaches_the_image_model(self):
         backend = FakeBackend("Put a crown on the person.\nFACE: keep")
-        instruction, _ = imagegen.build_edit_instruction(
+        instruction, _, _heavy = imagegen.build_edit_instruction(
             _config(), "põe-lhe uma coroa", backend)
         assert "FACE" not in instruction
 
@@ -65,18 +65,18 @@ class TestFaceDecision:
     ])
     def test_a_malformed_answer_skips_the_restore(self, reply):
         """A stage that changes the output must not fire on a reply we could not read."""
-        instruction, restore = imagegen.build_edit_instruction(
+        instruction, restore, _heavy = imagegen.build_edit_instruction(
             _config(), "põe-me de rei", FakeBackend(reply))
         assert instruction == "Dress the person as a king."
         assert restore is False
 
     def test_case_and_spacing_are_tolerated(self):
         backend = FakeBackend("Put him on a beach.\n  face :  KEEP  ")
-        _, restore = imagegen.build_edit_instruction(_config(), "praia", backend)
+        _, restore, _heavy = imagegen.build_edit_instruction(_config(), "praia", backend)
         assert restore is True
 
     def test_translation_disabled_returns_the_raw_text_and_no_restore(self):
-        instruction, restore = imagegen.build_edit_instruction(
+        instruction, restore, _heavy = imagegen.build_edit_instruction(
             _config(translate_prompt=False), "põe-me de rei", FakeBackend("x"))
         assert instruction == "põe-me de rei"
         assert restore is False
@@ -86,7 +86,7 @@ class TestFaceDecision:
             def generate(self, *a, **kw):
                 raise RuntimeError("model down")
 
-        instruction, restore = imagegen.build_edit_instruction(
+        instruction, restore, _heavy = imagegen.build_edit_instruction(
             _config(), "põe-me de rei", Boom())
         assert instruction == "põe-me de rei"
         assert restore is False
@@ -253,3 +253,52 @@ class TestRestoreGuard:
         assert out is edited
         assert info["restored"] is False
         assert "restore_error" in info
+
+
+class TestEditStrength:
+    """A costume swap and "make these two kiss" were asked at the same guidance,
+    and the second came back as the original photo."""
+
+    def test_a_pose_change_is_heavy(self):
+        backend = FakeBackend("Make the two men kiss each other.\n"
+                              "FACE: keep\nEDIT: heavy")
+        instruction, restore, heavy = imagegen.build_edit_instruction(
+            _config(), "põe estes dois a beijarem-se", backend)
+        assert instruction == "Make the two men kiss each other."
+        assert restore is True and heavy is True
+
+    def test_a_costume_swap_is_light(self):
+        backend = FakeBackend("Dress the person as a king.\nFACE: keep\nEDIT: light")
+        _, _, heavy = imagegen.build_edit_instruction(_config(), "põe-me de rei", backend)
+        assert heavy is False
+
+    def test_the_edit_line_never_reaches_the_image_model(self):
+        backend = FakeBackend("Put a gun in his hand.\nFACE: keep\nEDIT: heavy")
+        instruction, _, _ = imagegen.build_edit_instruction(
+            _config(), "põe-lhe uma arma na mão", backend)
+        assert "EDIT" not in instruction and "FACE" not in instruction
+
+    @pytest.mark.parametrize("reply", [
+        "Dress the person as a king.\nFACE: keep",              # no EDIT line
+        "Dress the person as a king.\nFACE: keep\nEDIT: maybe",  # unparseable
+        "Dress the person as a king.\nFACE: keep\nEDIT:",        # truncated
+    ])
+    def test_a_malformed_answer_keeps_the_ordinary_guidance(self, reply):
+        """A setting that changes the output must not fire on an unreadable reply."""
+        _, _, heavy = imagegen.build_edit_instruction(
+            _config(), "põe-me de rei", FakeBackend(reply))
+        assert heavy is False
+
+    def test_the_lines_may_arrive_in_either_order(self):
+        backend = FakeBackend("Make them kiss.\nEDIT: heavy\nFACE: keep")
+        instruction, restore, heavy = imagegen.build_edit_instruction(
+            _config(), "beijo", backend)
+        assert instruction == "Make them kiss." and restore is True and heavy is True
+
+    def test_a_backend_failure_is_never_heavy(self):
+        class Boom:
+            def generate(self, *a, **kw):
+                raise RuntimeError("model down")
+
+        _, _, heavy = imagegen.build_edit_instruction(_config(), "beijo", Boom())
+        assert heavy is False

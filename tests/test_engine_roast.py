@@ -1,0 +1,187 @@
+"""Roasts must spread out, and "think hard" must actually cost a think.
+
+Measured over the first full group session: one member took 29.4% of every
+mention the bot made, against an 8% even split, and 37.5% of turns named
+somebody nobody had asked about. The group read that as the bot having it in for
+him. It was the prompt shape — an unaimed roast routed `factual`, got all 13
+profiles, and reached for whoever had the most material.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.chat import router
+from src.chat.engine import KayaEngine
+
+MEMBERS = ["Gil", "Rafa", "Pedro", "Gustavo", "Murgeiro"]
+
+
+class ScriptedBackend:
+    def __init__(self, label, answers=("uma resposta qualquer bem diferente",)):
+        self.label = label
+        self.answers = list(answers)
+        self.answer_calls = []
+
+    def generate(self, messages, *, max_new_tokens=None, sampling=None):
+        if max_new_tokens is not None and max_new_tokens <= 16:
+            return self.label
+        self.answer_calls.append({"messages": messages, "max_new_tokens": max_new_tokens,
+                                  "sampling": sampling})
+        return self.answers.pop(0) if self.answers else "resposta"
+
+
+class StubRetriever:
+    """Name matching only — enough for target selection and telemetry."""
+
+    def extract_query_persons(self, query):
+        return [m.lower() for m in MEMBERS if m.lower() in (query or "").lower()]
+
+    def named_members(self, text):
+        return [m for m in MEMBERS if m.lower() in (text or "").lower()]
+
+    def retrieve_all(self, *a, **kw):
+        return "contexto do grupo"
+
+
+def make_engine(backend, **chat_over):
+    config = {
+        "chat": {
+            "router": {"enabled": True, "max_new_tokens": 8, "fallback_mode": "factual"},
+            "modes": {
+                "roast": {"retrieval": True, "max_new_tokens": 200,
+                          "mode_hint": "Isto é um roast."},
+                "factual": {"retrieval": True, "max_new_tokens": 256},
+            },
+            "concurrency": {"acquire_timeout": 5},
+            **chat_over,
+        },
+        "rag": {"enabled": True},
+        "inference": {"max_new_tokens": 768, "max_new_tokens_default": 256,
+                      "temperature": 0.8, "no_repeat_last_replies": 4},
+        "web_search": {"enabled": False},
+    }
+    return KayaEngine(model=None, tokenizer=None, retriever=StubRetriever(),
+                      config=config, backend=backend)
+
+
+def user_turn(backend, index=0):
+    return backend.answer_calls[index]["messages"][-1]["content"]
+
+
+HISTORY_ABOUT_GIL = [
+    "Pedro: quem é o mais burro?",
+    "Kaya Bot: O Gil, sem qualquer dúvida, é o campeão nessa categoria.",
+]
+
+
+# ── target rotation ──────────────────────────────────────────────────────────
+def test_an_unaimed_roast_is_steered_off_the_last_target():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais engraçado?", "Gil",
+                                 HISTORY_ABOUT_GIL, "sys")
+
+    assert "Não escolhas outra vez Gil" in user_turn(backend)
+
+
+def test_an_aimed_roast_is_left_alone():
+    """"roast the Gil" must roast the Gil, however recently he was hit."""
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("diz mal do Gil", "Pedro", HISTORY_ABOUT_GIL, "sys")
+
+    assert "Não escolhas outra vez" not in user_turn(backend)
+
+
+def test_every_recent_target_is_excluded():
+    backend = ScriptedBackend("ROAST")
+    history = ["Kaya Bot: O Gil é o pior.", "Kaya Bot: E o Rafa levou uma tareia."]
+
+    make_engine(backend).respond("quem é o mais burro?", "Pedro", history, "sys")
+
+    hint = user_turn(backend)
+    assert "Gil" in hint and "Rafa" in hint
+
+
+def test_a_fresh_conversation_needs_no_steering():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais burro?", "Pedro", [], "sys")
+
+    assert "Não escolhas outra vez" not in user_turn(backend)
+
+
+def test_only_roasts_are_steered():
+    """A factual question about a member is not a roast at him."""
+    backend = ScriptedBackend("FACTUAL")
+
+    make_engine(backend).respond("o que faz o Gil?", "Pedro", HISTORY_ABOUT_GIL, "sys")
+
+    assert "Não escolhas outra vez" not in user_turn(backend)
+
+
+def test_the_mode_hint_reaches_the_prompt():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais burro?", "Pedro", [], "sys")
+
+    assert "Isto é um roast." in user_turn(backend)
+
+
+def test_the_route_is_reported_as_roast():
+    backend = ScriptedBackend("ROAST")
+
+    reply = make_engine(backend).respond("quem é o mais burro?", "Pedro", [], "sys")
+
+    assert reply.route.mode == router.ROAST
+    assert reply.telemetry["route_mode"] == router.ROAST
+
+
+# ── reasoning ────────────────────────────────────────────────────────────────
+def test_an_explicit_request_buys_a_planning_pass():
+    """"try one last time. Really hard and detailed" got one throwaway line."""
+    backend = ScriptedBackend("ROAST", answers=["- o Gil corre\n- e perde sempre",
+                                                "A resposta final bem pensada."])
+
+    reply = make_engine(backend).respond(
+        "justifica bem porque é que o Gil é o alvo", "Pedro", [], "sys")
+
+    assert len(backend.answer_calls) == 2
+    assert reply.text == "A resposta final bem pensada."
+
+
+def test_the_notes_are_fed_back_and_never_sent():
+    backend = ScriptedBackend("ROAST", answers=["- nota interna", "A resposta."])
+
+    reply = make_engine(backend).respond(
+        "pensa bem, quem é o mais burro?", "Pedro", [], "sys")
+
+    assert "nota interna" in user_turn(backend, 1)
+    assert "nota interna" not in reply.text
+
+
+def test_the_plan_is_written_at_a_lower_temperature():
+    backend = ScriptedBackend("ROAST", answers=["- nota", "A resposta."])
+
+    make_engine(backend).respond("pensa bem nisso", "Pedro", [], "sys")
+
+    plan, answer = backend.answer_calls
+    assert plan["sampling"]["temperature"] < answer["sampling"]["temperature"]
+
+
+def test_an_ordinary_question_costs_one_generation():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais burro?", "Pedro", [], "sys")
+
+    assert len(backend.answer_calls) == 1
+
+
+def test_reasoning_can_be_switched_off():
+    backend = ScriptedBackend("ROAST")
+
+    engine = make_engine(backend, reasoning={"enabled": False})
+    engine.respond("pensa bem, quem é o mais burro?", "Pedro", [], "sys")
+
+    assert len(backend.answer_calls) == 1

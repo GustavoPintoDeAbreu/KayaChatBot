@@ -53,6 +53,50 @@ def wants_long_answer(text: str, long_word_threshold: int = 30) -> bool:
     return len(text.split()) >= long_word_threshold
 
 
+# Asking the bot to actually think about it, rather than answer off the cuff.
+# Deliberately explicit phrases only: this buys a second generation, and a false
+# positive doubles the latency of a path already at 8-16s in a busy group.
+_REASONING_CUES = (
+    "pensa bem",
+    "pensa melhor",
+    "pensa nisso",
+    "pensa lá bem",
+    "com calma",
+    "a sério agora",
+    "justifica",
+    "fundamenta",
+    "argumenta",
+    "com detalhe",
+    "em detalhe",
+    "think hard",
+    "think carefully",
+    "think about it",
+    "really hard",
+    "justify",
+    "in detail",
+    "make a case",
+)
+
+
+def wants_reasoning(text: str) -> bool:
+    """Whether the message explicitly asks the bot to think the answer through.
+
+    Asked for twice: once as a /feedback note ("reasoning router, if requested by
+    the user use further intent solver to think question through"), and once in
+    the group, where "before you go, try one last time. Really hard and detailed"
+    got a single throwaway line back.
+
+    A trigger, not a judgement. The router does not decide this on its own —
+    every firing costs an extra generation while the GPU lock is held, and
+    whatsapp_server drops an inbound message on a contended lock rather than
+    queueing it.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(cue in lowered for cue in _REASONING_CUES)
+
+
 def truncate_history_line(line: str, max_words: int = 40) -> str:
     """Shorten one ``"<who>: <text>"`` history line to its first ``max_words``.
 
@@ -72,6 +116,49 @@ def truncate_history_line(line: str, max_words: int = 40) -> str:
         return line
     snippet = " ".join(words[:max_words]) + " …"
     return f"{who}{sep}{snippet}" if sep else snippet
+
+
+def previous_bot_replies(recent_lines, bot_name: str = "Kaya Bot", limit: int = 4):
+    """The bot's own last replies, newest first, pulled out of the history lines.
+
+    ``recent_lines`` is the same ``"<who>: <text>"`` list the prompt is built
+    from, so this needs no extra plumbing — the replies are already there.
+    """
+    prefix = f"{bot_name}: "
+    replies = [line[len(prefix):].strip() for line in (recent_lines or [])
+               if line.startswith(prefix)]
+    return [reply for reply in reversed(replies) if reply][:limit]
+
+
+def _normalize_for_comparison(text: str) -> str:
+    return re.sub(r"[^\w\s]", "", (text or "").lower()).strip()
+
+
+def is_near_duplicate(text: str, previous, threshold: float = 0.9) -> bool:
+    """Whether ``text`` repeats something the bot already said.
+
+    ``repetition_penalty`` and ``no_repeat_ngram_size`` only act WITHIN one
+    generation, so they cannot see the previous turn at all. The live log shows
+    what that costs: "So attack" and, one turn later, "Godamn" both received the
+    byte-identical "Escolhe um alvo e diz quem eu tenho de partir primeiro."
+
+    Similarity rather than equality, because the near-misses read just as badly
+    as the exact ones.
+    """
+    from difflib import SequenceMatcher
+
+    candidate = _normalize_for_comparison(text)
+    if not candidate:
+        return False
+    for earlier in previous or []:
+        other = _normalize_for_comparison(earlier)
+        if not other:
+            continue
+        if candidate == other:
+            return True
+        if SequenceMatcher(None, candidate, other).ratio() >= threshold:
+            return True
+    return False
 
 
 def coerce_text(content) -> str:
@@ -279,7 +366,8 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
     return strip_clause_dashes("\n".join(kept_lines).strip())
 
 
-def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str:
+def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
+                               max_facts: int = 0) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -294,6 +382,12 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
     this so no single member is always listed first (the early/first-mention slot
     gets disproportionate model attention, which fed the "favours one member" bias);
     deterministic callers (benchmark, training-data generation) leave it False.
+
+    ``max_facts`` caps how many key_facts each member contributes, because
+    shuffling only fixed the ORDER, not the amount. The profiles are wildly
+    uneven — 6 facts for the most-discussed member down to 1 for the quietest —
+    and "pick someone from the group" reliably resolves to whoever the prompt
+    has the most material about. 0 means no cap (the previous behaviour).
     """
     members = list(members_data.get("members", []))
     if shuffle:
@@ -307,6 +401,8 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
             line += f" (também lhe chamam {', '.join(aliases)})"
 
         key_facts = member.get("key_facts") or []
+        if max_facts > 0:
+            key_facts = key_facts[:max_facts]
         notes = member.get("notes", "")
         if key_facts:
             line += ": " + " ".join(
@@ -326,4 +422,25 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False) -> str
         "incluindo palpites e avaliações sobre o grupo; fala deles de forma natural, "
         "não como uma lista formatada):\n"
     )
-    return intro + "\n".join(lines)
+    # The roster has to state that it is complete. Asked "a que Kaya-Avenger devo
+    # ligar?", the bot answered "liga à Mel" — Mel is not in the group and never
+    # was. The list named the members but never said they were the only ones, so
+    # any name that turned up in a retrieved chunk was fair game.
+    names = ", ".join(member["name"] for member in members)
+    closing = (
+        f"\n\nO grupo Kaya tem {len(members)} membros e são exatamente estes: {names}. "
+        "Mais ninguém é do grupo. Se aparecer outro nome nas conversas é alguém de "
+        "fora, e nunca o deves tratar como membro. Não inventes membros que não "
+        "estejam nesta lista."
+        # These facts are accumulated over years of chat and carry no dates, so
+        # the model presents all of them as current. Challenged on calling
+        # somebody the group's "ladies man", it answered that the label was "um
+        # título honorífico que ficou registado na memória coletiva" — which is
+        # an accurate description of the data and a bad way to talk about people.
+        "\n\nEstes perfis são o acumulado de anos de conversa, não uma fotografia "
+        "de agora. Uma etiqueta antiga pode já não valer: se só a viste em "
+        "conversas antigas, trata-a como história (\"durante uns tempos foi...\") "
+        "em vez de a apresentares como o que a pessoa é hoje, e dá prioridade ao "
+        "que aparece nas conversas recentes."
+    )
+    return intro + "\n".join(lines) + closing

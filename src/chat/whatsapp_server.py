@@ -101,6 +101,22 @@ if _scopes_path.exists():
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_scopes_path}: {exc}")
 
+
+# Nothing else ever mentions that file, so a group missing from it fails
+# silently: its history is written to a private scope and image editing is
+# refused in the very room it exists for. Name them at startup.
+try:
+    from src.chat.scope import unregistered_groups as _unregistered_groups
+
+    for _chat_id in _unregistered_groups(
+        Path(config_path).parent / "data" / "live_messages",
+        _wcfg.get("shared_chats") or [],
+    ):
+        print(f"⚠️  group {_chat_id} is NOT shared memory: its history stays private "
+              f"to it. Add it to {_scopes_path} and restart if that is not intended.")
+except Exception as _exc:  # noqa: BLE001 — a startup hint is never worth a crash
+    print(f"⚠️  Could not check shared-chat registration: {_exc}")
+
 # Merge the DM anti-spam whitelist from a gitignored local file (PII stays out of
 # git). Shape: {"allowed": ["351XXXXXXXXX", ...]}. Only used when
 # whatsapp.whitelist.enabled is true; see config.yaml whatsapp.whitelist.
@@ -255,15 +271,18 @@ def _imagegen(mode: str, prompt: str, image_path=None):
 
     # Generation from scratch has no original face to restore.
     restore_face = False
+    heavy = False
     if mode == "edit":
         with gpu_section(config):
             # The same call also answers whether this edit is meant to change the
             # person's face — restoring the original face onto a zombie would undo
-            # the request.
-            prompt, restore_face = imagegen.build_edit_instruction(
+            # the request — and how far the picture has to move. A pose or
+            # interaction change ("põe estes dois a beijarem-se") needs to be
+            # pushed harder than a costume swap, and was coming back unchanged.
+            prompt, restore_face, heavy = imagegen.build_edit_instruction(
                 config, prompt, engine.backend)
     return imagegen.run(config, prompt, mode=mode, image_path=image_path,
-                        restore_face=restore_face)
+                        restore_face=restore_face, heavy=heavy)
 
 
 from src.chat.summary import SummaryWriter
@@ -352,6 +371,8 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
             web_search_used=bool(result.get("citation")),
             delivered_as=result.get("delivered_as", "text"),
             spoken_text=result.get("spoken_text", ""),
+            # route_mode, retrieval and who the reply named — see Reply.telemetry.
+            **(result.get("telemetry") or {}),
         )
 
 

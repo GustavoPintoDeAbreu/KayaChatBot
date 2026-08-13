@@ -85,6 +85,42 @@ def is_readable(chunk_scope: Optional[str], current_scope: str) -> bool:
     return (chunk_scope or SHARED) in readable_scopes(current_scope)
 
 
+def unregistered_groups(log_dir: Any, shared_chats: Iterable[str] = ()) -> List[str]:
+    """Groups the bot has talked in whose history is NOT group-wide memory.
+
+    ``shared_chats`` comes from a gitignored file read once at import, and
+    nothing else ever mentions it. When the Kaya group was missing from it, the
+    group's own live history was being written to a private scope and image
+    editing was refused in the very room it exists for — and the only symptom
+    anybody saw was the bot answering "Só faço imagens no grupo, não por aqui",
+    in the group.
+
+    A group in this list is not necessarily a mistake: the bot can sit in a chat
+    whose history should stay private. So this reports, and the caller warns; it
+    never changes behaviour. It is what turns a silent misconfiguration into a
+    visible one.
+    """
+    import json
+    from pathlib import Path
+
+    directory = Path(log_dir)
+    if not directory.exists():
+        return []
+
+    seen = set()
+    for path in sorted(directory.glob("*.jsonl")):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    chat_id = (json.loads(line) or {}).get("chat_id", "")
+                    if isinstance(chat_id, str) and chat_id.endswith(_GROUP_SUFFIX):
+                        seen.add(chat_id)
+        except Exception:  # noqa: BLE001 — a startup hint is never worth a crash
+            continue
+
+    return sorted(c for c in seen if scope_for_chat(c, shared_chats) != SHARED)
+
+
 def parse_iso(value: Optional[str]) -> Optional[str]:
     """Normalise a timestamp for lexicographic comparison, or None if unusable.
 

@@ -126,11 +126,37 @@ def is_busy() -> bool:
     return _job_lock.locked()
 
 
-def allowed_here(config: Dict[str, Any], scope: str) -> bool:
-    """Whether this chat may ask for an image at all."""
+def allowed_here(config: Dict[str, Any], scope: str, chat_id: str = "",
+                 is_group: bool = False) -> bool:
+    """Whether this chat may ask for an image at all.
+
+    Consent and memory scope are two different questions, and answering both with
+    one value is what produced the filed bug. `allowed_scopes: ["shared"]` reads
+    as "only the group", but ``shared`` means "this chat's history is group-wide
+    memory" — a flag carried in a gitignored file that is read once at import.
+    The Kaya group was missing from it, so a picture requested IN the group was
+    refused with "Só faço imagens no grupo, não por aqui."
+
+    So the question is now asked directly, most specific answer first:
+
+      ``allowed_chats``   these chat ids, whatever their memory scope
+      ``allow_groups``    any group (a group's members chose to have a bot there)
+      ``allowed_scopes``  the original rule, kept as the fallback
+
+    An unset key does not vote. All three unset still means everywhere.
+    """
     icfg = _config(config)
     if not icfg.get("enabled", False):
         return False
+
+    allowed_chats = icfg.get("allowed_chats")
+    if allowed_chats:
+        return (chat_id or "").strip().lower() in {
+            str(c).strip().lower() for c in allowed_chats
+        }
+    if icfg.get("allow_groups") and is_group:
+        return True
+
     allowed = icfg.get("allowed_scopes")
     if not allowed:
         return True
@@ -139,7 +165,7 @@ def allowed_here(config: Dict[str, Any], scope: str) -> bool:
 
 def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
         image_path: Optional[str] = None,
-        restore_face: bool = False) -> Optional[bytes]:
+        restore_face: bool = False, heavy: bool = False) -> Optional[bytes]:
     """Produce one image. Returns JPEG bytes, or None on any failure.
 
     Blocking and slow — minutes for an edit. Callers must run it off the thread
@@ -148,6 +174,10 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
     ``restore_face`` asks the worker to put the original face back after the
     edit. It is decided per request by ``build_edit_instruction``, because an
     edit that is *supposed* to change the face must not have it restored.
+
+    ``heavy`` says this edit changes what the people are doing rather than how
+    they look, and comes from the same call. Those need more guidance: "make
+    these two kiss" at the costume-swap setting came back as the original photo.
     """
     if not is_available(config):
         return None
@@ -175,6 +205,9 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 command += ["--editor", str(icfg["editor"])]
             if restore_face:
                 command += ["--restore-face"]
+            if heavy:
+                command += ["--guidance-scale",
+                            str(icfg.get("heavy_guidance_scale", 3.5))]
 
             env = dict(os.environ)
             if env_device:
@@ -201,6 +234,18 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 return None
             if not out_path.exists():
                 logger.warning("image worker reported success but wrote nothing")
+                return None
+
+            report = _summary(result.stdout)
+            # The worker retried already and the picture still matches the one it
+            # was given. Returning it means the bot sends the original back as
+            # though it were the edit, and then invents a reason when asked —
+            # "it got blocked by the content filters" is something nothing in
+            # this pipeline knows. None makes the caller say so honestly.
+            if mode == "edit" and report.get("edited") is False:
+                logger.warning("edit changed nothing (changed=%s, retried=%s); "
+                               "reporting failure instead of sending the source back",
+                               report.get("changed"), report.get("retried"))
                 return None
 
             data = _as_jpeg(out_path.read_bytes(), int(icfg.get("jpeg_quality", 92)))
@@ -237,16 +282,27 @@ def _as_jpeg(data: bytes, quality: int = 92) -> bytes:
         return data
 
 
-def _report(stdout: str) -> str:
-    """The worker's one-line JSON summary, for the log. Never raises."""
+def _summary(stdout: str) -> Dict[str, Any]:
+    """The worker's final one-line JSON summary. ``{}`` if there isn't one."""
     try:
         line = [ln for ln in (stdout or "").splitlines() if ln.startswith("{")][-1]
-        info = json.loads(line)
-    except Exception:  # noqa: BLE001 — this is a log line, not a result
+        return json.loads(line)
+    except Exception:  # noqa: BLE001 — a missing summary is not a failed image
+        return {}
+
+
+def _report(stdout: str) -> str:
+    """The worker's one-line JSON summary, for the log. Never raises."""
+    info = _summary(stdout)
+    if not info:
         return ""
     bits = [f"seed={info['seed']}"] if "seed" in info else []
     if info.get("likeness") is not None:
         bits.append(f"likeness={info['likeness']} of {info.get('candidates', 1)}")
+    if info.get("changed") is not None:
+        bits.append(f"changed={info['changed']}")
+    if info.get("retried"):
+        bits.append("retried")
     return f" [{', '.join(bits)}]" if bits else ""
 
 
@@ -261,16 +317,27 @@ _INSTRUCTION_SYSTEM = (
     "to alter the person's own face or head (zombie, monster, black eye, broken "
     "nose, much fatter or older, a different person), or 'FACE: keep' if it only "
     "changes clothing, setting, body or background.\n"
+    "Then, on a THIRD line, write exactly 'EDIT: heavy' if the request changes what "
+    "the people are DOING — their pose, their position, how they interact, adding "
+    "or removing a person or an object they hold — or 'EDIT: light' if it only "
+    "dresses, recolours or restyles what is already there.\n"
     "Examples:\n"
     "põe o Rafa vestido de rei -> Dress the person in a medieval king's robe and golden crown.\n"
     "FACE: keep\n"
+    "EDIT: light\n"
     "mete-lhe um capacete de astronauta -> Put an astronaut helmet on the person.\n"
     "FACE: keep\n"
+    "EDIT: light\n"
     "transforma-o num zombie -> Turn the person into a rotting zombie with grey peeling skin.\n"
-    "FACE: change"
+    "FACE: change\n"
+    "EDIT: light\n"
+    "põe estes dois a beijarem-se -> Make the two men kiss each other on the lips.\n"
+    "FACE: keep\n"
+    "EDIT: heavy"
 )
 
 _FACE_LINE = re.compile(r"^\s*FACE\s*:\s*(keep|change)\s*$", re.IGNORECASE)
+_EDIT_LINE = re.compile(r"^\s*EDIT\s*:\s*(light|heavy)\s*$", re.IGNORECASE)
 
 
 def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
@@ -281,43 +348,55 @@ def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
     them verbatim. One small local generation, and the raw text on any failure:
     a worse prompt is much better than no picture.
 
-    Returns ``(instruction, restore_face)``. The second value answers a question
-    the same call can settle for free: is this edit supposed to change the
-    person's face? Restoring the original face onto a zombie would undo the whole
-    request, so the restore pass only runs when the answer is "keep".
+    Returns ``(instruction, restore_face, heavy)``. The extra values answer two
+    questions the same call settles for free.
 
-    A malformed or missing FACE line means **no restore** — today's behaviour.
-    A stage that changes what an edit produces must not be triggered by a reply
-    that could not be parsed.
+    Is this edit supposed to change the person's face? Restoring the original
+    face onto a zombie would undo the whole request, so the restore pass only
+    runs when the answer is "keep".
+
+    And how far does the picture have to move? A costume swap and "make these
+    two kiss" were being asked for at the same guidance, and the second one came
+    back unchanged. A pose or interaction change needs to be pushed harder.
+
+    A malformed or missing FACE line means **no restore**, and a malformed EDIT
+    line means the ordinary guidance — both are today's behaviour. A stage that
+    changes what an edit produces must not be triggered by a reply that could
+    not be parsed.
     """
     icfg = _config(config)
     if not icfg.get("translate_prompt", True) or not text.strip() or backend is None:
-        return text, False
+        return text, False, False
     try:
         rewritten = backend.generate(
             [
                 {"role": "system", "content": _INSTRUCTION_SYSTEM},
                 {"role": "user", "content": text},
             ],
-            max_new_tokens=80,
+            max_new_tokens=96,
             sampling={"temperature": 0.2, "top_p": 0.9, "top_k": 0,
                       "repetition_penalty": 1.0},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("prompt rewrite failed (%s); using the original text", exc)
-        return text, False
+        return text, False, False
 
     lines = [ln.strip() for ln in (rewritten or "").splitlines() if ln.strip()]
     restore = False
+    heavy = False
     instruction = ""
     for line in lines:
-        match = _FACE_LINE.match(line)
-        if match:
-            restore = match.group(1).lower() == "keep"
+        face = _FACE_LINE.match(line)
+        edit = _EDIT_LINE.match(line)
+        if face:
+            restore = face.group(1).lower() == "keep"
+        elif edit:
+            heavy = edit.group(1).lower() == "heavy"
         elif not instruction:
             instruction = line.strip('"').strip()
 
     if not instruction or len(instruction.split()) > 60:
-        return text, False
-    logger.info("edit prompt: %r -> %r (restore_face=%s)", text, instruction, restore)
-    return instruction, restore
+        return text, False, False
+    logger.info("edit prompt: %r -> %r (restore_face=%s, heavy=%s)",
+                text, instruction, restore, heavy)
+    return instruction, restore, heavy

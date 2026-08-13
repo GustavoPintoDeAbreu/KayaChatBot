@@ -353,10 +353,11 @@ def test_clear_command_not_generated_as_reply(tmp_path):
 class RoutedReply:
     """Mimics ``engine.Reply``: reply text plus how the message was routed."""
 
-    def __init__(self, text="", command=None, mode="banter", citation=""):
+    def __init__(self, text="", command=None, mode="banter", citation="", telemetry=None):
         self.text = text
         self.citation = citation
         self.route = type("Route", (), {"mode": mode, "command": command})()
+        self.telemetry = telemetry or {}
 
     @property
     def text_with_citation(self):
@@ -1470,3 +1471,189 @@ def test_a_failed_notification_still_records_the_report(tmp_path):
     assert result["logged"] is True
     assert len(_rows(tmp_path / "bugs.jsonl")) == 1
     assert "Registado" in client.sent[-1]["text"]
+
+
+# ── routing telemetry (2026-08-13) ───────────────────────────────────────────
+def test_the_result_carries_the_routing_telemetry(tmp_path):
+    """How a turn was routed has to reach the interaction log.
+
+    The log recorded latency and delivery medium but never the route, so the
+    "it is obsessed with the Gil" complaint could not be measured — only
+    re-read. whatsapp_server merges this dict into log_interaction's extras.
+    """
+    telemetry = {"route_mode": "factual", "route_fallback": False,
+                 "reply_members": ["Gil"], "query_members": []}
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="o Gil outra vez", mode="factual", telemetry=telemetry))
+
+    result = adapter.handle_event(dm_event("quem é o mais paneleiro?"), system_prompt="")
+
+    assert result["telemetry"] == telemetry
+
+
+def test_a_plain_string_responder_still_works(tmp_path):
+    """Tests and the simulators return a bare string, not a Reply."""
+    adapter, _ = make_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("olá"))
+
+    assert result["telemetry"] == {}
+
+
+# ── commands typed mid-message (2026-08-13) ──────────────────────────────────
+def test_feedback_mid_message_is_recorded(tmp_path):
+    """The most useful note of the first group session was typed mid-sentence.
+
+    "Andas a dizer demasiado foda-se no fim das frases. /feedback o problema é
+    a construção frásica" matched nothing, because only the first token was
+    checked. The model answered it — promising to do better — and the line went
+    into group memory instead of the feedback log.
+    """
+    adapter, client, tmp = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event(
+        "Andas a dizer demasiado foda se no fim das frases. "
+        "/feedback o problema é a construção frásica ser repetitiva"))
+
+    assert result["logged"] is True
+    rows = _rows(tmp_path / "feedback.jsonl")
+    assert rows[-1]["text"] == "o problema é a construção frásica ser repetitiva"
+
+
+def test_the_run_up_is_context_not_part_of_the_report(tmp_path):
+    """Only what follows the command word is the report."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("isto está estranho /bug o áudio corta a meio"))
+
+    assert _rows(tmp_path / "bugs.jsonl")[-1]["description"] == "o áudio corta a meio"
+
+
+def test_an_inline_command_stays_out_of_the_memory_log(tmp_path):
+    """The log is written before the reply gate — a report must not become
+    something 'the group said' and come back out of retrieval a week later."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+    logged = []
+    adapter.log_messages = True
+    adapter.message_log = type("Log", (), {"append": lambda self, **kw: logged.append(kw)})()
+
+    adapter.handle_event(dm_event("a voz é podre /feedback experimenta outro TTS"))
+
+    assert logged == []
+
+
+def test_clear_still_has_to_be_the_whole_message(tmp_path):
+    """A wrongly triggered wipe destroys a live conversation's context; a missed
+    one is retyped. The two mistakes are not symmetric, so /clear stays strict."""
+    adapter, client = make_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("podes fazer /clear a isso?"))
+
+    assert result.get("command") != "clear"
+
+
+# ── concurrent writes to one chat's history (2026-08-13) ─────────────────────
+def test_concurrent_appends_do_not_lose_lines(tmp_path):
+    """append() is a read-modify-write and more than one thread does it.
+
+    The webhook thread appends "(a preparar uma imagem…)" while the image
+    queue worker appends "(imagem enviada)" for the previous job. Unlocked,
+    whichever loaded first won and the other line was simply gone — measured at
+    60-95% of lines lost under three writers, plus save failures, because the
+    atomic write used one fixed ".tmp" path that both threads replaced.
+    """
+    import threading
+
+    store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=500)
+
+    def writer(tag):
+        for index in range(30):
+            store.append("chat@g.us", f"{tag}{index}")
+
+    threads = [threading.Thread(target=writer, args=(tag,)) for tag in "ABC"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(store.recent("chat@g.us", None)) == 90
+
+
+def test_a_save_leaves_no_scratch_file_behind(tmp_path):
+    session_dir = tmp_path / "sessions"
+    store = KeyedSessionMemory(base_dir=str(session_dir), max_lines=50)
+
+    store.append("chat@g.us", "Gustavo: olá")
+
+    assert [p.name for p in session_dir.iterdir()] == ["chat_g.us.json"]
+
+
+def test_each_chat_locks_independently(tmp_path):
+    """One chat's write must not serialise another's."""
+    store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=50)
+
+    assert store._chat_lock("a@g.us") is not store._chat_lock("b@g.us")
+    assert store._chat_lock("a@g.us") is store._chat_lock("a@g.us")
+
+
+# ── an edit that changed nothing (2026-08-13) ────────────────────────────────
+def _wait_for_text(adapter, needle, timeout=5.0):
+    """The failure message is sent from the image thread, like the image is."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(needle in (s.get("text") or "") for s in adapter.waha_client.sent):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_an_unchanged_edit_is_reported_honestly(tmp_path):
+    """The editor handing the photo back was delivered as a success. The group
+    had to work it out ("Was the generation rejected? The image looks exactly
+    the same"), and asked about it the bot invented content filters."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    assert _wait_for_text(adapter, "saiu na mesma")
+
+
+def test_a_failed_edit_is_recorded_in_the_conversation(tmp_path):
+    """So the follow-up turn answers from fact instead of inventing a reason."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    # The history line is written after the message is sent, both on the image
+    # thread, so wait on the line itself rather than on the send.
+    import time
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        history = adapter.session_store.recent(GROUP, 10)
+        if any("a imagem não saiu" in line for line in history):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"the failed edit was never recorded: {history}")
+
+
+def test_a_failed_generation_keeps_its_own_message(tmp_path):
+    """Generation from scratch cannot "come back unchanged" — there is no
+    source for it to be unchanged from."""
+    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
+                                 imagegen_result=None)
+
+    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
+                         system_prompt="")
+
+    assert _wait_for_text(adapter, "Não consegui fazer a imagem")
