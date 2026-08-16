@@ -250,6 +250,9 @@ tell you who said they'd bring the meat, even though nobody was talking to it at
 a computer in a living room. They are never sent to OpenAI, Google or anyone else. The only
 thing that ever goes out is a plain question with no names in it, when you ask about something it
 cannot know on its own, like a football score.</p>
+<p>It does keep things, on that machine: every message it sees, so it can remember them later;
+what it answered, so a bad reply can be looked into; and the last twenty pictures it made, with a
+note of what was asked for. None of that is backed up anywhere else, and none of it leaves.</p>
 </div>
 
 <h2>How to talk to it</h2>
@@ -365,6 +368,9 @@ consegue dizer quem ficou de levar a carne, mesmo que ninguém estivesse a falar
 num computador numa sala de estar. Nunca são enviados para a OpenAI, para a Google nem para ninguém.
 A única coisa que alguma vez sai é uma pergunta simples, sem nomes de ninguém, quando perguntam algo
 que ele não pode saber sozinho, como o resultado de um jogo.</p>
+<p>Guarda coisas, sim, nessa máquina: todas as mensagens que vê, para se lembrar delas mais tarde;
+o que respondeu, para se poder perceber uma resposta má; e as últimas vinte imagens que fez, com o
+registo do que lhe foi pedido. Nada disso tem cópia noutro sítio, e nada disso sai.</p>
 </div>
 
 <h2>Como falar com ele</h2>
@@ -751,6 +757,12 @@ profiles and told to elaborate, a model finds someone to talk about.</p>
     <td class="num">256 tokens</td>
   </tr>
   <tr>
+    <td><b>roast</b></td>
+    <td>“quem é o mais burro?”, “diz mal do Rui”</td>
+    <td>Full, and steered off whoever it just hit</td>
+    <td class="num">200 tokens</td>
+  </tr>
+  <tr>
     <td><b>command</b></td>
     <td>“responde só em áudio”, “faz uma imagem de…”</td>
     <td>None — executed in code</td>
@@ -781,6 +793,15 @@ asking <em>for</em> it:</p>
 
 <p>If the router fails for any reason, it falls back to <code>factual</code> — the old behaviour.
 It can be wrong, but it cannot break the bot.</p>
+
+<p><strong>One question type skips the search entirely: counting.</strong> Asked how many times each
+person had used a particular word, the bot produced a confident table off the back of a few
+retrieved fragments. It was wrong by a factor of eight, with the ranking inverted — the person who
+had actually said it most was reported third. Semantic search returns the passages <em>nearest</em>
+a question; it cannot count, because the answer is a property of every message rather than of any
+one of them. So “quantas vezes é que…” now reads the logs and counts, and the model is handed the
+finished table with an instruction not to adjust it. Two consequences: a DM counts only its own
+history, and only the group's count reaches back into the years of chat that predate the bot.</p>
 
 <h2><span class="sec-num">05</span>Questions the group's memory cannot answer</h2>
 <p class="lede">Football results, weather, news — things that change after the last message was sent.</p>
@@ -1254,6 +1275,12 @@ modelo uma pilha de perfis e diz-se-lhe para desenvolver, e ele arranja alguém 
     <td class="num">256 tokens</td>
   </tr>
   <tr>
+    <td><b>roast</b></td>
+    <td>“quem é o mais burro?”, “diz mal do Rui”</td>
+    <td>Completa, e desviada de quem acabou de apanhar</td>
+    <td class="num">200 tokens</td>
+  </tr>
+  <tr>
     <td><b>comando</b></td>
     <td>“responde só em áudio”, “faz uma imagem de…”</td>
     <td>Nenhuma — executado em código</td>
@@ -1284,6 +1311,16 @@ respondida como qualquer assistente a responderia, sem memória do grupo agarrad
 
 <p>Se o router falhar por alguma razão, cai para <code>factual</code>, que era o comportamento
 anterior. Pode enganar-se, mas não pode partir o bot.</p>
+
+<p><strong>Há um tipo de pergunta que salta a pesquisa por completo: contar.</strong> Quando lhe
+pediram quantas vezes cada pessoa tinha usado uma palavra, o bot fez uma tabela convincente a partir
+de meia dúzia de fragmentos. Estava errada por oito vezes, e com a ordem trocada: quem mais a tinha
+dito aparecia em terceiro. A pesquisa semântica devolve as passagens <em>mais próximas</em> de uma
+pergunta; não sabe contar, porque a resposta é uma propriedade de todas as mensagens e não de
+nenhuma delas em particular. Por isso “quantas vezes é que…” passa a ler os registos e a contar, e o
+modelo recebe a tabela já feita com instruções para não lhe mexer. Duas consequências: uma conversa
+privada conta só o seu próprio histórico, e só a contagem do grupo alcança os anos de conversa
+anteriores ao bot.</p>
 
 <h2><span class="sec-num">05</span>Perguntas que a memória do grupo não pode responder</h2>
 <p class="lede">Resultados de futebol, tempo, notícias: coisas que mudam depois de a última mensagem
