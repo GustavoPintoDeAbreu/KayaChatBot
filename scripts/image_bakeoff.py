@@ -633,6 +633,53 @@ def build_flux_kontext_prod(photos, edits, seed):
     return generate, pipe, prepare
 
 
+def build_flux_kontext_objects(photos, edits, seed):
+    """Kontext exactly as production now edits a photo with NOBODY in it.
+
+    NOT the same as the raw ``flux-kontext`` arm, and the difference matters: the
+    raw arm passes no height/width, so Kontext's own auto-resize squashes a
+    portrait phone photo to 1024x1024. Comparing it against ``flux-kontext-prod``
+    would credit the identity clause with a framing change it had nothing to do
+    with. This keeps prod's source preparation — one resample straight to a
+    Kontext bucket, aspect preserved — and changes only the three things the fix
+    changed: no identity clause, no face crop, one take instead of best-of-two.
+    """
+    import torch
+    from diffusers import FluxKontextPipeline
+    from diffusers.quantizers import PipelineQuantizationConfig
+
+    from src.chat import face_utils
+
+    quant = PipelineQuantizationConfig(quant_mapping={
+        "transformer": _bnb_diffusers_config(8, keep=[]),
+        "text_encoder_2": _bnb_transformers_config(8),
+    })
+    pipe = FluxKontextPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
+        quantization_config=quant)
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
+    pipe.set_progress_bar_config(disable=True)
+
+    def prepare(photo):
+        # face_crop=False is what imagegen.run now sends for an object edit; on a
+        # photo with no faces frame_for_faces is a no-op anyway, so this is the
+        # same picture either way and says so explicitly.
+        image, _ = face_utils.prepare_source(photo["path"], face_crop=False)
+        return image
+
+    def generate(source, edit, seed, photo_id=None):
+        return pipe(
+            image=source, prompt=edit["instruction"],
+            height=source.height, width=source.width, _auto_resize=False,
+            guidance_scale=2.5, num_inference_steps=28,
+            generator=torch.Generator("cpu").manual_seed(seed),
+        ).images[0]
+
+    return generate, pipe, prepare
+
+
 def build_qwen_image_edit_2511(photos, edits, seed):
     """Qwen-Image-Edit-2511, the release that targets exactly our failure mode.
 
@@ -775,6 +822,7 @@ ARMS: Dict[str, Callable] = {
     "qwen-image-edit-2511": build_qwen_image_edit_2511,
     "flux-kontext": build_flux_kontext,
     "flux-kontext-prod": build_flux_kontext_prod,
+    "flux-kontext-objects": build_flux_kontext_objects,
 }
 
 
