@@ -364,6 +364,43 @@ identify returns nothing rather than a number. The prompts also stopped acceptin
 standing jobs the bot has no state for ("Consigo manter o contador atualizado",
 then "Aí está, Frederico" with no list).
 
+### An opinion may vary, a fact may not (2026-08-16)
+
+Peter asked to be roasted four times over three days and got the same four beats
+every time: Rotterdam and Queijas, editing other people's videos, Five Guys,
+posting concert videos like a music critic. Romano got *"analista político por
+ler tweets"* five times, Rafa *"ginásio próprio"* and *"o Iñaki no sparring"*
+five times. The model was not at fault — it was handed identical material every
+turn, by two mechanisms:
+
+- **`whatsapp_server` builds the system prompt once, at import.** So the member
+  profiles, *including the `shuffle=True` meant to vary them*, were byte-identical
+  for the whole uptime. `engine.system_prompt_factory` now rebuilds it per turn
+  (~0.6 ms) — but only for open-ended turns.
+- **`key_facts[:max_facts]` truncates.** With `max_facts_per_member: 4`, Peter's
+  first four of five facts went out in the same order forever, and the fifth
+  (*he owns a dog called Kobe*, *he hosts the group and organises the football*)
+  had **never been shown to the model at all**. `sample_facts=True` draws a random
+  handful instead; `rag.max_facts_open_ended` (3) makes that ten different
+  triples for Peter rather than one.
+
+`src/chat/variety.py` adds the third piece: what the bot has **already said**
+about this person. `previous_bot_replies` only ever covered the last few turns of
+one chat, so it could not see the same roast repeated three days later in a
+different thread. The interaction log already records `reply_members`, so the
+material was on disk and simply never read back. The subjects of a turn are the
+members named in the message **plus the speaker** — which is how "roast me"
+resolves to the person asking, the exact case that repeated. Noise is filtered
+out: only open-ended rows count (a count table names everyone and is nobody's
+joke), replies under 8 words carry no angle, and a reply naming more than 5
+members is about none of them.
+
+**`variety.is_open_ended` is the gate, and `factual` is deliberately outside it.**
+Sampling facts for a factual answer would make *"o que faz o Gil?"* depend on
+whether his job survived the draw, and `CMD_COUNT` borrows the factual mode
+config — it must not borrow this. Variety is for roasts, insults and opinions;
+a count must come out the same every time it is asked.
+
 ### Slash commands, and why they must not be remembered (2026-08-13)
 
 `/clear` (`/limpar`), `/bug` (`/erro`) and `/feedback` (`/sugestao`) are matched

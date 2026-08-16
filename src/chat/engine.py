@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.chat import router
+from src.chat import router, variety
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -135,6 +135,8 @@ def build_system_prompt(
     config: Dict[str, Any],
     config_path: str,
     include_uncensored: bool = False,
+    max_facts: Optional[int] = None,
+    sample_facts: bool = False,
 ) -> str:
     """Assemble the runtime system prompt.
 
@@ -161,9 +163,11 @@ def build_system_prompt(
             members_path = Path(config_path).parent / members_file
         if members_path.exists():
             members_data = json.loads(members_path.read_text(encoding="utf-8"))
+            if max_facts is None:
+                max_facts = int((config.get("rag", {}) or {}).get("max_facts_per_member", 0))
             system_prompt += build_member_prompt_suffix(
                 members_data, shuffle=True,
-                max_facts=int((config.get("rag", {}) or {}).get("max_facts_per_member", 0)))
+                max_facts=max_facts, sample_facts=sample_facts)
 
     system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
     return system_prompt
@@ -250,6 +254,15 @@ class KayaEngine:
         # How many of its own recent replies the model is shown and checked
         # against. 0 disables the check entirely.
         self._repeat_window = int(self._inf.get("no_repeat_last_replies", 4))
+        # The same idea across chats and across days, keyed on WHO a reply was
+        # about rather than which chat it was in — how many interactions back to
+        # look, and how many previous lines about one person to show.
+        self._variety_window = int(self._inf.get("variety_scan_interactions", 400))
+        self._variety_recall = int(self._inf.get("variety_lines_per_member", 3))
+        # Set by the surface (the WhatsApp bridge) so an open-ended turn can be
+        # given a freshly drawn handful of member facts. Left None by the CLI,
+        # the benchmarks and the tests, which must stay reproducible.
+        self.system_prompt_factory: Optional[Any] = None
         if backend is None:
             from src.chat.inference_backend import build_backend
 
@@ -459,6 +472,19 @@ class KayaEngine:
 
             # 3. Mode picks the prompt. `banter` deliberately drops the member
             #    profiles that made the model riff about a random person.
+            # An opinion may vary; a fact may not. Only an open-ended turn gets a
+            # freshly drawn handful of each member's facts — the WhatsApp prompt
+            # is built once at import, so until now every roast for the whole
+            # uptime saw byte-identical profiles with every fact present, and
+            # reached for the same two. A factual answer keeps the full set:
+            # "o que faz o Gil?" cannot depend on whether his job survived a draw.
+            open_ended = variety.is_open_ended(route.mode, route.command)
+            if open_ended and self.system_prompt_factory is not None:
+                try:
+                    system_prompt = self.system_prompt_factory(sample_facts=True)
+                except Exception as exc:  # noqa: BLE001 — fall back to the fixed prompt
+                    print(f"⚠️  could not rebuild the system prompt: {exc}")
+
             mode_prompt = mcfg.get("system_prompt")
             if mode_prompt:
                 system_prompt = build_mode_system_prompt(self.config, mode_prompt)
@@ -493,6 +519,13 @@ class KayaEngine:
                 user_turn += f"\n\n({mcfg['mode_hint']})"
             if route.mode == router.ROAST:
                 user_turn += self._roast_hint(message, recent_lines)
+            # `_roast_hint` keeps the bot off the same PERSON; this keeps it off
+            # the same material about them. Peter asked to be roasted four times
+            # over three days and got Rotterdam, editing other people's videos
+            # and Five Guys every time — the per-chat repetition guard could not
+            # see it, being per-chat and per-session.
+            if open_ended:
+                user_turn += self._variety_hint(message, speaker)
             # Asked to think it through, the bot plans first and then answers
             # from the plan. Explicit request only — see wants_reasoning.
             if reasoning:
@@ -554,6 +587,30 @@ class KayaEngine:
             telemetry=self._telemetry(route, context, message, text,
                                       reasoning=reasoning),
         )
+
+    def _variety_hint(self, message: str, speaker: str) -> str:
+        """What the bot has already said about whoever this turn is about.
+
+        The subjects are the members named in the message plus the speaker, so
+        "roast me" resolves to the person asking — which is exactly the case that
+        produced four near-identical roasts of Peter.
+        """
+        if not self.retriever:
+            return ""
+        try:
+            subjects = list(self.retriever.named_members(message))
+            if speaker and speaker not in subjects and self.retriever.named_members(speaker):
+                subjects.append(speaker)
+            if not subjects:
+                return ""
+            from src.chat import metrics
+
+            rows = metrics.load_interactions(
+                metrics.log_path(self.config), limit=self._variety_window)
+            return variety.hint_for(subjects, rows, limit=self._variety_recall)
+        except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
+            print(f"⚠️  could not build the variety hint: {exc}")
+            return ""
 
     def _count_context(self, message: str, scope: Optional[str]) -> str:
         """The counted table for a "how many times" question. "" if unanswerable.

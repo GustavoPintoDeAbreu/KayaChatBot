@@ -264,6 +264,14 @@ inference:
   # answer is regenerated once (hotter) if it comes back near-identical anyway.
   # 0 disables the check.
   no_repeat_last_replies: 4
+  # The same idea keyed on WHO a reply was about rather than which chat it was
+  # in. no_repeat_last_replies is per-chat and per-session, so it never saw the
+  # same roast of the same person three days apart. These read the interaction
+  # log's reply_members: how many interactions back to scan, and how many
+  # previous lines about one person to put in front of the model as "you already
+  # said this". 0 lines disables it.
+  variety_scan_interactions: 400
+  variety_lines_per_member: 3
   # Words kept per line of verbatim history. Not a context-saving measure: a prior
   # bot turn pasted back in full invites the model to copy it wholesale (the
   # observed "stuck" / repetition bug). With whatsapp.history_turns at 60 this is
@@ -831,6 +839,22 @@ rag:
   # A cap narrows the gap; it cannot close it, because the thin profiles need
   # regenerating (generate_knowledge_base.py, which wants the GPU).
   max_facts_per_member: 4
+
+  # The same cap for an OPEN-ENDED turn — a roast, an insult, an opinion — where
+  # the facts are also drawn at random rather than taken in order, and the prompt
+  # is rebuilt per turn instead of once at import.
+  #
+  # Both of those were the bug. Peter asked to be roasted four times over three
+  # days and got the same four beats every time: Rotterdam and Queijas, editing
+  # other people's videos, Five Guys, posting concert videos like a music critic.
+  # Romano got "só manda stickers" five times, Rafa got "ginásio próprio" and "o
+  # Iñaki no sparring" five times. Nothing was broken in the model: it was handed
+  # the same first four facts, in the same order, on every single turn.
+  #
+  # Lower than max_facts_per_member on purpose — 3 of Peter's 5 facts is ten
+  # different combinations rather than one. A FACTUAL answer never samples: "o
+  # que faz o Gil?" must not depend on whether his job survived the draw.
+  max_facts_open_ended: 3
 
   # Inject per-member recent summaries when a member is mentioned in the query
   inject_recent_summaries: true

@@ -84,13 +84,22 @@ def log_interaction(
     return interaction_id
 
 
-def load_interactions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Read all interaction records, skipping any malformed lines."""
+def load_interactions(path: Optional[Path] = None,
+                      limit: int = 0) -> List[Dict[str, Any]]:
+    """Read interaction records, skipping any malformed lines.
+
+    ``limit`` keeps only the most recent N. The live path reads this file on
+    every open-ended turn to see what it has already said about someone, and that
+    only ever needs the tail — the log is append-only and grows forever.
+    """
     sink = Path(path) if path else _DEFAULT_LOG
     rows: List[Dict[str, Any]] = []
     if not sink.exists():
         return rows
-    for line in sink.read_text(encoding="utf-8").splitlines():
+    lines = sink.read_text(encoding="utf-8").splitlines()
+    if limit > 0:
+        lines = lines[-limit:]
+    for line in lines:
         line = line.strip()
         if not line:
             continue

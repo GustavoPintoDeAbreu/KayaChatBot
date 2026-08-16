@@ -180,6 +180,31 @@ _system_prompt = build_system_prompt(
 )
 
 
+def _prompt_for_turn(sample_facts: bool = False) -> str:
+    """Rebuild the system prompt for one turn. ~0.6ms, so it is not worth caching.
+
+    The prompt above is built ONCE, at import. That was invisible until someone
+    asked to be roasted twice: the member profiles — and the shuffle meant to vary
+    them — were byte-identical for the whole uptime, and every one of a member's
+    facts was in every prompt, so the model reached for the same two every time.
+    Peter got Rotterdam, editing other people's videos and Five Guys in four
+    separate roasts across three days.
+
+    Only open-ended turns pass ``sample_facts``; a factual answer keeps the full
+    set and the fixed prompt above.
+    """
+    return build_system_prompt(
+        config, config_path,
+        include_uncensored=config.get("chat", {}).get("uncensored_mode", False),
+        max_facts=int((config.get("rag", {}) or {}).get("max_facts_open_ended", 0))
+        if sample_facts else None,
+        sample_facts=sample_facts,
+    )
+
+
+engine.system_prompt_factory = _prompt_for_turn
+
+
 def _responder(message: str, speaker: str, recent_lines, scope=None,
                exclude_from=None, summary: str = ""):
     """Answer one message, returning the text AND how it was routed.

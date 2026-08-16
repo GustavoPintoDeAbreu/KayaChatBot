@@ -285,3 +285,116 @@ def test_no_maintainer_configured_leaves_the_prompt_alone():
     engine.respond("isto está lento", "Gil", [], "sys")
 
     assert system_prompt(backend).startswith("És o bot.")
+
+
+# ── variety ──────────────────────────────────────────────────────────────────
+# Peter asked to be roasted four times over three days and got Rotterdam,
+# editing other people's videos and Five Guys every time. Two causes: the
+# WhatsApp prompt is built once at import, and key_facts[:max_facts] handed over
+# the same first four facts in the same order on every turn.
+def test_an_open_ended_turn_redraws_the_member_facts():
+    backend = ScriptedBackend("ROAST")
+    engine = make_engine(backend)
+    calls = []
+
+    def factory(sample_facts=False):
+        calls.append(sample_facts)
+        return "prompt com factos novos"
+
+    engine.system_prompt_factory = factory
+    engine.respond("roast me", "Peter", [], "sys")
+
+    assert calls == [True]
+    assert backend.answer_calls[0]["messages"][0]["content"] == "prompt com factos novos"
+
+
+def test_a_factual_turn_keeps_the_prompt_it_was_given():
+    """"o que faz o Gil?" must not depend on whether his job survived a draw."""
+    backend = ScriptedBackend("FACTUAL")
+    engine = make_engine(backend)
+    calls = []
+    engine.system_prompt_factory = lambda sample_facts=False: calls.append(sample_facts) or "redrawn"
+
+    engine.respond("o que faz o Gil?", "Pedro", [], "o prompt fixo")
+
+    assert calls == []
+    assert backend.answer_calls[0]["messages"][0]["content"] == "o prompt fixo"
+
+
+def test_a_failing_factory_falls_back_to_the_fixed_prompt():
+    """A variety nicety must never cost a reply."""
+    backend = ScriptedBackend("ROAST")
+    engine = make_engine(backend)
+
+    def boom(sample_facts=False):
+        raise RuntimeError("members file gone")
+
+    engine.system_prompt_factory = boom
+    engine.respond("roast me", "Peter", [], "o prompt fixo")
+
+    assert backend.answer_calls[0]["messages"][0]["content"] == "o prompt fixo"
+
+
+def _with_history(monkeypatch, rows):
+    from src.chat import metrics
+
+    monkeypatch.setattr(metrics, "load_interactions", lambda path=None, limit=0: rows)
+
+
+def _said_about(name, reply):
+    return {"route_mode": "roast", "route_command": "",
+            "assistant_response": reply, "reply_members": [name]}
+
+
+# Gil rather than Peter only because MEMBERS above is the stub retriever's roster;
+# the case being reproduced is Peter's four identical roasts.
+GIL_ROAST = ("O Gil vive entre Roterdão e Queijas só para editar vídeos de "
+             "outros e comer Five Guys sem parar nunca.")
+
+
+def test_roast_me_is_told_what_it_already_said_about_the_asker(monkeypatch):
+    """The subject of "roast me" is the speaker — the exact case that repeated."""
+    _with_history(monkeypatch, [_said_about("Gil", GIL_ROAST)])
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast me", "Gil", [], "sys")
+
+    turn = user_turn(backend)
+    assert "Não repitas o material" in turn and "Roterdão" in turn
+
+
+def test_a_named_target_is_looked_up_too(monkeypatch):
+    _with_history(monkeypatch, [_said_about("Gil", GIL_ROAST)])
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("diz mal do Gil", "Pedro", [], "sys")
+
+    assert "Roterdão" in user_turn(backend)
+
+
+def test_a_factual_turn_gets_no_variety_hint(monkeypatch):
+    _with_history(monkeypatch, [_said_about("Gil", GIL_ROAST)])
+    backend = ScriptedBackend("FACTUAL")
+
+    make_engine(backend).respond("o que faz o Gil?", "Pedro", [], "sys")
+
+    assert "Não repitas o material" not in user_turn(backend)
+
+
+def test_nothing_said_about_them_yet_adds_nothing(monkeypatch):
+    _with_history(monkeypatch, [])
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast me", "Gil", [], "sys")
+
+    assert "Não repitas o material" not in user_turn(backend)
+
+
+def test_a_non_member_speaker_is_not_looked_up(monkeypatch):
+    """"Alguém" is the fallback for an unresolved sender, not a person."""
+    _with_history(monkeypatch, [_said_about("Gil", GIL_ROAST)])
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast me", "Alguém", [], "sys")
+
+    assert "Não repitas o material" not in user_turn(backend)

@@ -383,7 +383,7 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
 
 
 def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
-                               max_facts: int = 0) -> str:
+                               max_facts: int = 0, sample_facts: bool = False) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -404,6 +404,12 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
     uneven — 6 facts for the most-discussed member down to 1 for the quietest —
     and "pick someone from the group" reliably resolves to whoever the prompt
     has the most material about. 0 means no cap (the previous behaviour).
+
+    ``sample_facts`` picks that handful at random instead of taking the first N.
+    It is for open-ended answers only — a roast, an opinion, an insult — where
+    the same facts every turn produce the same joke every turn. A factual answer
+    must never sample: "o que faz o Gil?" cannot depend on whether his job
+    survived the draw.
     """
     members = list(members_data.get("members", []))
     if shuffle:
@@ -418,7 +424,15 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
 
         key_facts = member.get("key_facts") or []
         if max_facts > 0:
-            key_facts = key_facts[:max_facts]
+            # Truncating takes the SAME first N every time, which is how a roast
+            # became a recital: Peter has five facts, the prompt showed all five
+            # on every turn, and four separate roasts across three days all
+            # reached for Rotterdam, editing other people's videos and Five Guys.
+            # Sampling gives the model a different handful to work from — ten
+            # possible triples out of five facts, in a different order each time.
+            # Deterministic callers (benchmark, training data) keep the truncation.
+            key_facts = (random.sample(key_facts, min(max_facts, len(key_facts)))
+                         if sample_facts else key_facts[:max_facts])
         notes = member.get("notes", "")
         if key_facts:
             line += ": " + " ".join(
