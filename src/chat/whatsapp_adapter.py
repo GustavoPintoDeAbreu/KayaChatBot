@@ -871,14 +871,19 @@ class WhatsAppAdapter:
         normalized = _normalize_jid(jid)
         if not normalized:
             return ""
-        if normalized in self.bot_jids:
-            return "Kaya Bot"
         local = normalized.split("@", 1)[0]
         # ``@lid`` is in the list because that is how Baileys addresses people and
         # therefore how most of data/whatsapp_contacts.json is keyed. A mention in
         # the message body arrives as the bare number, with no suffix at all, so
         # without this every @lid contact was a miss.
-        for candidate in (normalized, f"{local}@c.us", f"{local}@lid", local):
+        candidates = (normalized, f"{local}@c.us", f"{local}@lid", local)
+        # The bot is matched against the same shapes for the same reason: bot_jids
+        # holds "<lid>@lid", a body mention is the bare number, and comparing only
+        # the raw form left the bot's own @ unresolved in the message log — which
+        # is the log that becomes searchable memory.
+        if self.bot_jids.intersection(candidates):
+            return "Kaya Bot"
+        for candidate in candidates:
             if candidate in self.contacts:
                 return self.contacts[candidate]
         return ""

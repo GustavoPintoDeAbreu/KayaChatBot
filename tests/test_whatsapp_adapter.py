@@ -2012,3 +2012,24 @@ def test_a_display_name_collision_still_warns(tmp_path, capsys):
 
     assert adapter.resolve_speaker(msg) == "Gustavo"
     assert "already" in capsys.readouterr().out
+
+
+def test_the_bots_own_mention_resolves_from_a_bare_number(tmp_path):
+    """bot_jids holds "<lid>@lid"; a mention in the body is the bare number. The
+    two were compared directly, so the bot's own @ stayed a raw number in the
+    message log — the log that becomes searchable memory."""
+    adapter, _ = _mention_adapter(tmp_path)
+    adapter.bot_jids = {"237065786642635@lid", "48453977310@c.us"}
+
+    assert adapter._name_for_jid("237065786642635") == "Kaya Bot"
+    assert adapter._name_for_jid("237065786642635@lid") == "Kaya Bot"
+    assert adapter._name_for_jid("48453977310") == "Kaya Bot"
+    assert adapter._resolve_mentions("@237065786642635 quantas vezes?") == \
+        "@Kaya Bot quantas vezes?"
+
+
+def test_a_member_still_wins_over_the_bot_check(tmp_path):
+    """The bot short-circuit must not shadow a real contact."""
+    adapter, _ = _mention_adapter(tmp_path)
+    adapter.bot_jids = {"237065786642635@lid"}
+    assert adapter._name_for_jid("257487651496102") == "Rafa"
