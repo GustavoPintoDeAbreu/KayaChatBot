@@ -96,14 +96,20 @@ class Arm:
     ngl: str = "999"
 
 
-# GPU0 drives the desktop, is capped at 250W and burn-in measured its sustained
+# GPU0 drives the desktop, is capped at 300W and burn-in measured its sustained
 # clocks ~15% below GPU1's (1238 vs 1448 MHz avg). It is therefore the slow half
 # of any layer split, so two-card arms give it slightly fewer layers.
+#
+# STALE: those clocks were measured at the old 250W cap, before GPU0 got a fan
+# curve (gpu0-fan-curve.service) -- and GPU0 was thermally throttling for much of
+# that burn-in, so the gap it recorded is partly a cooling artefact rather than a
+# property of the card. Re-run the burn-in and retune this ratio; if the gap has
+# closed, this bias is now costing throughput on the split arms.
 TS_BIAS = "-ts 0.45,0.55"
 # Tier A exists to answer "what does ONE card give you", so those arms keep the
 # whole model on GPU1 (-sm none). Left to split, llama.cpp spreads even a 10GB
 # model over both cards and charges a cross-PCIe hop per token, which understates
-# single-card throughput. GPU1 is the compute-clean card (no desktop, 280W).
+# single-card throughput. GPU1 is the compute-clean card (no desktop, 350W).
 SINGLE_GPU = "--main-gpu 1"
 # One slot, so the whole KV budget serves a single request instead of being
 # divided four ways (llama-server defaults to 4 slots).

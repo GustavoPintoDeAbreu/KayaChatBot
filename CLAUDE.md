@@ -183,12 +183,62 @@ traffic stages through system RAM.
   prepare_device_map`), so exposing both cards gives training **no extra
   capacity** anyway. Training above 24 GB would mean leaving Unsloth for HF+peft
   `device_map="auto"`.
-- GPU0 drives the desktop, is capped at 250 W and burn-in measured its sustained
-  clocks ~15% below GPU1's (1238 vs 1448 MHz), so it is the slow half of a split
-  — two-card serving uses `-ts 0.45,0.55` to give it fewer layers.
+- GPU0 drives the desktop and is capped at 300 W. Burn-in once measured its
+  sustained clocks ~15% below GPU1's (1238 vs 1448 MHz), which is why two-card
+  serving uses `-ts 0.45,0.55` to give it fewer layers. That gap was measured at
+  the old 250 W cap; at 300 W it sustains ~1620 MHz. Worth re-measuring before
+  trusting the 0.45/0.55 bias, but note the gap is partly real — see below.
+- **GPU0 is cooling-limited, not power-limited. The "intake-starved" note in
+  `gpu-power-limit.sh` is correct — 300 W is its ceiling.** Measured 2026-08-16 with
+  240 s sustained fp16 burns (harsher than a real render), all from a 61 °C start:
+
+  | GPU0 cap | Sustained | Temp | Fan | Throughput | Thermal slowdown |
+  |---|---|---|---|---|---|
+  | 300 W, alone | 299 W | 82–83 °C | 96% | 59.4 TFLOPS | none |
+  | 350 W, alone | 349 W | 85–86 °C | 93–99% | 63.5 TFLOPS | none |
+  | **350 W + GPU1 serving** | **falls 349 → 316 W** | **88 °C** | **100%** | **decays to 59.3** | **+112 s** |
+
+  The concurrent row is the real operating case, and it is why 350 W was tried and
+  reverted. With both cards working, GPU0 saturates: fans max out, it can no longer
+  hold its own cap, and throughput decays back to exactly the 300 W figure while
+  running 5 °C hotter and accruing real throttle time. **The extra 50 W buys nothing
+  and costs thermal margin.** Do not raise this card without fixing case airflow
+  first.
+- **`SW Thermal Slowdown` IS the meaningful counter — trust it.** It stays at zero
+  through 82–86 °C and only accrues once the card is genuinely saturated (88 °C,
+  fans pinned at 100%), which is exactly the state worth catching. It is frozen at
+  idle, so a jump between two idle readings means real distress happened in between.
+  Do **not** confuse it with `SW Power Capping`, which accrues continuously whenever
+  a cap is merely *set* and means nothing at all.
+- **PSU headroom is not the constraint.** Peak combined draw measured 672 W (GPU0
+  349 W + GPU1 350 W, both working) — comfortable on the HX1200i. Cooling binds long
+  before power does on this box.
 - Power caps are enforced by `gpu-power-limit.service` **by UUID** (indices are
-  not stable across reboots). `SwPowerCap` in the throttle bitmask is expected and
-  healthy. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
+  not stable across reboots). Raised from 250/280 W to 300/350 W on 2026-08-16,
+  once sustained fine-tuning stopped being the workload. GPU1 at 350 W measured
+  **+11% generation throughput** (56.3 → 62.6 tok/s on 250-token runs, 1300 →
+  1620 MHz) at 70 °C with fans at 65%, and serving was unaffected by a concurrent
+  GPU0 render (63.0 tok/s mean across 95 replies). GPU0 was tested at 350 W and
+  **reverted to 300 W** for the thermal reason above. `SwPowerCap` in the throttle
+  bitmask is expected and healthy.
+- **Manual fan control is impossible on this host, and not needed.** The driver is
+  `nvidia-driver-595-open` — the *open* kernel module (`/proc/driver/nvidia/version`
+  says "NVIDIA UNIX Open Kernel Module"; `modinfo nvidia` reports Dual MIT/GPL).
+  `nvidia-smi` has no fan option at all on GeForce, and `nvidia-settings` accepts
+  `GPUFanControlState=1` but rejects every `GPUTargetFanSpeed` write with
+  "Unknown Error" — with `Option "Coolbits" "4"` confirmed applied in the Xorg log.
+  Switching to the proprietary `nvidia-driver-595` would restore it, but the burn
+  above shows the automatic curve handles the card fine, so there is no reason to.
+  `/etc/X11/xorg.conf.d/20-nvidia-coolbits.conf` is inert; safe to delete.
+- **`nvidia-settings -a` exits 0 even when the write was rejected** — it prints
+  `ERROR: ... (Unknown Error)` to stderr and still returns 0, the same class of trap
+  as `nvidia-smi -pl`. Trusting the exit code would leave a card in *manual* fan
+  mode with its fans parked at zero, strictly worse than not touching it. **Always
+  read the attribute back and compare.** Note also that no attribute exposes which
+  fan belongs to which GPU, and an unverified probe write "succeeds" on all four.
+  `gpu0-fan-curve.service` is therefore a **user** unit: it takes over above
+  60 °C and hands back to the driver's automatic curve below 55 °C, so idle stays
+  in the zero-RPM band and the machine is no louder than before. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
   do not write monitoring that expects it.
 
 ### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
