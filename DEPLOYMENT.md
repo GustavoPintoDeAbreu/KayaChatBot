@@ -29,8 +29,8 @@ kaya-prod / kaya-dev container — one process, three routes
    └─ /whatsapp/*   WAHA webhook — open by necessity
    ▼
 RAG (GPU) ──► generation backend
-                ├─ hf:   in-process Unsloth model (dev default)
-                └─ gguf: llama.cpp `llama` container over HTTP (prod, ~15× faster)
+                ├─ hf:   in-process Unsloth model (needs a profile with an adapter)
+                └─ gguf: llama.cpp `llama` container over HTTP (~15× faster) — the default for BOTH prod and dev
 ```
 
 **The password on `/app` is the only thing guarding the group's memory.** There
@@ -50,9 +50,13 @@ so the landing page stays public.
   model may claim both cards, **only run one env at a time** (`app_up.sh` enforces
   this). Python services stay pinned to one card via `CUDA_VISIBLE_DEVICES=0` — see
   the GPU topology section in `CLAUDE.md` for why that is load-bearing.
-- Serving a model larger than 24 GB: set `KAYA_PROD_GGUF` (and `KAYA_PROD_CTX`) so
-  the `llama` service loads it; verify with `docker exec kaya-llama nvidia-smi -L`
-  (must list both cards) and check VRAM lands on both.
+- Serving a model larger than 24 GB takes **three** variables, not one: the
+  `llama` service is pinned to one card by default (`NVIDIA_VISIBLE_DEVICES=
+  ${KAYA_GPU_PROD:-all}`, `-sm ${KAYA_PROD_SM:-none}`), so `KAYA_PROD_GGUF`
+  alone will load a model that does not fit. Set `KAYA_GPU_PROD=` (empty, so it
+  falls back to `all`), `KAYA_PROD_SM=layer`, and `KAYA_PROD_GGUF` (plus
+  `KAYA_PROD_CTX`). Verify with `docker exec kaya-llama nvidia-smi -L` (must
+  list both cards) and check VRAM lands on both.
 - **Inference backend:** both prod and dev run `gguf`. Prod generates in the `llama`
   compose service (`gguf` profile) serving `models/gguf/gemma-4-12b-it-Q6_K.gguf`
   at `-c 32768`; `deploy_prod.sh` starts it automatically. Dev uses its own
@@ -80,9 +84,12 @@ so the landing page stays public.
    | `dev.kaya.example.com` | `http://kaya-dev:7861` |
    The `cloudflared` container shares the compose network, so it resolves the
    `kaya-prod` / `kaya-dev` service names.
-4. **Zero Trust → Access → Applications → Add a self-hosted application** for each
-   hostname. Add a policy that **allows only specific emails** (Action: Allow,
-   Include: Emails → your group's addresses). This is the Cloudflare login page.
+4. *(optional)* Cloudflare Access is **not** used any more — the password on
+   `/app` is the guard, and the landing page at `/` is meant to be public. If
+   you want the second layer back, add a self-hosted application under **Zero
+   Trust → Access → Applications**, scope its path to `/app`, and give it a
+   policy allowing only your group's emails. Scoping matters: applied to the
+   whole hostname it also gates the public explainer.
 
 ### 2. Self-hosted GitHub Actions runner (on the GPU box)
 
@@ -129,10 +136,31 @@ the live site, and lets you keep editing without affecting it.
 ```bash
 git clone git@github.com:GustavoPintoDeAbreu/KayaChatBot.git ~/kaya-prod
 ln -s ~/Desktop/KayaChatBot/models ~/kaya-prod/models   # share the 42GB models (symlink, no copy)
-ln -s ~/Desktop/KayaChatBot/data   ~/kaya-prod/data     # share data/rag_db
 cp  ~/Desktop/KayaChatBot/.env     ~/kaya-prod/.env     # or let CI write it from prod secrets
 sudo systemctl enable snap.docker.dockerd                # so prod auto-starts after a reboot
+
+# Prod's data/ is its OWN directory, seeded once from dev. Copy, do not link.
+mkdir -p ~/kaya-prod/data
+cp -r ~/Desktop/KayaChatBot/data/rag_db              ~/kaya-prod/data/
+cp    ~/Desktop/KayaChatBot/data/group_members.json  ~/kaya-prod/data/
+cp    ~/Desktop/KayaChatBot/data/whatsapp_*.json     ~/kaya-prod/data/
 ```
+
+**`data/` must NOT be a symlink to the dev checkout**, whatever earlier versions
+of this file said. `models/` is shared because it is 42GB of read-only weights;
+`data/` is not, because prod *writes* to it and its contents are not dev's:
+
+| prod owns | why it cannot be shared |
+|---|---|
+| `data/waha/` | the linked-device session. Overwrite it and the phone has to re-scan the QR. |
+| `data/live_messages/` | the real group's messages. Dev's copy contains simulator conversations. |
+| `data/ingest_state.json` | the ingest watermark. A dev watermark makes prod re-read or skip chunks. |
+| `data/whatsapp_sessions/`, `whatsapp_prefs/`, `whatsapp_summaries/` | live per-chat state |
+| `data/feedback/` | bug reports, ratings and the interaction log |
+| `data/imagegen_log/` | the last `chat.imagegen.keep_outputs` renders, with a JSON sidecar per image |
+
+The `data.bak.*` directory on the box is what a previous attempt at the symlink
+cost. Seed it once, then leave it alone.
 
 Docker here is the **snap** build, so the unit is `snap.docker.dockerd.service`,
 not `docker.service` — `systemctl enable docker` returns `not-found` and enables
@@ -230,7 +258,7 @@ scripts/app_up.sh dev
   routes" (Beta)** tunnel feature). Fix: **delete the Access application and
   recreate it fresh** — a new app gets a clean AUD and binds correctly. When
   creating it, choose destination type **Public DNS** for a public hostname
-  (`dev.sigmakayachat.pt`), not "Private destinations".
+  (`dev.kaya.example.com`), not "Private destinations".
 
 - **Tunnel routes must use your real domain.** If a route still points at a
   placeholder like `example.com`, the hostname won't resolve. Each public
@@ -245,24 +273,31 @@ scripts/app_up.sh dev
   start one while the other runs. Stop the other first (`scripts/app_down.sh`).
 
 - **Verifying from the box without logging in:** `curl -sI https://dev.<domain>`
-  — a 302 to `*.cloudflareaccess.com/.../login/...` means Access is gating it
-  correctly; the "Unable to find application" body means the binding is stale
-  (recreate the app, above).
+  — a 302 to `*.cloudflareaccess.com/.../login/...` means Cloudflare Access is
+  still bound to this hostname. Access was removed deliberately, so unless you
+  put it back on purpose that redirect is the bug, not the health check: it
+  also gates the landing page, which is supposed to be public. The "Unable to
+  find application" body means the binding is stale — remove it in Zero Trust.
 
 - **Ungrounded answers / DMs ignored after a deploy.** `~/kaya-prod/data/` must
   hold the gitignored runtime files: `rag_db/`, `group_members.json`,
-  `whatsapp_whitelist.json`, `whatsapp_contacts.json`. If `data/` is a **real dir**
-  (git materialised the tracked `*.example.json`) instead of the intended
-  `ln -s ~/Desktop/KayaChatBot/data ~/kaya-prod/data` symlink, those files are
-  missing → RAG init fails (hallucinated answers) and the DM whitelist is empty
-  (every direct message silently ignored). Fix: copy them from the dev `data/`
-  (leave `data/waha/` — the linked-device session — untouched), then
-  `docker restart kaya-prod`. Boot log should show `RAG Retriever initialized` and
-  `Loaded N WhatsApp whitelist number(s)`.
+  `whatsapp_whitelist.json`, `whatsapp_contacts.json`. A fresh clone materialises
+  only the tracked `*.example.json`, so on a rebuilt box those are missing → RAG
+  init fails (hallucinated answers) and the DM whitelist is empty (every direct
+  message silently ignored). Fix: copy them in from the dev `data/`, leaving
+  everything prod owns alone (`waha/`, `live_messages/`, `ingest_state.json`,
+  `whatsapp_sessions/`, `feedback/` — see the table in *Prod runs from its own
+  checkout*), then `docker restart kaya-prod`. Boot log should show
+  `RAG Retriever initialized` and `Loaded N WhatsApp whitelist number(s)`.
+  **Do not "fix" this by symlinking `data/` to the dev checkout** — that is what
+  the `data.bak.*` directory on the box is a record of.
 
 - **gguf backend: bot never replies / errors on generate.** The `llama` service
   isn't up. `deploy_prod.sh` starts it, or manually
   `docker compose --profile gguf up -d llama`; check `docker logs kaya-llama` for
   `model loaded`. The app reaches it at `http://llama:8080` on the compose network.
   Requires `models/gguf/gemma-4-12b-it-Q6_K.gguf` to exist (shared via the `models`
-  symlink). To bypass entirely, redeploy with `KAYA_INFERENCE_BACKEND=hf`.
+  symlink). `KAYA_INFERENCE_BACKEND=hf` is **not** a way out on the live profile —
+  `gemma4-12b-stock` has no adapter for the in-process loader to find. Rolling
+  back means switching profile first: `active_model_profile:
+  gemma4-e4b-seq4096-wpp`, then redeploy with `hf`.

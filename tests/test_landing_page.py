@@ -18,12 +18,32 @@ BASE_DIR = Path(__file__).parent.parent
 LANDING = BASE_DIR / "src" / "chat" / "static" / "landing.html"
 SERVER = BASE_DIR / "src" / "chat" / "whatsapp_server.py"
 
-# Real members, as they appear in the group's own profiles. The landing page is
-# public — it is handed to the group and can be forwarded anywhere — so it uses
-# invented names throughout.
-REAL_NAMES = ["Peter", "Gil", "Gustavo", "David", "Manuel", "Carnall",
-              "Frederico", "Mateus", "Rafa", "Bernardo", "Pedro",
-              "Murgeiro", "Romano"]
+MEMBERS_FILE = BASE_DIR / "data" / "group_members.json"
+
+
+def _real_names() -> list:
+    """The members, read from their own profiles rather than copied.
+
+    This list used to be hardcoded, and had gone stale: two members joined the
+    group and the guard did not know about them, so the one test standing between
+    a real name and a public page had a hole in it for exactly those two. Reading
+    the file means the guard cannot fall behind the group again.
+    """
+    import json
+
+    if not MEMBERS_FILE.exists():  # gitignored; CI checkouts may not have it
+        return []
+    data = json.loads(MEMBERS_FILE.read_text(encoding="utf-8"))
+    names = []
+    for member in data.get("members", []):
+        names.append(member["name"])
+        names.extend(member.get("aliases", []))
+    return sorted({n for n in names if len(n) > 2})
+
+
+# The landing page is public — it is handed to the group and can be forwarded
+# anywhere — so it uses invented names throughout.
+REAL_NAMES = _real_names()
 
 
 @pytest.fixture(scope="module")
