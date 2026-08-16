@@ -30,6 +30,7 @@ import numpy as np
 MIN_FACE_PX = 120        # a face smaller than this cannot be judged for likeness
 MIN_DET_SCORE = 0.70
 MAX_YAW_RATIO = 0.35     # nose offset within the face box; rejects hard profiles
+MIN_OBJECT_PX = 512      # --no-faces has no face to bound quality, so bound size
 
 
 def load_analyser(det_size: int = 640):
@@ -84,13 +85,48 @@ def score_photo(app, path: Path) -> Dict[str, Any] | None:
     }
 
 
+def score_object_photo(app, path: Path) -> Dict[str, Any] | None:
+    """The inverse selection: photos with NOBODY in them.
+
+    The face grid is the reason an object edit was never measured. Every input was
+    picked for having a large frontal face and every edit transformed a person, so
+    the bench could not see what happened when the group sent a photo of four
+    energy drinks on a shop counter — an identity clause about a face that was not
+    there, a crop that framed nothing, and best-of-N ranked by a similarity score
+    that did not exist.
+    """
+    import cv2
+
+    image = cv2.imread(str(path))
+    if image is None:
+        return None
+    if app.get(image):
+        return None
+    height, width = image.shape[:2]
+    if min(height, width) < MIN_OBJECT_PX:
+        return None
+    return {
+        "file": path.name,
+        "faces": 0,
+        "width": width,
+        "height": height,
+        # Bigger is better here for the same reason a big face was: a thumbnail
+        # cannot distinguish a model that preserved the scene from one that did not.
+        "pixels": width * height,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pick bake-off input photos by face quality.")
     parser.add_argument("--media", required=True, help="WhatsApp media export directory")
-    parser.add_argument("--out", default="data/bench_photos")
+    parser.add_argument("--out", default="")
     parser.add_argument("--count", type=int, default=8)
     parser.add_argument("--scan-limit", type=int, default=0, help="0 = scan every image")
+    parser.add_argument("--no-faces", action="store_true",
+                        help="pick photos with NOBODY in them, for the object grid")
     args = parser.parse_args()
+    out_default = "data/bench_objects" if args.no_faces else "data/bench_photos"
+    args.out = args.out or out_default
 
     base_dir = Path(__file__).parent.parent
     media = Path(args.media).expanduser()
@@ -108,28 +144,36 @@ def main() -> None:
         if index % 100 == 0:
             print(f"  {index}/{len(images)} scanned, {len(kept)} usable")
         try:
-            result = score_photo(app, path)
+            result = (score_object_photo(app, path) if args.no_faces
+                      else score_photo(app, path))
         except Exception as exc:  # noqa: BLE001 — one bad JPEG must not end the scan
             print(f"  ! {path.name}: {exc}")
             continue
         if result:
             kept.append(result)
 
-    print(f"{len(kept)} photos passed the face-quality bar")
+    bar = "have nobody in them" if args.no_faces else "passed the face-quality bar"
+    print(f"{len(kept)} photos {bar}")
     if not kept:
-        print("nothing usable — loosen MIN_FACE_PX or check the media path")
+        print("nothing usable — loosen the thresholds or check the media path")
         return
 
-    # Prefer big, confident, frontal faces; then spread across solo and group
-    # shots, since a group photo is a much harder edit than a portrait.
-    kept.sort(key=lambda r: (r["face_px"] * r["det_score"], -r["yaw"]), reverse=True)
-    solo = [r for r in kept if r["faces"] == 1]
-    group = [r for r in kept if r["faces"] > 1]
-    half = max(args.count // 2, 1)
-    chosen = (solo[:half] + group[: args.count - half])[: args.count]
-    if len(chosen) < args.count:
-        extra = [r for r in kept if r not in chosen]
-        chosen += extra[: args.count - len(chosen)]
+    if args.no_faces:
+        # Nothing to balance: just take the biggest, for the same reason the face
+        # grid takes the biggest faces.
+        kept.sort(key=lambda r: r["pixels"], reverse=True)
+        chosen = kept[: args.count]
+    else:
+        # Prefer big, confident, frontal faces; then spread across solo and group
+        # shots, since a group photo is a much harder edit than a portrait.
+        kept.sort(key=lambda r: (r["face_px"] * r["det_score"], -r["yaw"]), reverse=True)
+        solo = [r for r in kept if r["faces"] == 1]
+        group = [r for r in kept if r["faces"] > 1]
+        half = max(args.count // 2, 1)
+        chosen = (solo[:half] + group[: args.count - half])[: args.count]
+        if len(chosen) < args.count:
+            extra = [r for r in kept if r not in chosen]
+            chosen += extra[: args.count - len(chosen)]
 
     import shutil
 
@@ -144,16 +188,24 @@ def main() -> None:
         source = media / record["file"]
         stem = f"p{position:02d}_{source.stem}"
         shutil.copy2(source, out_dir / f"{stem}{source.suffix.lower()}")
-        np.save(out_dir / f"{stem}.npy", np.asarray(record["embedding"], dtype=np.float32))
+        # No reference embedding for an object photo: there is no identity to
+        # score against, which is the whole point of that grid.
+        if "embedding" in record:
+            np.save(out_dir / f"{stem}.npy",
+                    np.asarray(record["embedding"], dtype=np.float32))
         entry = {k: v for k, v in record.items() if k != "embedding"}
         entry["id"] = stem
         entry["path"] = str(out_dir / f"{stem}{source.suffix.lower()}")
         manifest.append(entry)
-        print(f"  {stem}  faces={record['faces']}  face_px={record['face_px']}  "
-              f"det={record['det_score']}  yaw={record['yaw']}")
+        if args.no_faces:
+            print(f"  {stem}  {record['width']}x{record['height']}  no faces")
+        else:
+            print(f"  {stem}  faces={record['faces']}  face_px={record['face_px']}  "
+                  f"det={record['det_score']}  yaw={record['yaw']}")
 
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"\n✓ {len(manifest)} photos + reference embeddings in {out_dir}")
+    suffix = "" if args.no_faces else " + reference embeddings"
+    print(f"\n✓ {len(manifest)} photos{suffix} in {out_dir}")
 
 
 if __name__ == "__main__":

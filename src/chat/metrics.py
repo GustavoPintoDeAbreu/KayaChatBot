@@ -20,6 +20,21 @@ from typing import Any, Dict, List, Optional
 _DEFAULT_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "feedback" / "live_interactions.jsonl"
 
 
+# Commands whose reply is a confirmation rather than conversation ("volto a
+# responder por texto"). `image` is deliberately absent: excluding EVERY command
+# is why the edit the group complained about left no record at all — not the
+# prompt it was given, not the editor, not the outcome.
+BOOKKEEPING_COMMANDS = frozenset(
+    {"audio", "audio_once", "text", "clear", "bug", "feedback"})
+
+
+def should_log(result: Optional[Dict[str, Any]]) -> bool:
+    """Whether one handled message belongs in the interaction log."""
+    if not result or not result.get("reply"):
+        return False
+    return result.get("command") not in BOOKKEEPING_COMMANDS
+
+
 def log_path(config: Optional[Dict[str, Any]] = None) -> Path:
     """Resolve the JSONL sink path, honouring ``metrics.log_file`` if configured."""
     if config:

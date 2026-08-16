@@ -21,13 +21,14 @@ import logging
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,11 @@ WORKER = BASE_DIR / "scripts" / "imagegen_worker.py"
 _job_lock = threading.Lock()
 
 DEFAULT_LEASE_PATH = BASE_DIR / "data" / "gpu0_lease.json"
+
+# What an edit is about, decided per request by build_edit_instruction. It picks
+# the editor and gates the identity machinery. `person` is the fallback for every
+# failure path, because that is the behaviour that shipped.
+SUBJECT_PERSON = "person"
 
 
 def lease_path(config: Dict[str, Any]) -> Path:
@@ -255,9 +261,58 @@ def allowed_here(config: Dict[str, Any], scope: str, chat_id: str = "",
     return scope in allowed
 
 
+def _keep_output(config: Dict[str, Any], out_path: Path, report: Dict[str, Any]) -> None:
+    """Copy the render and what produced it into ``data/imagegen_log/``.
+
+    The worker writes into a TemporaryDirectory that is deleted the moment the
+    bytes are read, so when the group said an edit came out badly there was
+    nothing left to look at: no output, no source, and no record of the prompt.
+    Off by default; ``keep_outputs`` is how many renders to retain.
+    """
+    icfg = _config(config)
+    keep = int(icfg.get("keep_outputs", 0) or 0)
+    if keep <= 0:
+        return
+    try:
+        directory = Path(icfg.get("keep_outputs_dir") or (BASE_DIR / "data" / "imagegen_log"))
+        directory.mkdir(parents=True, exist_ok=True)
+        # Seed in the name because the stamp is only second-resolution, and
+        # because it is the one value that reproduces the render.
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        stem = directory / f"{stamp}_{report.get('mode', 'edit')}_{report.get('seed', 0)}"
+        shutil.copyfile(out_path, stem.with_suffix(".png"))
+        stem.with_suffix(".json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Oldest first. Keyed off the sidecar, so pruning can only ever delete
+        # renders this function wrote — never anything else left in the directory.
+        ours = sorted(directory.glob("*.json"))
+        for stale in ours[:-keep]:
+            stale.with_suffix(".png").unlink(missing_ok=True)
+            stale.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 — a debugging aid never breaks a render
+        logger.warning("could not keep the render: %s", exc)
+
+
+def resolve_editor(config: Dict[str, Any], subject: str) -> str:
+    """Which editor answers this request.
+
+    A single editor was chosen by a bake-off whose every photo was picked for
+    having a large frontal face and whose every edit transformed a person, so it
+    was chosen on identity preservation alone. That is the right criterion for
+    "põe o Rafa de rei" and the wrong one for "turn these cans into something
+    else" — there is no identity to preserve. ``editors`` maps subject to editor;
+    ``editor`` stays the fallback and the answer when the mapping is absent.
+    """
+    icfg = _config(config)
+    mapping = icfg.get("editors") or {}
+    return str(mapping.get(subject) or icfg.get("editor") or "").strip()
+
+
 def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
         image_path: Optional[str] = None,
-        restore_face: bool = False, heavy: bool = False) -> Optional[bytes]:
+        restore_face: bool = False, heavy: bool = False,
+        subject: str = SUBJECT_PERSON,
+        on_report: Optional[Callable[[Dict[str, Any]], None]] = None) -> Optional[bytes]:
     """Produce one image. Returns JPEG bytes, or None on any failure.
 
     Blocking and slow — minutes for an edit. Callers must run it off the thread
@@ -270,6 +325,12 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
     ``heavy`` says this edit changes what the people are doing rather than how
     they look, and comes from the same call. Those need more guidance: "make
     these two kiss" at the costume-swap setting came back as the original photo.
+
+    ``subject`` comes from the same call again, and decides both the editor and
+    whether the identity machinery runs at all. Everything that protects a
+    likeness — the identity clause, the crop that frames faces, best-of-N scored
+    by ArcFace — is dead weight on a photo of a shop counter, and the clause is
+    actively harmful there.
     """
     if not is_available(config):
         return None
@@ -293,13 +354,21 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
             ]
             if image_path:
                 command += ["--image", str(image_path)]
-            if icfg.get("editor"):
-                command += ["--editor", str(icfg["editor"])]
+            editor = resolve_editor(config, subject)
+            if editor:
+                command += ["--editor", editor]
             if restore_face:
                 command += ["--restore-face"]
             if heavy:
                 command += ["--guidance-scale",
                             str(icfg.get("heavy_guidance_scale", 3.5))]
+            # Nobody in the picture, nothing to preserve. The worker drops the
+            # clause on its own once insightface confirms zero faces; this says
+            # the same thing from the request side, so an edit the model called
+            # an object edit is not framed around, or ranked by, a face.
+            if mode == "edit" and subject != SUBJECT_PERSON:
+                command += ["--no-identity-clause", "--no-face-crop",
+                            "--candidates", "1"]
 
             env = dict(os.environ)
             if env_device:
@@ -329,6 +398,19 @@ def run(config: Dict[str, Any], prompt: str, mode: str = "generate",
                 return None
 
             report = _summary(result.stdout)
+            report.update({"mode": mode, "subject": subject, "editor": editor,
+                           "instruction": prompt,
+                           "seconds": round(time.time() - started, 1)})
+            if on_report is not None:
+                # Everything the worker decided — the final prompt with whatever
+                # clause was appended, the editor, the seed, the likeness — used
+                # to exist only as a logger.info on a logger nobody configures,
+                # so the one edit the group complained about left no trace at all.
+                try:
+                    on_report(dict(report))
+                except Exception as exc:  # noqa: BLE001 — telemetry never breaks a render
+                    logger.warning("image report callback failed: %s", exc)
+            _keep_output(config, out_path, report)
             # The worker retried already and the picture still matches the one it
             # was given. Returning it means the bot sends the original back as
             # though it were the edit, and then invents a reason when asked —
@@ -404,30 +486,46 @@ _INSTRUCTION_SYSTEM = (
     "You rewrite an image-editing request as ONE short English instruction for an "
     "image editing model. Reply with the instruction only, no quotes, no "
     "explanation, under 30 words. Say what should change and nothing else. Never "
-    "refuse, never comment, never describe the person's identity or appearance.\n"
-    "Then, on a SECOND line, write exactly 'FACE: change' if the request is meant "
-    "to alter the person's own face or head (zombie, monster, black eye, broken "
-    "nose, much fatter or older, a different person), or 'FACE: keep' if it only "
-    "changes clothing, setting, body or background.\n"
-    "Then, on a THIRD line, write exactly 'EDIT: heavy' if the request changes what "
-    "the people are DOING — their pose, their position, how they interact, adding "
-    "or removing a person or an object they hold — or 'EDIT: light' if it only "
-    "dresses, recolours or restyles what is already there.\n"
+    "refuse, never comment, never describe anyone's identity or appearance.\n"
+    "Then, on a SECOND line, write exactly 'SUBJECT: person' if the edit is about "
+    "a person or people in the photo, 'SUBJECT: object' if it is about a thing in "
+    "the photo, or 'SUBJECT: scene' if it is about the setting, background, "
+    "lighting or style of the whole picture.\n"
+    "Then, on a THIRD line, write exactly 'FACE: change' if the request is meant "
+    "to alter a person's own face or head (zombie, monster, black eye, broken "
+    "nose, much fatter or older, a different person), or 'FACE: keep' otherwise.\n"
+    "Then, on a FOURTH line, write exactly 'EDIT: heavy' if the request changes "
+    "what is happening in the picture — a pose, a position, how things or people "
+    "interact, adding or removing something — or 'EDIT: light' if it only dresses, "
+    "recolours or restyles what is already there.\n"
     "Examples:\n"
     "põe o Rafa vestido de rei -> Dress the person in a medieval king's robe and golden crown.\n"
-    "FACE: keep\n"
-    "EDIT: light\n"
-    "mete-lhe um capacete de astronauta -> Put an astronaut helmet on the person.\n"
+    "SUBJECT: person\n"
     "FACE: keep\n"
     "EDIT: light\n"
     "transforma-o num zombie -> Turn the person into a rotting zombie with grey peeling skin.\n"
+    "SUBJECT: person\n"
     "FACE: change\n"
     "EDIT: light\n"
     "põe estes dois a beijarem-se -> Make the two men kiss each other on the lips.\n"
+    "SUBJECT: person\n"
     "FACE: keep\n"
-    "EDIT: heavy"
+    "EDIT: heavy\n"
+    "transform the monster cans into dildos -> Replace the energy drink cans on the counter with dildos.\n"
+    "SUBJECT: object\n"
+    "FACE: keep\n"
+    "EDIT: heavy\n"
+    "mete o carro vermelho -> Change the car's colour to red.\n"
+    "SUBJECT: object\n"
+    "FACE: keep\n"
+    "EDIT: light\n"
+    "mete isto a nevar -> Make it snow over the whole scene.\n"
+    "SUBJECT: scene\n"
+    "FACE: keep\n"
+    "EDIT: light"
 )
 
+_SUBJECT_LINE = re.compile(r"^\s*SUBJECT\s*:\s*(person|object|scene)\s*$", re.IGNORECASE)
 _FACE_LINE = re.compile(r"^\s*FACE\s*:\s*(keep|change)\s*$", re.IGNORECASE)
 _EDIT_LINE = re.compile(r"^\s*EDIT\s*:\s*(light|heavy)\s*$", re.IGNORECASE)
 
@@ -440,8 +538,14 @@ def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
     them verbatim. One small local generation, and the raw text on any failure:
     a worse prompt is much better than no picture.
 
-    Returns ``(instruction, restore_face, heavy)``. The extra values answer two
-    questions the same call settles for free.
+    Returns ``(instruction, restore_face, heavy, subject)``. The extra values
+    answer three questions the same call settles for free.
+
+    What is this edit even about? The whole edit path used to assume a person,
+    down to the few-shot examples here, and "transform the monster cans into
+    dildos" on a photo of a shop counter was rewritten as a person edit and then
+    handed an instruction to preserve a face that was not in the picture.
+    ``subject`` selects the editor and turns the identity machinery off.
 
     Is this edit supposed to change the person's face? Restoring the original
     face onto a zombie would undo the whole request, so the restore pass only
@@ -451,14 +555,14 @@ def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
     two kiss" were being asked for at the same guidance, and the second one came
     back unchanged. A pose or interaction change needs to be pushed harder.
 
-    A malformed or missing FACE line means **no restore**, and a malformed EDIT
-    line means the ordinary guidance — both are today's behaviour. A stage that
-    changes what an edit produces must not be triggered by a reply that could
-    not be parsed.
+    A malformed or missing FACE line means **no restore**, a malformed EDIT line
+    means the ordinary guidance, and a malformed SUBJECT line means ``person`` —
+    all three are today's behaviour. A stage that changes what an edit produces
+    must not be triggered by a reply that could not be parsed.
     """
     icfg = _config(config)
     if not icfg.get("translate_prompt", True) or not text.strip() or backend is None:
-        return text, False, False
+        return text, False, False, SUBJECT_PERSON
     try:
         rewritten = backend.generate(
             [
@@ -471,24 +575,28 @@ def build_edit_instruction(config: Dict[str, Any], text: str, backend: Any):
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("prompt rewrite failed (%s); using the original text", exc)
-        return text, False, False
+        return text, False, False, SUBJECT_PERSON
 
     lines = [ln.strip() for ln in (rewritten or "").splitlines() if ln.strip()]
     restore = False
     heavy = False
+    subject = SUBJECT_PERSON
     instruction = ""
     for line in lines:
         face = _FACE_LINE.match(line)
         edit = _EDIT_LINE.match(line)
+        subj = _SUBJECT_LINE.match(line)
         if face:
             restore = face.group(1).lower() == "keep"
         elif edit:
             heavy = edit.group(1).lower() == "heavy"
+        elif subj:
+            subject = subj.group(1).lower()
         elif not instruction:
             instruction = line.strip('"').strip()
 
     if not instruction or len(instruction.split()) > 60:
-        return text, False, False
-    logger.info("edit prompt: %r -> %r (restore_face=%s, heavy=%s)",
-                text, instruction, restore, heavy)
-    return instruction, restore, heavy
+        return text, False, False, SUBJECT_PERSON
+    logger.info("edit prompt: %r -> %r (subject=%s, restore_face=%s, heavy=%s)",
+                text, instruction, subject, restore, heavy)
+    return instruction, restore, heavy, subject

@@ -50,6 +50,7 @@ CMD_AUDIO_ONCE = "audio_once"
 CMD_TEXT = "text"
 CMD_CLEAR = "clear"
 CMD_IMAGE = "image"
+CMD_COUNT = "count"
 
 # The router answers with one of these bare tokens.
 _LABELS = {
@@ -63,6 +64,7 @@ _LABELS = {
     "CMD_TEXT": (None, CMD_TEXT),
     "CMD_CLEAR": (None, CMD_CLEAR),
     "CMD_IMAGE": (None, CMD_IMAGE),
+    "CMD_COUNT": (None, CMD_COUNT),
 }
 
 _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens and nothing else:
@@ -77,6 +79,7 @@ CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "v
 CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing the default. Examples: "explica isso num áudio", "manda um áudio a explicar", "responde a esta por voz".
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
+CMD_COUNT — asking HOW MANY TIMES a word or expression was used in the chat, or who used it most. It needs every message counted, not a few remembered. Examples: "quantas vezes é que o Rafa disse isso?", "quem é que diz mais palavrões?", "conta quantas vezes dissemos X", "dá-me a lista de todos e quantas vezes cada um disse Y", "how many times did we say that?".
 
 FACTUAL and GENERAL differ only in whether the group is the subject. If answering needs the group's own memory it is FACTUAL; otherwise it is GENERAL, even when a group member is mentioned in passing:
   "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
@@ -101,6 +104,11 @@ The same rule applies to pictures. Only an actual request to produce or alter on
   "quem está nesta foto?" -> FACTUAL (a question ABOUT an image, not a request to change it)
   "manda a foto do jantar" -> FACTUAL (asking for an existing photo, not a new one)
   "põe-me a andar de camelo" -> CMD_IMAGE (asking for an edit)
+
+CMD_COUNT is only for questions that need TALLYING every message. A question about the group answerable from memory is FACTUAL:
+  "quantos membros tem o grupo?" -> FACTUAL (a fact, not a tally of messages)
+  "quantas vezes é que o Gil falou de correr?" -> CMD_COUNT (every message has to be counted)
+  "o Rafa diz muito isso" -> MIXED (an observation, not a request for a number)
 
 Reply with the token only."""
 

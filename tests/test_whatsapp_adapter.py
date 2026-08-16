@@ -1901,3 +1901,114 @@ def test_without_a_resolver_the_previous_behaviour_holds(tmp_path):
     msg = parse_waha_message(dm_event("olá", sender="351999999996@c.us", name="Gustavo"))
 
     assert adapter.resolve_speaker(msg) == "Gustavo"
+
+
+# ── mentions ─────────────────────────────────────────────────────────────────
+# Only the bot's own mention was ever stripped; everybody else's reached the model
+# as a bare number. "@257487651496102 tas fraquinho. Que desilusão" said nothing
+# about Rafa to the model and nothing to the retriever's person filter, and the
+# roast went to Manuel, who was not in the conversation. Both filed reports of the
+# bot "referencing the wrong people" are this.
+RAFA_LID = "257487651496102@lid"
+GIL_LID = "34815055245324@lid"
+
+
+def _mention_adapter(tmp_path):
+    return make_adapter(tmp_path, contacts={
+        RAFA_LID: "Rafa", GIL_LID: "Gil", "351911111111@c.us": "Alice"})
+
+
+def test_a_mentioned_lid_becomes_a_name(tmp_path):
+    adapter, _ = _mention_adapter(tmp_path)
+    assert adapter._resolve_mentions("@257487651496102 tas fraquinho") == \
+        "@Rafa tas fraquinho"
+
+
+def test_every_mention_in_the_message_is_resolved(tmp_path):
+    adapter, _ = _mention_adapter(tmp_path)
+    assert adapter._resolve_mentions("@257487651496102 e @34815055245324 bora") == \
+        "@Rafa e @Gil bora"
+
+
+def test_an_unknown_lid_is_left_alone(tmp_path):
+    """An unknown mention is still a mention. Deleting it would turn "@X e o @Y"
+    into a sentence about one person."""
+    adapter, _ = _mention_adapter(tmp_path)
+    assert adapter._resolve_mentions("@999999999999999 quem és tu") == \
+        "@999999999999999 quem és tu"
+
+
+def test_ordinary_text_is_untouched(tmp_path):
+    adapter, _ = _mention_adapter(tmp_path)
+    for text in ("email@dominio.pt", "custa 50@ euros", "sem mentions nenhumas"):
+        assert adapter._resolve_mentions(text) == text
+
+
+def test_the_resolved_name_reaches_the_responder(tmp_path):
+    adapter, _ = _mention_adapter(tmp_path)
+    result = adapter.handle_event(
+        group_event("@257487651496102 tas fraquinho", mention=True),
+        system_prompt="")
+    assert "@Rafa" in result["reply"]
+    assert "257487651496102" not in result["reply"]
+
+
+def test_the_bot_mention_is_still_stripped(tmp_path):
+    """Resolution must not resurrect the bot's own @ token."""
+    adapter, _ = _mention_adapter(tmp_path)
+    text = adapter._resolve_mentions(adapter._strip_bot_mention(
+        f"@{BOT_JID.split('@')[0]} olá"))
+    assert text == "olá"
+
+
+def test_the_logged_message_carries_names_not_numbers(tmp_path):
+    """This log is embedded into ChromaDB. A message stored as
+    "@257487651496102 tas fraquinho" can never be retrieved by a question
+    about Rafa."""
+    adapter, _ = _mention_adapter(tmp_path)
+    logged = []
+    adapter.log_messages = True
+    adapter.message_log = type("L", (), {"append": lambda self, **kw: logged.append(kw)})()
+    adapter.handle_event(group_event("@257487651496102 tas fraquinho", mention=True),
+                         system_prompt="")
+    assert logged and "@Rafa" in logged[0]["text"]
+
+
+def test_mentioned_ids_are_untouched_so_the_reply_gate_still_works(tmp_path):
+    """The gate keys off mentioned_ids, not the text."""
+    adapter, _ = _mention_adapter(tmp_path)
+    msg = parse_waha_message(group_event("@257487651496102 olá", mention=True))
+    assert BOT_JID in msg.mentioned_ids
+    assert adapter.should_respond(msg) is True
+
+
+def test_a_known_member_learns_their_other_ids(tmp_path, capsys):
+    """A member mapped by phone never reached the learning branch, so their @lid
+    stayed unknown — and @lid is the only shape a mention comes in. Four of the
+    group were in that state: identified as speakers, invisible when @-ed."""
+    adapter, _ = make_adapter(tmp_path, contacts={"351913227550": "Gustavo"})
+    event = group_event("olá", sender="64622145081581@lid", name="Gustavo Abreu",
+                        mention=True)
+    # Baileys carries the real phone alongside the @lid, under _data.key.
+    event["payload"]["_data"] = {"key": {"participantAlt": "351913227550@c.us"}}
+    msg = parse_waha_message(event)
+    assert msg.sender_id == "64622145081581@lid" and msg.sender_phone == "351913227550"
+
+    assert adapter.resolve_speaker(msg) == "Gustavo"
+    assert adapter.contacts["64622145081581@lid"] == "Gustavo"
+    assert adapter._resolve_mentions("@64622145081581 anda") == "@Gustavo anda"
+    # Two ids for one member is normal and must not raise the mismatch alarm.
+    assert "already" not in capsys.readouterr().out
+
+
+def test_a_display_name_collision_still_warns(tmp_path, capsys):
+    """The guard that matters is untouched: a GUESSED name that already belongs
+    to another id is the failure that misattributed weeks of messages."""
+    adapter, _ = make_adapter(
+        tmp_path, contacts={"351913227550": "Gustavo"},
+        member_aliases={"gustavo": "Gustavo"})
+    msg = parse_waha_message(
+        dm_event("olá", sender="351900000009@c.us", name="Gustavo"))
+
+    assert adapter.resolve_speaker(msg) == "Gustavo"
+    assert "already" in capsys.readouterr().out

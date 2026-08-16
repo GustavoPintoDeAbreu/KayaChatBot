@@ -250,6 +250,42 @@ moved p05 `0.030 → 0.246` and p06 `0.184 → 0.370` (flux-kontext mean `0.409 
 artefact. Face detection is InsightFace `buffalo_l` on CPU, mounted into the
 containers from `~/.insightface`; every path degrades to a no-op without it.
 
+**Not everything in a photo is a person (2026-08-16).** The whole edit path
+assumed one. `imagegen_worker` chose its identity clause with `_face_count() > 1`,
+so **zero** faces took the same branch as one and a photo of four Monster cans on
+a shop counter was sent to Kontext with *"Keep the person's face … Do not change
+who they are"* appended — by `config.yaml`'s own note, the instruction a model
+best satisfies by changing nothing. `_INSTRUCTION_SYSTEM` was no better: five
+few-shot examples all of the form *"Dress the person…"*, so an object request was
+rewritten as a person edit before it reached the model. Then `pick_best` scored
+two candidates against a `None` reference and returned the first.
+
+Three changes. `_face_count` returns `Optional[int]` — `None` (cannot tell) keeps
+the singular clause, a real `0` drops it via `select_identity_clause`.
+`build_edit_instruction` now returns a fourth value, `SUBJECT: person|object|scene`,
+from the same local call; `object`/`scene` sends `--no-identity-clause`,
+`--no-face-crop`, `--candidates 1`. And `chat.imagegen.editors` maps subject to
+editor — the single-editor choice came from a bake-off whose every photo was
+picked for a large frontal face, so it ranked on identity preservation alone.
+
+**The bench could not see any of it.** `pick_bench_photos.py` *selects for* "a
+large, confidently-detected, roughly frontal face" and all five `EDITS` transform
+a person. `--grid objects` (photos chosen with `--no-faces`, into
+`data/bench_objects/`) runs `OBJECT_EDITS` and scores **preservation** — judged
+1-5, "did everything the instruction did not mention survive?" — in place of
+likeness, which is undefined without a face. The face grid keeps the
+`likeness_x_adherence` key so its reports stay comparable with everything before.
+
+**And a render used to leave no trace at all.** `whatsapp_server` skipped any
+result carrying a `command`, and `_handle_image_request` always sets one, so no
+image request reached `live_interactions.jsonl`; the translated instruction and
+final prompt went to a `logger.info` on a logger nobody configures; the output
+lived in a `TemporaryDirectory`. The rule now lives in `metrics.should_log`
+(testable — importing `whatsapp_server` loads the model), `imagegen.run` takes an
+`on_report` callback that logs a `source="imagegen"` row, and
+`chat.imagegen.keep_outputs` keeps the last N renders plus a JSON sidecar in the
+gitignored `data/imagegen_log/`.
+
 **Making them.** `imagegen.run()` shells out to `scripts/imagegen_worker.py` — never in-process. Dropping a diffusion pipeline in Python leaves ~20GB allocated with no `nn.Module` alive, it would hold a card between requests, and an OOM would take the bot down. Editing runs **FLUX.1 Kontext** (bake-off winner: likeness 0.409 vs Qwen's 0.138, adherence 4.4/5, ~86s); text-to-image runs **Z-Image Turbo**. The router's `CMD_IMAGE` picks the subject: attached photo, else the last photo seen in that chat, else generate from text. The webhook only acknowledges — the picture is sent from a background thread. `chat.imagegen.allowed_scopes` gates editing to the shared group.
 
 **Kontext keeps its job (2026-08-12).** FLUX.2 Klein 9B ran the same 40-cell
@@ -283,6 +319,50 @@ scores those files with ArcFace and must not be measuring compression artefacts.
 A failed re-encode returns the original bytes rather than nothing.
 
 **Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
+
+### Who is being talked about, and counting (2026-08-16)
+
+**Mentions were numbers.** `_strip_bot_mention` removed only the *bot's* `@` token;
+everybody else's stayed as a bare `@lid`. So `@257487651496102 tas fraquinho` said
+nothing about Rafa to the model and nothing to `extract_query_persons`, which
+matches member *names* — and the roast, handed the usual pile of profiles with
+nobody named in the question, went to Manuel, who was not in the conversation.
+Both filed reports of the bot "referencing the wrong people" are this.
+`_resolve_mentions` rewrites each `@<lid>` via the existing `_name_for_jid`,
+applied to the responder text **and** to `message_log.append` (that log is
+embedded into ChromaDB; a message stored as a number is unretrievable by a
+question about Rafa). An unknown lid is left intact — deleting it would turn
+"@X e o @Y" into a sentence about one person.
+
+Two supporting fixes: `_name_for_jid` now tries the `@lid` shape (most of
+`whatsapp_contacts.json` is keyed that way, and a body mention arrives with no
+suffix at all), and `resolve_speaker` learns a member's *other* ids when it
+matches one — four members were mapped by phone, so they never reached the
+learning branch and their `@lid` stayed unknown: perfectly identified as
+speakers, invisible when someone @-ed them. `_learn_contact(verified=True)`
+suppresses the display-name-collision warning there, since two ids for one member
+is the normal case.
+
+**"O Gustavo tem de tratar disso", said to Gustavo.** Not misidentification — that
+sentence is a verbatim template in the banter/mixed/detailed prompts, and a
+technical complaint fired it exactly as written. The clause is now
+`{maintainer_clause}`, filled by `engine.apply_speaker_rules` per turn:
+`chat.maintainer_self_clause` when the speaker *is* `chat.maintainer`. Both
+builders call `fill_prompt_defaults` so surfaces that do not know the speaker
+(the web UI does not go through `respond`) never leak the placeholder. The
+third-person rule in `data.system_prompt` is deliberate and stays.
+
+**Counting is not retrieval** (`src/chat/tally.py`). Top-k semantic search returns
+the chunks nearest a question and cannot answer "how many times". Asked for a
+per-member tally the bot wrote a confident table that was out by 8x with the
+ranking inverted (the top user, 198, reported third at 3), then agreed when told
+it had probably missed some. `CMD_COUNT` routes those; `engine._count_context`
+counts the log and hands the model a finished table to phrase. It is scope-bound
+(a DM counts only its own file), folds aliases through `SenderResolver`, and
+includes the pre-bot export — the group is older than the bot. A term it cannot
+identify returns nothing rather than a number. The prompts also stopped accepting
+standing jobs the bot has no state for ("Consigo manter o contador atualizado",
+then "Aí está, Frederico" with no list).
 
 ### Slash commands, and why they must not be remembered (2026-08-13)
 

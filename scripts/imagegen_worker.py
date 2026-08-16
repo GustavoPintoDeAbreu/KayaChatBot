@@ -31,7 +31,7 @@ import random
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -94,11 +94,17 @@ def load_image(path: str, longest: int = 1024):
     return image.crop((0, 0, width, height))
 
 
-def _face_count(image_path: str) -> int:
-    """How many faces are in the source photo. 0 if it cannot be told.
+def _face_count(image_path: str) -> Optional[int]:
+    """How many faces are in the source photo. ``None`` if it cannot be told.
 
-    Degrades to the singular clause without insightface, which is the behaviour
-    that shipped — a worse prompt, never a missing picture.
+    "Cannot be told" and "there is nobody in the picture" used to be the same
+    answer, 0, and the caller only asked whether it was above 1 — so a photo of
+    four Monster cans on a shop counter was sent to Kontext with "Keep the
+    person's face ... Do not change who they are" appended, an instruction whose
+    documented effect is that the model satisfies it by changing nothing. The two
+    have to be distinguishable: a real 0 drops the clause, an unknown keeps the
+    singular one, which is the behaviour that shipped — a worse prompt, never a
+    missing picture.
     """
     try:
         from PIL import Image, ImageOps
@@ -110,7 +116,29 @@ def _face_count(image_path: str) -> int:
         return len(face_utils.detect(image))
     except Exception as exc:  # noqa: BLE001
         print(f"could not count faces ({exc}); assuming one", file=sys.stderr)
-        return 0
+        return None
+
+
+def select_identity_clause(faces: Optional[int], icfg: Dict[str, Any]) -> str:
+    """Which "keep who they are" clause belongs on this edit, if any.
+
+    A group shot needs the plural clause: "the person's face" in a picture of
+    three people names nobody, and both edits that failed in the live group were
+    two-subject photos. A photo with NOBODY in it needs neither — asked to
+    "transform the monster cans into dildos" on a shot of a shop counter, the
+    worker appended "Keep the person's face ... Do not change who they are",
+    which per config.yaml's own note is the one instruction a model best
+    satisfies by not editing at all.
+
+    ``None`` means insightface could not tell, and keeps the singular clause —
+    the behaviour that shipped, and a worse prompt rather than a missing picture.
+    """
+    if faces == 0:
+        return ""
+    if faces is not None and faces > 1:
+        return str(icfg.get("identity_clause_plural",
+                            DEFAULT_IDENTITY_CLAUSE_PLURAL) or "")
+    return str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
 
 
 def bnb_8bit(keep):
@@ -137,6 +165,11 @@ def edit_with_flux(image_path: str, prompt: str, out_path: str,
         min_ratio=float(options.get("face_min_ratio", 0.22)),
         target_ratio=float(options.get("face_target_ratio", 0.32)),
     )
+    # Best-of-N is decided by ArcFace similarity to the source face. With no face
+    # to compare against, pick_best has nothing to rank and falls through to the
+    # first candidate — so every extra take is a render thrown away unlooked at.
+    if reference is None:
+        candidates_wanted = 1
 
     quant = PipelineQuantizationConfig(quant_mapping={
         "transformer": bnb_8bit([]),
@@ -242,11 +275,13 @@ _BFS_PROMPT = (
 )
 
 
-def _run_bfs(edited, original, options: Dict[str, Any]):
-    """The model call: Klein 9B plus the BFS LoRA, two images in, one out.
+def load_klein():
+    """FLUX.2 Klein 9B, 8-bit and resident. Shared by the editor and the restore.
 
-    Kept separate from ``restore_with_bfs`` so the decision of whether to KEEP a
-    restore can be tested without a GPU — that guard is the part worth testing.
+    Klein arrived here as the second stage of a face restore and is now also an
+    editor in its own right — it follows an instruction far better than Kontext
+    (adherence 4.98 vs 4.05 on the 40-cell grid) and only lost the bake-off on
+    face likeness, which is not a criterion when the subject is a shop counter.
     """
     import torch
     from diffusers import Flux2KleinPipeline
@@ -260,14 +295,26 @@ def _run_bfs(edited, original, options: Dict[str, Any]):
     pipe = Flux2KleinPipeline.from_pretrained(
         "black-forest-labs/FLUX.2-klein-9B", torch_dtype=torch.bfloat16,
         quantization_config=quant)
-    pipe.load_lora_weights(
-        DEFAULT_RESTORE_LORA_REPO,
-        weight_name=str(options.get("restore_lora") or DEFAULT_RESTORE_LORA))
     # Resident, not offloaded — see edit_with_flux for what the offload hooks do
     # to bitsandbytes weights.
     pipe.to("cuda")
     pipe.vae.enable_tiling()
     pipe.set_progress_bar_config(disable=True)
+    return pipe
+
+
+def _run_bfs(edited, original, options: Dict[str, Any]):
+    """The model call: Klein 9B plus the BFS LoRA, two images in, one out.
+
+    Kept separate from ``restore_with_bfs`` so the decision of whether to KEEP a
+    restore can be tested without a GPU — that guard is the part worth testing.
+    """
+    import torch
+
+    pipe = load_klein()
+    pipe.load_lora_weights(
+        DEFAULT_RESTORE_LORA_REPO,
+        weight_name=str(options.get("restore_lora") or DEFAULT_RESTORE_LORA))
 
     # Picture 1 is the BODY kept, Picture 2 the FACE donated. That order is the
     # card's and it is the opposite of what reading the prompt suggests.
@@ -361,8 +408,9 @@ def _qwen_embed(repo: str, image_path: str, prompt: str, out_path: str) -> None:
 
 
 def edit_with_qwen(image_path: str, prompt: str, out_path: str,
-                   steps: int, seed: int, options: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Qwen-Image-Edit-2509 in two passes.
+                   steps: int, seed: int, options: Dict[str, Any] = None,
+                   repo: str = "Qwen/Qwen-Image-Edit-2509") -> Dict[str, Any]:
+    """Qwen-Image-Edit in two passes.
 
     The 20B transformer needs 8-bit to render cleanly (NF4 turns it into a
     mosaic) and 8-bit occupies 19.4GB, which leaves no room for the 7B text
@@ -372,10 +420,10 @@ def edit_with_qwen(image_path: str, prompt: str, out_path: str,
     import torch
     from diffusers import QwenImageEditPlusPipeline, QwenImageTransformer2DModel
 
-    repo = "Qwen/Qwen-Image-Edit-2509"
     embeds_path = str(Path(out_path).with_suffix(".embeds.pt"))
     subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                    "--stage", "embed", "--image", image_path, "--prompt", prompt,
+                    "--stage", "embed", "--repo", repo,
+                    "--image", image_path, "--prompt", prompt,
                     "--out", embeds_path], check=True, cwd=str(BASE_DIR))
     cached = torch.load(embeds_path, weights_only=False)
     Path(embeds_path).unlink(missing_ok=True)
@@ -403,6 +451,58 @@ def edit_with_qwen(image_path: str, prompt: str, out_path: str,
     return {"seed": seed, "likeness": None, "candidates": 1}
 
 
+def edit_with_qwen_2511(image_path: str, prompt: str, out_path: str,
+                        steps: int, seed: int,
+                        options: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Qwen-Image-Edit-2511 — same shape as 2509, a later checkpoint.
+
+    2509 adhered to the instruction better than anything else tested and scored
+    0.138 on likeness: it understood the request and returned a stranger. 2511's
+    stated change is consistency, which is the half it was losing.
+    """
+    return edit_with_qwen(image_path, prompt, out_path, steps, seed, options,
+                          repo="Qwen/Qwen-Image-Edit-2511")
+
+
+def edit_with_klein(image_path: str, prompt: str, out_path: str,
+                    steps: int, seed: int,
+                    options: Dict[str, Any] = None) -> Dict[str, Any]:
+    """FLUX.2 Klein 9B as the editor. One pass, 8-bit, ~20GB, ~145s.
+
+    No face machinery: this is the arm for edits where there is no identity to
+    protect, so there is no reference embedding, no crop and no best-of-N. The
+    no-op check still applies — an edit that returns the source unchanged is a
+    failure whatever the subject was.
+    """
+    import torch
+
+    from src.chat import face_utils
+
+    options = options or {}
+    source = face_utils.fit_to_kontext(open_source_photo(image_path))
+    pipe = load_klein()
+    result = pipe(
+        image=[source], prompt=prompt,
+        height=source.height, width=source.width,
+        guidance_scale=float(options.get("guidance_scale", 2.5)),
+        num_inference_steps=steps,
+        generator=torch.Generator("cpu").manual_seed(seed),
+    ).images[0]
+    result.save(out_path)
+
+    changed = face_utils.change_ratio(source, result)
+    noop_threshold = float(options.get("noop_threshold", 0.0))
+    return {
+        "seed": seed,
+        "likeness": None,
+        "candidates": 1,
+        "source_size": list(source.size),
+        "changed": round(changed, 4),
+        "edited": noop_threshold <= 0 or changed >= noop_threshold,
+        "retried": False,
+    }
+
+
 def generate_from_text(prompt: str, out_path: str, steps: int, seed: int) -> None:
     """Z-Image Turbo — 6B text-to-image, a couple of seconds per image."""
     import torch
@@ -420,13 +520,20 @@ def generate_from_text(prompt: str, out_path: str, steps: int, seed: int) -> Non
     result.save(out_path)
 
 
-EDITORS = {"flux-kontext": edit_with_flux, "qwen-image-edit": edit_with_qwen}
+EDITORS = {
+    "flux-kontext": edit_with_flux,
+    "qwen-image-edit": edit_with_qwen,
+    "qwen-image-edit-2511": edit_with_qwen_2511,
+    "flux2-klein": edit_with_klein,
+}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate or edit one image.")
     parser.add_argument("--mode", default="edit", choices=["edit", "generate"])
     parser.add_argument("--stage", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--repo", default="Qwen/Qwen-Image-Edit-2509",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--image", default=None)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--out", required=True)
@@ -445,7 +552,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.stage == "embed":
-        _qwen_embed("Qwen/Qwen-Image-Edit-2509", args.image, args.prompt, args.out)
+        _qwen_embed(args.repo, args.image, args.prompt, args.out)
         return
 
     from src.config_loader import load_config
@@ -469,14 +576,7 @@ def main() -> None:
         raise SystemExit(f"unknown editor {editor!r}; pick one of {sorted(EDITORS)}")
 
     prompt = bare_prompt = args.prompt
-    # A group shot needs the plural clause: "the person's face" in a photo of
-    # three people names nobody, and both edits that failed in the live group
-    # were two-subject photos.
-    if _face_count(args.image) > 1:
-        clause = str(icfg.get("identity_clause_plural",
-                              DEFAULT_IDENTITY_CLAUSE_PLURAL) or "")
-    else:
-        clause = str(icfg.get("identity_clause", DEFAULT_IDENTITY_CLAUSE) or "")
+    clause = select_identity_clause(_face_count(args.image), icfg)
     if clause and not args.no_identity_clause:
         prompt = f"{prompt.rstrip().rstrip('.')}. {clause}"
 

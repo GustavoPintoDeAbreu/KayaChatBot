@@ -295,20 +295,41 @@ def _imagegen(mode: str, prompt: str, image_path=None):
     """
     from src.chat import imagegen
 
+    requested = prompt
     # Generation from scratch has no original face to restore.
     restore_face = False
     heavy = False
+    subject = imagegen.SUBJECT_PERSON
     if mode == "edit":
         with gpu_section(config):
-            # The same call also answers whether this edit is meant to change the
-            # person's face — restoring the original face onto a zombie would undo
-            # the request — and how far the picture has to move. A pose or
+            # The same call also answers what the edit is about — a person, a
+            # thing, or the whole scene — whether it is meant to change the
+            # person's face (restoring the original face onto a zombie would undo
+            # the request), and how far the picture has to move. A pose or
             # interaction change ("põe estes dois a beijarem-se") needs to be
             # pushed harder than a costume swap, and was coming back unchanged.
-            prompt, restore_face, heavy = imagegen.build_edit_instruction(
+            prompt, restore_face, heavy, subject = imagegen.build_edit_instruction(
                 config, prompt, engine.backend)
+
+    def report(info: dict) -> None:
+        """One row per render, so a bad picture can be looked into afterwards.
+
+        Separate from the conversational row the webhook logs for the request
+        itself: this one is written when the worker finishes, minutes later and
+        on another thread, and carries what the model was actually given.
+        """
+        metrics.log_interaction(
+            source="imagegen",
+            user_message=requested,
+            assistant_response=str(info.get("prompt") or ""),
+            latency_ms=float(info.get("seconds") or 0.0) * 1000.0,
+            **{f"image_{key}": value for key, value in info.items()
+               if key != "prompt"},
+        )
+
     return imagegen.run(config, prompt, mode=mode, image_path=image_path,
-                        restore_face=restore_face, heavy=heavy)
+                        restore_face=restore_face, heavy=heavy, subject=subject,
+                        on_report=report)
 
 
 from src.chat.summary import SummaryWriter
@@ -385,10 +406,13 @@ def _process_reaction(event: dict):
 
 
 def _log_interaction_metrics(result: dict, t0: float) -> None:
-    """Log one answered message to the metrics sink (shared by the live + mock paths)."""
-    # Command confirmations ("volto a responder por texto") are bookkeeping, not
-    # conversation — don't pollute the interaction metrics with them.
-    if result and result.get("reply") and not result.get("command"):
+    """Log one answered message to the metrics sink (shared by the live + mock paths).
+
+    What counts as loggable lives in ``metrics.should_log`` — this module cannot
+    be imported without loading the model, so the rule would otherwise be
+    untestable, which is how "no image request is ever recorded" went unnoticed.
+    """
+    if metrics.should_log(result):
         metrics.log_interaction(
             source="whatsapp",
             user_message=result.get("user_text", ""),
@@ -398,6 +422,9 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
             web_search_used=bool(result.get("citation")),
             delivered_as=result.get("delivered_as", "text"),
             spoken_text=result.get("spoken_text", ""),
+            # Who was writing. It was missing, so nothing could detect the bot
+            # naming the person it was answering.
+            speaker=result.get("speaker", ""),
             # route_mode, retrieval and who the reply named — see Reply.telemetry.
             **(result.get("telemetry") or {}),
         )

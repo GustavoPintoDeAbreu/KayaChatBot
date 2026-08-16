@@ -213,3 +213,40 @@ class TestReasoningTrigger:
         from src.chat.response_utils import wants_reasoning
 
         assert wants_reasoning(message) is False
+
+
+# ── counting ─────────────────────────────────────────────────────────────────
+# Top-k semantic retrieval returns the chunks nearest a question and cannot
+# answer "how many times". Asked for a per-member tally the bot wrote a confident
+# table that was out by 8x with the ranking inverted, then agreed when told it had
+# probably missed some. CMD_COUNT routes those to a real count.
+def test_a_tally_question_routes_to_count():
+    route = router.classify(StubBackend("CMD_COUNT"), _config(), "quantas vezes?")
+    assert route.command == router.CMD_COUNT
+    assert route.fallback is False
+
+
+def test_count_is_not_confused_with_the_other_commands():
+    """The label set is matched longest-first; CMD_COUNT must not shadow, or be
+    shadowed by, CMD_CLEAR or CMD_IMAGE."""
+    for label, expected in (("CMD_COUNT", router.CMD_COUNT),
+                            ("CMD_CLEAR", router.CMD_CLEAR),
+                            ("CMD_IMAGE", router.CMD_IMAGE)):
+        assert router.classify(
+            StubBackend(label), _config(), "x").command == expected
+
+
+def test_an_unreadable_answer_still_falls_back_to_factual():
+    """Adding a label must not change what happens when nothing parses."""
+    route = router.classify(StubBackend("CMD_TALLY"), _config(), "quantas vezes?")
+    assert route.mode == router.FACTUAL and route.command is None
+    assert route.fallback is True
+
+
+def test_the_prompt_describes_counting():
+    backend = StubBackend("CMD_COUNT")
+    router.classify(backend, _config(), "quantas vezes?")
+    system = backend.calls[0]["messages"][0]["content"]
+    assert "CMD_COUNT" in system
+    # The distinction that matters: a fact about the group is not a tally.
+    assert "quantos membros tem o grupo?\" -> FACTUAL" in system

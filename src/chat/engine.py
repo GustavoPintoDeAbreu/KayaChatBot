@@ -74,6 +74,46 @@ class Reply:
         return f"{self.text}\n\n{self.citation}" if self.citation else self.text
 
 
+def render_maintainer_clause(config: Dict[str, Any], to_maintainer: bool = False) -> str:
+    """The technical-complaint clause, addressed to the group or to its author."""
+    chat_cfg = config.get("chat", {}) or {}
+    maintainer = str(chat_cfg.get("maintainer") or "").strip()
+    key = "maintainer_self_clause" if to_maintainer else "maintainer_clause"
+    return str(chat_cfg.get(key) or "").replace("{maintainer}", maintainer)
+
+
+def fill_prompt_defaults(config: Dict[str, Any], prompt: str) -> str:
+    """Resolve the speaker-independent form of every templated clause.
+
+    Called by both prompt builders so that any surface which does not know who is
+    writing — the web UI, the CLI, the probes — gets a complete prompt rather
+    than a leaked placeholder. ``apply_speaker_rules`` upgrades it per turn.
+    """
+    return prompt.replace("{maintainer_clause}", render_maintainer_clause(config))
+
+
+def apply_speaker_rules(config: Dict[str, Any], prompt: str, speaker: str) -> str:
+    """Swap in the parts of the system prompt that depend on who is writing.
+
+    Today that is one clause. The bot cannot change its own code, so a technical
+    complaint is answered by naming the person who maintains it — and that person
+    is a member of the group, which the clause never allowed for. Gustavo asked
+    why image generation was so bad and was told that Gustavo has to deal with
+    it, then had to reply "Yah eu sou o Gustavo".
+
+    Applied per turn to whichever prompt the mode chose, rather than in config:
+    the detailed prompt is built once at import and shared by every chat, so it
+    cannot carry a speaker.
+    """
+    maintainer = str((config.get("chat", {}) or {}).get("maintainer") or "").strip()
+    if not maintainer or (speaker or "").strip().lower() != maintainer.lower():
+        return fill_prompt_defaults(config, prompt)
+    self_clause = render_maintainer_clause(config, to_maintainer=True)
+    return (prompt
+            .replace("{maintainer_clause}", self_clause)
+            .replace(render_maintainer_clause(config), self_clause))
+
+
 def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
     """System prompt for a non-factual mode.
 
@@ -83,7 +123,7 @@ def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
     profiles and told to elaborate, it finds someone to talk about. The date line
     is kept so the model can still reason about "hoje"/"ontem".
     """
-    prompt = mode_prompt
+    prompt = fill_prompt_defaults(config, mode_prompt)
     if config.get("chat", {}).get("uncensored_mode", False):
         preamble = config.get("chat", {}).get("uncensored_system_prompt", "")
         if preamble:
@@ -105,7 +145,7 @@ def build_system_prompt(
     choice — the web UI historically omitted it; the CLI and WhatsApp bridge
     enable it via ``chat.uncensored_mode``.
     """
-    base = config["data"]["system_prompt"]
+    base = fill_prompt_defaults(config, config["data"]["system_prompt"])
     system_prompt = base
 
     if include_uncensored:
@@ -347,9 +387,24 @@ class KayaEngine:
             # A one-off "explain this in audio" still needs a real answer — only
             # the delivery medium changes. Other commands are pure state changes
             # and are executed by the caller without generating anything.
-            if route.command and route.command != router.CMD_AUDIO_ONCE:
+            # CMD_COUNT is a command that still needs an answer, like
+            # CMD_AUDIO_ONCE: the numbers are counted here rather than
+            # remembered, but a person still has to be told them in the bot's
+            # own voice.
+            if route.command and route.command not in (router.CMD_AUDIO_ONCE,
+                                                       router.CMD_COUNT):
                 return Reply(text="", route=route,
                              telemetry=self._telemetry(route, "", message, ""))
+
+            # Counting is not retrieval. Top-k semantic search returns the chunks
+            # nearest the question, which cannot answer "how many times" — asked
+            # for a per-member tally the model wrote a confident table that was
+            # out by 8x with the ranking inverted. The count is done over the log
+            # and handed in as fact; the model only phrases it.
+            count_context = ""
+            if route.command == router.CMD_COUNT:
+                count_context = self._count_context(message, scope)
+                mcfg = router.mode_config(self.config, router.FACTUAL)
 
             # Off-topic / current-events questions get live facts from Grok's web
             # search. This runs AFTER routing, and only for the two informational
@@ -407,6 +462,10 @@ class KayaEngine:
             mode_prompt = mcfg.get("system_prompt")
             if mode_prompt:
                 system_prompt = build_mode_system_prompt(self.config, mode_prompt)
+            # Whoever ends up holding the prompt, the clauses that depend on who
+            # is writing are filled in here — the detailed prompt is built once
+            # at import and shared by every chat, so it cannot carry a speaker.
+            system_prompt = apply_speaker_rules(self.config, system_prompt, speaker)
 
             # 4. Mode picks retrieval: off for banter, reduced for mixed.
             user_turn, context = self.build_user_turn(
@@ -417,7 +476,8 @@ class KayaEngine:
                 top_k=mcfg.get("top_k"),
                 scope=scope,
                 exclude_from=exclude_from,
-                extra_context=web_context,
+                extra_context="\n\n".join(
+                    part for part in (count_context, web_context) if part),
                 # Banter gets no summary: it retrieves nothing by design, and a
                 # paragraph of background would undo exactly what that mode is for.
                 summary="" if route.mode == router.BANTER else summary,
@@ -494,6 +554,36 @@ class KayaEngine:
             telemetry=self._telemetry(route, context, message, text,
                                       reasoning=reasoning),
         )
+
+    def _count_context(self, message: str, scope: Optional[str]) -> str:
+        """The counted table for a "how many times" question. "" if unanswerable.
+
+        Deliberately returns nothing when the term cannot be identified: the
+        failure this replaces was not a refusal, it was a confident wrong answer,
+        so a tally that cannot be computed must not be improvised either. The
+        prompt's own "diz que não sabes" rule then applies.
+        """
+        from src.chat import tally
+
+        term = tally.extract_term(message)
+        if not term:
+            return ("Não foi possível identificar que palavra ou expressão contar. "
+                    "Pergunta qual é, em vez de dares um número.")
+        scope = scope or "shared"
+        try:
+            rows, total = tally.count_term(
+                term,
+                scope=scope,
+                resolver=tally.load_resolver(self.config),
+                # Only the shared scope reaches back into the pre-bot export; a
+                # DM's history is its own file and nothing else.
+                archive=tally.archive_path(self.config) if scope == "shared" else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed count must not drop the reply
+            print(f"⚠️  tally failed: {exc}")
+            return ("Não foi possível contar isso agora. Diz que não conseguiste "
+                    "contar, em vez de dares um número.")
+        return tally.format_table(term, rows, total)
 
     def _plan(self, system_prompt: str, user_turn: str) -> str:
         """One private pass of notes before the answer. "" on any failure.

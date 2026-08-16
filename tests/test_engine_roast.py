@@ -210,3 +210,78 @@ def test_the_generic_caller_gets_no_speaker_line():
     make_engine(backend).respond("quem é o mais burro?", "User", [], "sys")
 
     assert "Quem está a escrever agora" not in user_turn(backend)
+
+
+# ── the maintainer clause ────────────────────────────────────────────────────
+# The bot cannot change its own code, so a technical complaint is answered by
+# naming whoever maintains it. That person is in the group, which the clause
+# never allowed for: Gustavo asked why image generation was so bad and was told
+# "O Gustavo tem de tratar disso", then had to reply "Yah eu sou o Gustavo".
+MAINT = {
+    "maintainer": "Gustavo",
+    "maintainer_clause": "diz que o {maintainer} tem de tratar disso",
+    "maintainer_self_clause": "quem está a escrever é o {maintainer}, não lho digas",
+}
+
+
+def system_prompt(backend, index=0):
+    return backend.answer_calls[index]["messages"][0]["content"]
+
+
+def test_the_clause_names_the_maintainer_to_everybody_else():
+    backend = ScriptedBackend("BANTER", answers=["ya"])
+    engine = make_engine(backend, modes={
+        "banter": {"retrieval": False, "system_prompt": "És o bot. {maintainer_clause}"},
+    }, **MAINT)
+
+    engine.respond("isto está lento", "Gil", [], "sys")
+
+    assert "diz que o Gustavo tem de tratar disso" in system_prompt(backend)
+
+
+def test_the_maintainer_is_not_told_to_go_tell_himself():
+    backend = ScriptedBackend("BANTER", answers=["ya"])
+    engine = make_engine(backend, modes={
+        "banter": {"retrieval": False, "system_prompt": "És o bot. {maintainer_clause}"},
+    }, **MAINT)
+
+    engine.respond("Stfu horrível a gerar imagens", "Gustavo", [], "sys")
+
+    prompt = system_prompt(backend)
+    assert "tem de tratar disso" not in prompt
+    assert "quem está a escrever é o Gustavo" in prompt
+
+
+def test_the_match_is_case_insensitive():
+    backend = ScriptedBackend("BANTER", answers=["ya"])
+    engine = make_engine(backend, modes={
+        "banter": {"retrieval": False, "system_prompt": "{maintainer_clause}"},
+    }, **MAINT)
+
+    engine.respond("bug", "gustavo", [], "sys")
+
+    assert "quem está a escrever é o Gustavo" in system_prompt(backend)
+
+
+def test_the_placeholder_never_survives_into_the_prompt():
+    """A leaked "{maintainer_clause}" would be read aloud by the model."""
+    backend = ScriptedBackend("BANTER", answers=["ya"])
+    engine = make_engine(backend, modes={
+        "banter": {"retrieval": False, "system_prompt": "És o bot. {maintainer_clause}"},
+    }, **MAINT)
+
+    for speaker in ("Gil", "Gustavo"):
+        engine.respond("isto está lento", speaker, [], "sys")
+    assert all("{maintainer_clause}" not in system_prompt(backend, i)
+               for i in range(len(backend.answer_calls)))
+
+
+def test_no_maintainer_configured_leaves_the_prompt_alone():
+    backend = ScriptedBackend("BANTER", answers=["ya"])
+    engine = make_engine(backend, modes={
+        "banter": {"retrieval": False, "system_prompt": "És o bot."},
+    })
+
+    engine.respond("isto está lento", "Gil", [], "sys")
+
+    assert system_prompt(backend).startswith("És o bot.")
