@@ -19,6 +19,18 @@ Two numbers decide it, in this order:
 VRAM and wall time are recorded but rank last — the plan explicitly drops latency
 as a constraint for generation, since replies are sent asynchronously.
 
+**Two grids.** `--grid faces` is the above. `--grid objects` runs photos with
+NOBODY in them, because the face grid could not see the failure the group
+actually complained about: asked to change four energy drinks on a shop counter,
+prod appended "Keep the person's face ... Do not change who they are" to a
+picture containing no person. Every input here was selected for having a large
+frontal face and every edit transforms a person, so that request was outside
+what the bench could measure. On the object grid **preservation** (judged 1-5:
+did everything the instruction did not mention survive?) replaces likeness, which
+is undefined without a face. `flux-kontext-prod` is the arm that shipped the bad
+edit — it appends the clause unconditionally — and `flux-kontext` is the same
+weights without it, which separates the pipeline fix from the model choice.
+
 Instruction-following editors get the instruction verbatim. SDXL and Z-Image are
 img2img models that cannot parse one, so each edit also carries a descriptive
 `scene`; handing them an instruction they structurally cannot follow would rig
@@ -150,8 +162,69 @@ EDGY_EDITS: List[Dict[str, str]] = [
     },
 ]
 
+# Edits to a photo with NOBODY in it. Everything above transforms a person, and
+# every input photo was picked for having a large frontal face, so the grid was
+# structurally blind to the request the group actually complained about: four
+# Monster cans on a shop counter, "transform the monster cans into dildos". What
+# it got was an identity clause about a face that was not in the picture.
+#
+# There is no likeness to score here. What replaces it is PRESERVATION — whether
+# everything the instruction did not ask about survived — which is the thing the
+# identity clause was standing in for all along.
+OBJECT_EDITS: List[Dict[str, str]] = [
+    {
+        "id": "swap-object",
+        "instruction": "Replace the main object in the foreground with a large "
+                       "rubber duck. Leave the rest of the scene untouched.",
+        "scene": "a large rubber duck sitting where the main object was, same room, "
+                 "same lighting, photographic",
+    },
+    {
+        "id": "recolour",
+        "instruction": "Make the main object in the foreground bright pink. Change "
+                       "nothing else.",
+        "scene": "the same scene with the main foreground object in bright pink",
+    },
+    {
+        "id": "add-object",
+        "instruction": "Add a live seagull standing in the foreground. Leave "
+                       "everything else exactly as it is.",
+        "scene": "the same scene with a live seagull standing in the foreground",
+    },
+    {
+        "id": "remove-object",
+        "instruction": "Remove the main object in the foreground completely, leaving "
+                       "the surface behind it empty and the rest of the scene intact.",
+        "scene": "the same scene with the main foreground object gone, empty surface",
+    },
+    {
+        "id": "change-setting",
+        "instruction": "Keep the objects exactly as they are but move the whole scene "
+                       "outdoors onto a beach at sunset.",
+        "scene": "the same objects on a beach at sunset, warm golden light",
+    },
+]
+
 NEGATIVE = ("deformed, distorted face, disfigured, extra fingers, blurry, low quality, "
             "watermark, text, cartoon, doll, plastic skin")
+
+# The object grid's judge. `preservation` replaces likeness: with no face there is
+# nothing for ArcFace to measure, and ranking on adherence alone rewards a model
+# that repaints the whole picture to satisfy one clause.
+OBJECT_JUDGE_PROMPT = """You are scoring an AI photo edit of a scene with no people in it.
+
+The instruction given to the editor was:
+"{instruction}"
+
+Look at the image and answer with STRICT JSON only, no other text:
+{{"adherence": <1-5>, "preservation": <1-5>, "realism": <1-5>, "note": "<max 12 words>"}}
+
+adherence: 5 = every part of the instruction is clearly visible; 1 = the
+instruction was ignored.
+preservation: 5 = everything the instruction did NOT ask to change looks the same
+as it would in the original scene; 1 = the whole picture was replaced.
+realism: 5 = looks like a real photograph; 1 = mangled geometry or obvious AI
+artefacts."""
 
 JUDGE_PROMPT = """You are scoring an AI photo edit.
 
@@ -560,6 +633,53 @@ def build_flux_kontext_prod(photos, edits, seed):
     return generate, pipe, prepare
 
 
+def build_flux_kontext_objects(photos, edits, seed):
+    """Kontext exactly as production now edits a photo with NOBODY in it.
+
+    NOT the same as the raw ``flux-kontext`` arm, and the difference matters: the
+    raw arm passes no height/width, so Kontext's own auto-resize squashes a
+    portrait phone photo to 1024x1024. Comparing it against ``flux-kontext-prod``
+    would credit the identity clause with a framing change it had nothing to do
+    with. This keeps prod's source preparation — one resample straight to a
+    Kontext bucket, aspect preserved — and changes only the three things the fix
+    changed: no identity clause, no face crop, one take instead of best-of-two.
+    """
+    import torch
+    from diffusers import FluxKontextPipeline
+    from diffusers.quantizers import PipelineQuantizationConfig
+
+    from src.chat import face_utils
+
+    quant = PipelineQuantizationConfig(quant_mapping={
+        "transformer": _bnb_diffusers_config(8, keep=[]),
+        "text_encoder_2": _bnb_transformers_config(8),
+    })
+    pipe = FluxKontextPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16,
+        quantization_config=quant)
+    pipe.to("cuda")
+    pipe.vae.enable_tiling()
+    pipe.enable_attention_slicing()
+    pipe.set_progress_bar_config(disable=True)
+
+    def prepare(photo):
+        # face_crop=False is what imagegen.run now sends for an object edit; on a
+        # photo with no faces frame_for_faces is a no-op anyway, so this is the
+        # same picture either way and says so explicitly.
+        image, _ = face_utils.prepare_source(photo["path"], face_crop=False)
+        return image
+
+    def generate(source, edit, seed, photo_id=None):
+        return pipe(
+            image=source, prompt=edit["instruction"],
+            height=source.height, width=source.width, _auto_resize=False,
+            guidance_scale=2.5, num_inference_steps=28,
+            generator=torch.Generator("cpu").manual_seed(seed),
+        ).images[0]
+
+    return generate, pipe, prepare
+
+
 def build_qwen_image_edit_2511(photos, edits, seed):
     """Qwen-Image-Edit-2511, the release that targets exactly our failure mode.
 
@@ -702,6 +822,7 @@ ARMS: Dict[str, Callable] = {
     "qwen-image-edit-2511": build_qwen_image_edit_2511,
     "flux-kontext": build_flux_kontext,
     "flux-kontext-prod": build_flux_kontext_prod,
+    "flux-kontext-objects": build_flux_kontext_objects,
 }
 
 
@@ -802,8 +923,11 @@ def best_likeness(reference, embeddings):
 
 
 def judge_image(url: str, path: Path, instruction: str,
-                timeout: float = 240.0) -> Optional[Dict[str, Any]]:
-    """Score one edit with the local vision model. None on failure."""
+                timeout: float = 240.0, objects: bool = False) -> Optional[Dict[str, Any]]:
+    """Score one edit with the local vision model. None on failure.
+
+    ``objects`` asks the judge for `preservation` as well, which is what stands in
+    for likeness on a photo with nobody in it."""
     import requests
 
     try:
@@ -815,7 +939,9 @@ def judge_image(url: str, path: Path, instruction: str,
             f"{url.rstrip('/')}/v1/chat/completions",
             json={
                 "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": JUDGE_PROMPT.format(instruction=instruction)},
+                    {"type": "text", "text": (OBJECT_JUDGE_PROMPT if objects
+                                              else JUDGE_PROMPT).format(
+                                                  instruction=instruction)},
                     {"type": "image_url",
                      "image_url": {"url": f"data:image/png;base64,{encoded}"}},
                 ]}],
@@ -836,29 +962,35 @@ def judge_image(url: str, path: Path, instruction: str,
         parsed = json.loads(content[start:end + 1])
     except ValueError:
         return None
-    return {
+    verdict = {
         "adherence": float(parsed.get("adherence", 0)),
         "realism": float(parsed.get("realism", 0)),
         "note": str(parsed.get("note", ""))[:80],
     }
+    if objects:
+        verdict["preservation"] = float(parsed.get("preservation", 0))
+    return verdict
 
 
-def stage_score(run_dir: Path, photo_dir: Path, judge_url: str) -> None:
+def stage_score(run_dir: Path, photo_dir: Path, judge_url: str,
+                objects: bool = False) -> None:
     import numpy as np
 
     from scripts.pick_bench_photos import load_analyser
 
     results_path = run_dir / "results.json"
     results = json.loads(results_path.read_text(encoding="utf-8"))
-    # Both sets: scoring runs long after generation and has no idea which one the
-    # run used, so a run made with --edgy must still find its instructions here.
-    edits = {edit["id"]: edit for edit in (*EDITS, *EDGY_EDITS)}
+    # Every set: scoring runs long after generation and has no idea which one the
+    # run used, so a run made with --edgy or --grid objects must still find its
+    # instructions here.
+    edits = {edit["id"]: edit for edit in (*EDITS, *EDGY_EDITS, *OBJECT_EDITS)}
 
     references = {}
     for npy in photo_dir.glob("*.npy"):
         references[npy.stem] = np.load(npy)
 
-    app = load_analyser()
+    # No faces to detect on the object grid, so do not pay for the analyser.
+    app = None if objects else load_analyser()
     judged = 0
     for cell in results["cells"]:
         if cell.get("error") or not cell.get("file"):
@@ -867,7 +999,10 @@ def stage_score(run_dir: Path, photo_dir: Path, judge_url: str) -> None:
         if not path.exists():
             continue
 
-        if "likeness" not in cell:
+        # Likeness is undefined without a face. Scoring it 0 is the correct
+        # verdict for a portrait edit that lost the person and a meaningless one
+        # for a shop counter, where it would rank every arm at zero.
+        if not objects and "likeness" not in cell:
             reference = references.get(cell["photo"])
             embeddings = face_embeddings(app, path)
             score = best_likeness(reference, embeddings)
@@ -882,20 +1017,23 @@ def stage_score(run_dir: Path, photo_dir: Path, judge_url: str) -> None:
             cell["faces_in_output"] = 0 if not embeddings else len(embeddings)
 
         if "adherence" not in cell:
-            verdict = judge_image(judge_url, path, edits[cell["edit"]]["instruction"])
+            verdict = judge_image(judge_url, path, edits[cell["edit"]]["instruction"],
+                                  objects=objects)
             if verdict:
                 cell.update(verdict)
                 judged += 1
             else:
                 cell["adherence"] = None
         results_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        kept = (f"preservation={cell.get('preservation')}" if objects
+                else f"likeness={cell.get('likeness')}")
         print(f"  {cell['arm']}/{cell['photo']}/{cell['edit']}  "
-              f"likeness={cell['likeness']}  adherence={cell.get('adherence')}")
+              f"{kept}  adherence={cell.get('adherence')}")
 
     print(f"\n✓ scored ({judged} judged) → {results_path}")
 
 
-def stage_report(run_dir: Path) -> None:
+def stage_report(run_dir: Path, objects: bool = False) -> None:
     results = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
     cells = [c for c in results["cells"] if not c.get("error")]
 
@@ -908,15 +1046,34 @@ def stage_report(run_dir: Path) -> None:
         return round(sum(clean) / len(clean), 3) if clean else None
 
     def usable(cell: Dict[str, Any]) -> bool:
-        """An edit worth sending: it happened, and it is still the same person."""
-        return (cell.get("likeness") or 0) >= 0.40 and (cell.get("adherence") or 0) >= 4
+        """An edit worth sending: it did what was asked, and it kept what was not.
+
+        On the face grid "kept" means the person is still recognisable; on the
+        object grid it means the rest of the scene survived. Same shape, because
+        it is the same failure — a model that repaints the whole picture has not
+        edited it.
+        """
+        if (cell.get("adherence") or 0) < 4:
+            return False
+        if objects:
+            return (cell.get("preservation") or 0) >= 4
+        return (cell.get("likeness") or 0) >= 0.40
+
+    # What is being preserved, and on what scale: ArcFace cosine is 0..1 and the
+    # judged preservation score is 1..5, so the object grid divides by 5 to keep
+    # the product comparable in shape (not in value) with the face grid's.
+    kept_key = "preservation" if objects else "likeness"
+    kept_scale = 5.0 if objects else 1.0
+    # The face grid keeps its historical key so its reports stay comparable with
+    # reports/image_bakeoff/20260812T152926Z and everything before it.
+    product_key = f"{kept_key}_x_adherence"
 
     summary = []
     for arm, arm_cells in by_arm.items():
         summary.append({
             "arm": arm,
             "n": len(arm_cells),
-            "likeness": mean([c.get("likeness") for c in arm_cells]),
+            kept_key: mean([c.get(kept_key) for c in arm_cells]),
             "adherence": mean([c.get("adherence") for c in arm_cells]),
             # Likeness and adherence pull against each other: the surest way to
             # keep a face is to barely edit the photo, and this bench has cells at
@@ -924,33 +1081,36 @@ def stage_report(run_dir: Path) -> None:
             # likeness alone rewards doing nothing, so carry two figures that
             # cannot be won that way — the product, and the count of edits that
             # clear both bars at once.
-            "likeness_x_adherence": mean(
-                [(c.get("likeness") or 0) * (c.get("adherence") or 0) / 5.0
+            product_key: mean(
+                [(c.get(kept_key) or 0) / kept_scale * (c.get("adherence") or 0) / 5.0
                  for c in arm_cells]),
             "usable": sum(usable(c) for c in arm_cells),
             "realism": mean([c.get("realism") for c in arm_cells]),
-            "face_kept_pct": round(100 * sum(bool(c.get("face_found")) for c in arm_cells)
-                                   / max(len(arm_cells), 1)),
+            "face_kept_pct": None if objects else round(
+                100 * sum(bool(c.get("face_found")) for c in arm_cells)
+                / max(len(arm_cells), 1)),
             "median_seconds": mean([c.get("seconds") for c in arm_cells]),
             "peak_vram_gb": max([c.get("peak_vram_gb") or 0 for c in arm_cells], default=0),
         })
-    summary.sort(key=lambda row: (row["likeness_x_adherence"] or 0, row["usable"]), reverse=True)
+    summary.sort(key=lambda row: (row[product_key] or 0, row["usable"]), reverse=True)
     results["summary"] = summary
     (run_dir / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-    print(f"\n{'arm':<20}{'lik':>7}{'adh':>7}{'lik*adh':>9}{'usable':>8}"
+    kept_label = "presv" if objects else "lik"
+    print(f"\n{'arm':<22}{kept_label:>7}{'adh':>7}{'kept*adh':>10}{'usable':>9}"
           f"{'realism':>9}{'face%':>7}{'secs':>8}{'VRAM':>7}")
     for row in summary:
-        print(f"{row['arm']:<20}{str(row['likeness']):>7}{str(row['adherence']):>7}"
-              f"{str(row['likeness_x_adherence']):>9}{row['usable']:>5}/{row['n']:<2}"
-              f"{str(row['realism']):>9}{row['face_kept_pct']:>6}%"
+        face_pct = "-" if row["face_kept_pct"] is None else f"{row['face_kept_pct']}%"
+        print(f"{row['arm']:<22}{str(row[kept_key]):>7}{str(row['adherence']):>7}"
+              f"{str(row[product_key]):>10}{row['usable']:>6}/{row['n']:<2}"
+              f"{str(row['realism']):>9}{face_pct:>7}"
               f"{str(row['median_seconds']):>8}{row['peak_vram_gb']:>6}G")
 
-    write_contact_sheet(run_dir, results, summary)
+    write_contact_sheet(run_dir, results, summary, objects=objects)
 
 
 def write_contact_sheet(run_dir: Path, results: Dict[str, Any],
-                        summary: List[Dict[str, Any]]) -> None:
+                        summary: List[Dict[str, Any]], objects: bool = False) -> None:
     """One HTML page: every edit, every arm, side by side with its scores.
 
     Numbers rank the candidates; the eye decides whether the winner is actually
@@ -962,8 +1122,14 @@ def write_contact_sheet(run_dir: Path, results: Dict[str, Any],
              for c in results["cells"] if c.get("file")}
     photos = sorted({c["photo"] for c in results["cells"] if c.get("photo")})
 
+    # Every set, so a run made with --edgy or --grid objects is not rendered as an
+    # empty page. Only the ids actually present in this run get a row.
+    present = {c["edit"] for c in results["cells"] if c.get("edit")}
+    grid = [e for e in (*EDITS, *EDGY_EDITS, *OBJECT_EDITS) if e["id"] in present]
+    kept_key = "preservation" if objects else "likeness"
+
     for photo in photos:
-        for edit in EDITS:
+        for edit in grid:
             tiles = []
             for arm in arms:
                 cell = cells.get((arm, photo, edit["id"]))
@@ -972,15 +1138,24 @@ def write_contact_sheet(run_dir: Path, results: Dict[str, Any],
                     continue
                 tiles.append(
                     f'<td><img src="{cell["file"]}" loading="lazy">'
-                    f'<div class="s">likeness {cell.get("likeness")} · '
+                    f'<div class="s">{kept_key} {cell.get(kept_key)} · '
                     f'adherence {cell.get("adherence")} · {cell.get("seconds")}s</div></td>')
             rows.append(f'<tr><th>{photo}<br><span>{edit["id"]}</span></th>'
                         + "".join(tiles) + "</tr>")
 
+    scale_note = (
+        "Preservation is 1-5, judged locally: whether everything the instruction "
+        "did NOT ask to change still looks the same. It replaces likeness, which "
+        "is undefined on a photo with nobody in it."
+        if objects else
+        "Likeness is ArcFace cosine against the source face (higher is better; "
+        "~0.4+ is the usual \"same person\" threshold).")
+
     head = "".join(f"<th>{arm}</th>" for arm in arms)
     table = "".join(
-        f"<tr><td>{row['arm']}</td><td>{row['likeness']}</td><td>{row['adherence']}</td>"
-        f"<td>{row['realism']}</td><td>{row['face_kept_pct']}%</td>"
+        f"<tr><td>{row['arm']}</td><td>{row[kept_key]}</td><td>{row['adherence']}</td>"
+        f"<td>{row['realism']}</td>"
+        f"<td>{'-' if row['face_kept_pct'] is None else str(row['face_kept_pct']) + '%'}</td>"
         f"<td>{row['median_seconds']}s</td><td>{row['peak_vram_gb']}G</td></tr>"
         for row in summary)
 
@@ -994,10 +1169,9 @@ def write_contact_sheet(run_dir: Path, results: Dict[str, Any],
  .miss{{color:#666}} .sum td,.sum th{{border-bottom:1px solid #333}}
 </style>
 <h1>Image bake-off — {run_dir.name}</h1>
-<table class="sum"><tr><th>arm</th><th>likeness</th><th>adherence</th><th>realism</th>
+<table class="sum"><tr><th>arm</th><th>{kept_key}</th><th>adherence</th><th>realism</th>
 <th>face kept</th><th>time</th><th>VRAM</th></tr>{table}</table>
-<p>Likeness is ArcFace cosine against the source face (higher is better; ~0.4+ is
-the usual "same person" threshold). Adherence and realism are 1-5, judged locally.</p>
+<p>{scale_note} Adherence and realism are 1-5, judged locally.</p>
 <table><tr><th></th>{head}</tr>{"".join(rows)}</table>
 """
     path = run_dir / "index.html"
@@ -1011,7 +1185,10 @@ def main() -> None:
                         choices=["generate", "score", "report", "embed"])
     parser.add_argument("--payload", default=None, help="internal: embed-stage arguments")
     parser.add_argument("--arms", default="sdxl-ipadapter,z-image-turbo,qwen-image-edit")
-    parser.add_argument("--photos", default="data/bench_photos")
+    parser.add_argument("--photos", default="")
+    parser.add_argument("--grid", default="faces", choices=["faces", "objects"],
+                        help="objects = photos with nobody in them, scored on "
+                             "adherence x preservation instead of likeness")
     parser.add_argument("--run", default=None, help="existing run dir (resume / score / report)")
     parser.add_argument("--limit-photos", type=int, default=0)
     parser.add_argument("--skip-photos", type=int, default=0,
@@ -1025,6 +1202,8 @@ def main() -> None:
     parser.add_argument("--judge-url",
                         default=os.environ.get("KAYA_LLAMA_URL", "http://127.0.0.1:8081"))
     args = parser.parse_args()
+    objects = args.grid == "objects"
+    args.photos = args.photos or ("data/bench_objects" if objects else "data/bench_photos")
 
     photo_dir = BASE_DIR / args.photos if not Path(args.photos).is_absolute() else Path(args.photos)
     run_dir = Path(args.run) if args.run else BASE_DIR / "reports" / "image_bakeoff" / timestamp()
@@ -1037,7 +1216,7 @@ def main() -> None:
 
     if args.stage == "generate":
         photos = load_photos(photo_dir)
-        edits = EDGY_EDITS if args.edgy else EDITS
+        edits = OBJECT_EDITS if objects else (EDGY_EDITS if args.edgy else EDITS)
         if args.skip_photos:
             photos = photos[args.skip_photos:]
         if args.limit_photos:
@@ -1045,13 +1224,14 @@ def main() -> None:
         if args.limit_edits:
             edits = edits[: args.limit_edits]
         arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-        print(f"run: {run_dir}\narms: {arms}\n{len(photos)} photos x {len(edits)} edits "
+        print(f"run: {run_dir}\ngrid: {args.grid}\narms: {arms}\n"
+              f"{len(photos)} photos x {len(edits)} edits "
               f"= {len(photos) * len(edits)} images per arm")
         stage_generate(run_dir, arms, photos, edits, args.seed)
     elif args.stage == "score":
-        stage_score(run_dir, photo_dir, args.judge_url)
+        stage_score(run_dir, photo_dir, args.judge_url, objects=objects)
     else:
-        stage_report(run_dir)
+        stage_report(run_dir, objects=objects)
 
 
 if __name__ == "__main__":

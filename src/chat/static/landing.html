@@ -178,6 +178,13 @@
     display:block;
   }
 
+  /* The header sits outside the four documents, so anything in it needs to
+     switch on language alone — the login button said "Entrar" to an English
+     reader, and it is the page's only way in. */
+  .doc-inline{display:none}
+  #page[data-lang="en"] .doc-inline[data-lang="en"],
+  #page[data-lang="pt"] .doc-inline[data-lang="pt"]{display:inline}
+
   .login{
     margin-left:auto; align-self:center; text-decoration:none;
     font-family:var(--mono); font-size:.82rem; letter-spacing:.04em;
@@ -214,7 +221,7 @@
     <button type="button" data-set="lang" data-value="en" aria-pressed="true">EN</button>
     <button type="button" data-set="lang" data-value="pt" aria-pressed="false">PT</button>
   </div>
-  <a class="login" href="/app">Entrar &rarr;</a>
+  <a class="login" href="/app"><span class="doc-inline" data-lang="en">Log in</span><span class="doc-inline" data-lang="pt">Entrar</span> &rarr;</a>
 </div>
 
 <div class="doc" data-level="simple" data-lang="en" lang="en">
@@ -231,7 +238,7 @@
   <div class="card"><b>Reads</b><span>Everything in the group, always</span></div>
   <div class="card"><b>Speaks</b><span>Only when you @ it or reply to it</span></div>
   <div class="card"><b>Remembers</b><span>Years of conversation</span></div>
-  <div class="card"><b>Runs</b><span>On one machine, in Duarte's house</span></div>
+  <div class="card"><b>Runs</b><span>On one machine, in a living room</span></div>
 </div>
 
 <p>That first pair is the bit worth understanding. The bot is <strong>always listening and never
@@ -240,9 +247,12 @@ tell you who said they'd bring the meat, even though nobody was talking to it at
 
 <div class="note">
 <p><b>Nothing you send leaves the house.</b> Your messages, photos and voice notes are processed on
-a computer in Duarte's living room. They are never sent to OpenAI, Google or anyone else. The only
+a computer in a living room. They are never sent to OpenAI, Google or anyone else. The only
 thing that ever goes out is a plain question with no names in it, when you ask about something it
 cannot know on its own, like a football score.</p>
+<p>It does keep things, on that machine: every message it sees, so it can remember them later;
+what it answered, so a bad reply can be looked into; and the last twenty pictures it made, with a
+note of what was asked for. None of that is backed up anywhere else, and none of it leaves.</p>
 </div>
 
 <h2>How to talk to it</h2>
@@ -346,7 +356,7 @@ longer. Nothing is lost, it just queues.</p>
   <div class="card"><b>Lê</b><span>Tudo o que se diz no grupo, sempre</span></div>
   <div class="card"><b>Fala</b><span>Só quando lhe fazem @ ou respondem</span></div>
   <div class="card"><b>Lembra</b><span>Anos de conversa</span></div>
-  <div class="card"><b>Corre</b><span>Numa máquina, em casa do Duarte</span></div>
+  <div class="card"><b>Corre</b><span>Numa máquina, numa sala de estar</span></div>
 </div>
 
 <p>O primeiro par é o que vale a pena perceber. O bot está <strong>sempre a ouvir e nunca a
@@ -355,9 +365,12 @@ consegue dizer quem ficou de levar a carne, mesmo que ninguém estivesse a falar
 
 <div class="note">
 <p><b>Nada do que mandam sai de casa.</b> As vossas mensagens, fotografias e áudios são processados
-num computador na sala do Duarte. Nunca são enviados para a OpenAI, para a Google nem para ninguém.
+num computador numa sala de estar. Nunca são enviados para a OpenAI, para a Google nem para ninguém.
 A única coisa que alguma vez sai é uma pergunta simples, sem nomes de ninguém, quando perguntam algo
 que ele não pode saber sozinho, como o resultado de um jogo.</p>
+<p>Guarda coisas, sim, nessa máquina: todas as mensagens que vê, para se lembrar delas mais tarde;
+o que respondeu, para se poder perceber uma resposta má; e as últimas vinte imagens que fez, com o
+registo do que lhe foi pedido. Nada disso tem cópia noutro sítio, e nada disso sai.</p>
 </div>
 
 <h2>Como falar com ele</h2>
@@ -460,7 +473,7 @@ Most messages skip several of them.</p>
 
 <figure class="figure">
 <svg viewBox="0 0 680 656" role="img" aria-label="Flow of a WhatsApp message: arrival, media turned into text, logged to memory, an addressed check that can end in silence, routing, an optional web lookup fed back as context, generation, and delivery." class="flow">
-<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<defs><marker id="arw-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
 <rect x="90" y="24" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <text x="200.0" y="50.0" text-anchor="middle" font-size="13">WhatsApp message</text>
 <rect x="90" y="104" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
@@ -480,24 +493,24 @@ Most messages skip several of them.</p>
 <rect x="90" y="584" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <text x="200.0" y="610.0" text-anchor="middle" font-size="13">Deliver</text>
 <text x="324" y="610.0" font-size="11" opacity="0.62">text · voice · image</text>
-<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
 <text x="207.0" y="410.0" font-size="11" opacity="0.62">yes</text>
-<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
+<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-en)"/>
 <text x="355.0" y="358.0" text-anchor="middle" font-size="11" opacity="0.62">no</text>
 <rect x="400" y="344" width="240" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3 3" opacity="0.7"/>
 <text x="520.0" y="365.0" text-anchor="middle" font-size="13">Stays quiet</text>
 <text x="520.0" y="380.0" text-anchor="middle" font-size="10.5" opacity="0.62">still remembered</text>
-<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw-en)"/>
 <text x="355.0" y="511" text-anchor="middle" font-size="10.5" fill="var(--teal)">live facts</text>
 <rect x="400" y="504" width="240" height="44" rx="8" fill="none" stroke="var(--teal)" stroke-width="1.5"/>
 <text x="520.0" y="530.0" text-anchor="middle" font-size="13" fill="var(--teal)">Web search</text>
-<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw)"/>
+<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw-en)"/>
 <text x="355.0" y="552" text-anchor="middle" font-size="10.5" fill="var(--teal)">as context</text>
 </svg>
 <figcaption>How one message travels, and the two branches that surprise people: it is remembered even when the bot says nothing, and a web result comes back as context rather than as the reply.</figcaption>
@@ -744,6 +757,12 @@ profiles and told to elaborate, a model finds someone to talk about.</p>
     <td class="num">256 tokens</td>
   </tr>
   <tr>
+    <td><b>roast</b></td>
+    <td>“quem é o mais burro?”, “diz mal do Rui”</td>
+    <td>Full, and steered off whoever it just hit</td>
+    <td class="num">200 tokens</td>
+  </tr>
+  <tr>
     <td><b>command</b></td>
     <td>“responde só em áudio”, “faz uma imagem de…”</td>
     <td>None — executed in code</td>
@@ -774,6 +793,15 @@ asking <em>for</em> it:</p>
 
 <p>If the router fails for any reason, it falls back to <code>factual</code> — the old behaviour.
 It can be wrong, but it cannot break the bot.</p>
+
+<p><strong>One question type skips the search entirely: counting.</strong> Asked how many times each
+person had used a particular word, the bot produced a confident table off the back of a few
+retrieved fragments. It was wrong by a factor of eight, with the ranking inverted — the person who
+had actually said it most was reported third. Semantic search returns the passages <em>nearest</em>
+a question; it cannot count, because the answer is a property of every message rather than of any
+one of them. So “quantas vezes é que…” now reads the logs and counts, and the model is handed the
+finished table with an instruction not to adjust it. Two consequences: a DM counts only its own
+history, and only the group's count reaches back into the years of chat that predate the bot.</p>
 
 <h2><span class="sec-num">05</span>Questions the group's memory cannot answer</h2>
 <p class="lede">Football results, weather, news — things that change after the last message was sent.</p>
@@ -822,7 +850,7 @@ never with any chat history attached.</p>
   <b>Under the hood</b>
   <ol>
     <li>Router says <b>factual</b> → full retrieval, top 10 chunks</li>
-    <li>The car was mentioned 6 turns earlier — past the verbatim window, found by search</li>
+    <li>The car was mentioned 6 turns earlier; with the current window it is still held verbatim</li>
     <li>Scope filter allows <code>shared</code> group memory only</li>
   </ol>
 </div>
@@ -886,7 +914,7 @@ never with any chat history attached.</p>
 <p class="lede">Two RTX 3090s, no NVLink — so they are two separate 24GB devices, not one 48GB pool.</p>
 
 <div class="cards">
-  <div class="card"><b>GPU 1</b><span>The language model (~19GB) plus Whisper and the embedder</span></div>
+  <div class="card"><b>GPU 1</b><span>The language model (~13GB) plus Whisper and the embedder</span></div>
   <div class="card"><b>GPU 0</b><span>Image generation only, and only while a job runs</span></div>
   <div class="card"><b>CPU</b><span>Piper voice synthesis, ~28× realtime</span></div>
 </div>
@@ -961,7 +989,7 @@ A maioria das mensagens salta várias delas.</p>
 
 <figure class="figure">
 <svg viewBox="0 0 680 656" role="img" aria-label="Percurso de uma mensagem de WhatsApp: chegada, media convertida em texto, registo na memória, verificação de se foi dirigida ao bot que pode acabar em silêncio, encaminhamento, pesquisa web opcional devolvida como contexto, geração e entrega." class="flow">
-<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<defs><marker id="arw-pt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
 <rect x="90" y="24" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <text x="200.0" y="50.0" text-anchor="middle" font-size="13">Mensagem de WhatsApp</text>
 <rect x="90" y="104" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
@@ -981,24 +1009,24 @@ A maioria das mensagens salta várias delas.</p>
 <rect x="90" y="584" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <text x="200.0" y="610.0" text-anchor="middle" font-size="13">Entrega</text>
 <text x="324" y="610.0" font-size="11" opacity="0.62">texto · voz · imagem</text>
-<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="68" x2="200.0" y2="102" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="200.0" y1="148" x2="200.0" y2="182" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="200.0" y1="228" x2="200.0" y2="262" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="200.0" y1="308" x2="200.0" y2="342" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="200.0" y1="388" x2="200.0" y2="422" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
 <text x="207.0" y="410.0" font-size="11" opacity="0.62">sim</text>
-<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
-<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="200.0" y1="468" x2="200.0" y2="502" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="200.0" y1="548" x2="200.0" y2="582" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
+<line x1="310" y1="366.0" x2="398" y2="366.0" stroke="currentColor" stroke-width="1.25" marker-end="url(#arw-pt)"/>
 <text x="355.0" y="358.0" text-anchor="middle" font-size="11" opacity="0.62">não</text>
 <rect x="400" y="344" width="240" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-dasharray="3 3" opacity="0.7"/>
 <text x="520.0" y="365.0" text-anchor="middle" font-size="13">Fica calado</text>
 <text x="520.0" y="380.0" text-anchor="middle" font-size="10.5" opacity="0.62">mas guarda</text>
-<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw)"/>
+<line x1="310" y1="517" x2="398" y2="517" stroke="var(--teal)" stroke-width="1.25" marker-end="url(#arw-pt)"/>
 <text x="355.0" y="511" text-anchor="middle" font-size="10.5" fill="var(--teal)">factos atuais</text>
 <rect x="400" y="504" width="240" height="44" rx="8" fill="none" stroke="var(--teal)" stroke-width="1.5"/>
 <text x="520.0" y="530.0" text-anchor="middle" font-size="13" fill="var(--teal)">Pesquisa web</text>
-<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw)"/>
+<line x1="400" y1="537" x2="312" y2="537" stroke="var(--teal)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arw-pt)"/>
 <text x="355.0" y="552" text-anchor="middle" font-size="10.5" fill="var(--teal)">como contexto</text>
 </svg>
 <figcaption>O caminho de uma mensagem, e os dois desvios que surpreendem: fica guardada mesmo quando o bot não diz nada, e um resultado da web volta como contexto em vez de ser a resposta.</figcaption>
@@ -1247,6 +1275,12 @@ modelo uma pilha de perfis e diz-se-lhe para desenvolver, e ele arranja alguém 
     <td class="num">256 tokens</td>
   </tr>
   <tr>
+    <td><b>roast</b></td>
+    <td>“quem é o mais burro?”, “diz mal do Rui”</td>
+    <td>Completa, e desviada de quem acabou de apanhar</td>
+    <td class="num">200 tokens</td>
+  </tr>
+  <tr>
     <td><b>comando</b></td>
     <td>“responde só em áudio”, “faz uma imagem de…”</td>
     <td>Nenhuma — executado em código</td>
@@ -1277,6 +1311,16 @@ respondida como qualquer assistente a responderia, sem memória do grupo agarrad
 
 <p>Se o router falhar por alguma razão, cai para <code>factual</code>, que era o comportamento
 anterior. Pode enganar-se, mas não pode partir o bot.</p>
+
+<p><strong>Há um tipo de pergunta que salta a pesquisa por completo: contar.</strong> Quando lhe
+pediram quantas vezes cada pessoa tinha usado uma palavra, o bot fez uma tabela convincente a partir
+de meia dúzia de fragmentos. Estava errada por oito vezes, e com a ordem trocada: quem mais a tinha
+dito aparecia em terceiro. A pesquisa semântica devolve as passagens <em>mais próximas</em> de uma
+pergunta; não sabe contar, porque a resposta é uma propriedade de todas as mensagens e não de
+nenhuma delas em particular. Por isso “quantas vezes é que…” passa a ler os registos e a contar, e o
+modelo recebe a tabela já feita com instruções para não lhe mexer. Duas consequências: uma conversa
+privada conta só o seu próprio histórico, e só a contagem do grupo alcança os anos de conversa
+anteriores ao bot.</p>
 
 <h2><span class="sec-num">05</span>Perguntas que a memória do grupo não pode responder</h2>
 <p class="lede">Resultados de futebol, tempo, notícias: coisas que mudam depois de a última mensagem

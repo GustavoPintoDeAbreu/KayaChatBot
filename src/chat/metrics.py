@@ -20,6 +20,21 @@ from typing import Any, Dict, List, Optional
 _DEFAULT_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "feedback" / "live_interactions.jsonl"
 
 
+# Commands whose reply is a confirmation rather than conversation ("volto a
+# responder por texto"). `image` is deliberately absent: excluding EVERY command
+# is why the edit the group complained about left no record at all — not the
+# prompt it was given, not the editor, not the outcome.
+BOOKKEEPING_COMMANDS = frozenset(
+    {"audio", "audio_once", "text", "clear", "bug", "feedback"})
+
+
+def should_log(result: Optional[Dict[str, Any]]) -> bool:
+    """Whether one handled message belongs in the interaction log."""
+    if not result or not result.get("reply"):
+        return False
+    return result.get("command") not in BOOKKEEPING_COMMANDS
+
+
 def log_path(config: Optional[Dict[str, Any]] = None) -> Path:
     """Resolve the JSONL sink path, honouring ``metrics.log_file`` if configured."""
     if config:
@@ -69,13 +84,22 @@ def log_interaction(
     return interaction_id
 
 
-def load_interactions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Read all interaction records, skipping any malformed lines."""
+def load_interactions(path: Optional[Path] = None,
+                      limit: int = 0) -> List[Dict[str, Any]]:
+    """Read interaction records, skipping any malformed lines.
+
+    ``limit`` keeps only the most recent N. The live path reads this file on
+    every open-ended turn to see what it has already said about someone, and that
+    only ever needs the tail — the log is append-only and grows forever.
+    """
     sink = Path(path) if path else _DEFAULT_LOG
     rows: List[Dict[str, Any]] = []
     if not sink.exists():
         return rows
-    for line in sink.read_text(encoding="utf-8").splitlines():
+    lines = sink.read_text(encoding="utf-8").splitlines()
+    if limit > 0:
+        lines = lines[-limit:]
+    for line in lines:
         line = line.strip()
         if not line:
             continue

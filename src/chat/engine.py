@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.chat import router
+from src.chat import router, variety
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -74,6 +74,46 @@ class Reply:
         return f"{self.text}\n\n{self.citation}" if self.citation else self.text
 
 
+def render_maintainer_clause(config: Dict[str, Any], to_maintainer: bool = False) -> str:
+    """The technical-complaint clause, addressed to the group or to its author."""
+    chat_cfg = config.get("chat", {}) or {}
+    maintainer = str(chat_cfg.get("maintainer") or "").strip()
+    key = "maintainer_self_clause" if to_maintainer else "maintainer_clause"
+    return str(chat_cfg.get(key) or "").replace("{maintainer}", maintainer)
+
+
+def fill_prompt_defaults(config: Dict[str, Any], prompt: str) -> str:
+    """Resolve the speaker-independent form of every templated clause.
+
+    Called by both prompt builders so that any surface which does not know who is
+    writing — the web UI, the CLI, the probes — gets a complete prompt rather
+    than a leaked placeholder. ``apply_speaker_rules`` upgrades it per turn.
+    """
+    return prompt.replace("{maintainer_clause}", render_maintainer_clause(config))
+
+
+def apply_speaker_rules(config: Dict[str, Any], prompt: str, speaker: str) -> str:
+    """Swap in the parts of the system prompt that depend on who is writing.
+
+    Today that is one clause. The bot cannot change its own code, so a technical
+    complaint is answered by naming the person who maintains it — and that person
+    is a member of the group, which the clause never allowed for. Gustavo asked
+    why image generation was so bad and was told that Gustavo has to deal with
+    it, then had to reply "Yah eu sou o Gustavo".
+
+    Applied per turn to whichever prompt the mode chose, rather than in config:
+    the detailed prompt is built once at import and shared by every chat, so it
+    cannot carry a speaker.
+    """
+    maintainer = str((config.get("chat", {}) or {}).get("maintainer") or "").strip()
+    if not maintainer or (speaker or "").strip().lower() != maintainer.lower():
+        return fill_prompt_defaults(config, prompt)
+    self_clause = render_maintainer_clause(config, to_maintainer=True)
+    return (prompt
+            .replace("{maintainer_clause}", self_clause)
+            .replace(render_maintainer_clause(config), self_clause))
+
+
 def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
     """System prompt for a non-factual mode.
 
@@ -83,7 +123,7 @@ def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
     profiles and told to elaborate, it finds someone to talk about. The date line
     is kept so the model can still reason about "hoje"/"ontem".
     """
-    prompt = mode_prompt
+    prompt = fill_prompt_defaults(config, mode_prompt)
     if config.get("chat", {}).get("uncensored_mode", False):
         preamble = config.get("chat", {}).get("uncensored_system_prompt", "")
         if preamble:
@@ -95,6 +135,8 @@ def build_system_prompt(
     config: Dict[str, Any],
     config_path: str,
     include_uncensored: bool = False,
+    max_facts: Optional[int] = None,
+    sample_facts: bool = False,
 ) -> str:
     """Assemble the runtime system prompt.
 
@@ -105,7 +147,7 @@ def build_system_prompt(
     choice — the web UI historically omitted it; the CLI and WhatsApp bridge
     enable it via ``chat.uncensored_mode``.
     """
-    base = config["data"]["system_prompt"]
+    base = fill_prompt_defaults(config, config["data"]["system_prompt"])
     system_prompt = base
 
     if include_uncensored:
@@ -121,9 +163,11 @@ def build_system_prompt(
             members_path = Path(config_path).parent / members_file
         if members_path.exists():
             members_data = json.loads(members_path.read_text(encoding="utf-8"))
+            if max_facts is None:
+                max_facts = int((config.get("rag", {}) or {}).get("max_facts_per_member", 0))
             system_prompt += build_member_prompt_suffix(
                 members_data, shuffle=True,
-                max_facts=int((config.get("rag", {}) or {}).get("max_facts_per_member", 0)))
+                max_facts=max_facts, sample_facts=sample_facts)
 
     system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
     return system_prompt
@@ -210,6 +254,15 @@ class KayaEngine:
         # How many of its own recent replies the model is shown and checked
         # against. 0 disables the check entirely.
         self._repeat_window = int(self._inf.get("no_repeat_last_replies", 4))
+        # The same idea across chats and across days, keyed on WHO a reply was
+        # about rather than which chat it was in — how many interactions back to
+        # look, and how many previous lines about one person to show.
+        self._variety_window = int(self._inf.get("variety_scan_interactions", 400))
+        self._variety_recall = int(self._inf.get("variety_lines_per_member", 3))
+        # Set by the surface (the WhatsApp bridge) so an open-ended turn can be
+        # given a freshly drawn handful of member facts. Left None by the CLI,
+        # the benchmarks and the tests, which must stay reproducible.
+        self.system_prompt_factory: Optional[Any] = None
         if backend is None:
             from src.chat.inference_backend import build_backend
 
@@ -347,9 +400,24 @@ class KayaEngine:
             # A one-off "explain this in audio" still needs a real answer — only
             # the delivery medium changes. Other commands are pure state changes
             # and are executed by the caller without generating anything.
-            if route.command and route.command != router.CMD_AUDIO_ONCE:
+            # CMD_COUNT is a command that still needs an answer, like
+            # CMD_AUDIO_ONCE: the numbers are counted here rather than
+            # remembered, but a person still has to be told them in the bot's
+            # own voice.
+            if route.command and route.command not in (router.CMD_AUDIO_ONCE,
+                                                       router.CMD_COUNT):
                 return Reply(text="", route=route,
                              telemetry=self._telemetry(route, "", message, ""))
+
+            # Counting is not retrieval. Top-k semantic search returns the chunks
+            # nearest the question, which cannot answer "how many times" — asked
+            # for a per-member tally the model wrote a confident table that was
+            # out by 8x with the ranking inverted. The count is done over the log
+            # and handed in as fact; the model only phrases it.
+            count_context = ""
+            if route.command == router.CMD_COUNT:
+                count_context = self._count_context(message, scope)
+                mcfg = router.mode_config(self.config, router.FACTUAL)
 
             # Off-topic / current-events questions get live facts from Grok's web
             # search. This runs AFTER routing, and only for the two informational
@@ -404,9 +472,26 @@ class KayaEngine:
 
             # 3. Mode picks the prompt. `banter` deliberately drops the member
             #    profiles that made the model riff about a random person.
+            # An opinion may vary; a fact may not. Only an open-ended turn gets a
+            # freshly drawn handful of each member's facts — the WhatsApp prompt
+            # is built once at import, so until now every roast for the whole
+            # uptime saw byte-identical profiles with every fact present, and
+            # reached for the same two. A factual answer keeps the full set:
+            # "o que faz o Gil?" cannot depend on whether his job survived a draw.
+            open_ended = variety.is_open_ended(route.mode, route.command)
+            if open_ended and self.system_prompt_factory is not None:
+                try:
+                    system_prompt = self.system_prompt_factory(sample_facts=True)
+                except Exception as exc:  # noqa: BLE001 — fall back to the fixed prompt
+                    print(f"⚠️  could not rebuild the system prompt: {exc}")
+
             mode_prompt = mcfg.get("system_prompt")
             if mode_prompt:
                 system_prompt = build_mode_system_prompt(self.config, mode_prompt)
+            # Whoever ends up holding the prompt, the clauses that depend on who
+            # is writing are filled in here — the detailed prompt is built once
+            # at import and shared by every chat, so it cannot carry a speaker.
+            system_prompt = apply_speaker_rules(self.config, system_prompt, speaker)
 
             # 4. Mode picks retrieval: off for banter, reduced for mixed.
             user_turn, context = self.build_user_turn(
@@ -417,7 +502,8 @@ class KayaEngine:
                 top_k=mcfg.get("top_k"),
                 scope=scope,
                 exclude_from=exclude_from,
-                extra_context=web_context,
+                extra_context="\n\n".join(
+                    part for part in (count_context, web_context) if part),
                 # Banter gets no summary: it retrieves nothing by design, and a
                 # paragraph of background would undo exactly what that mode is for.
                 summary="" if route.mode == router.BANTER else summary,
@@ -433,6 +519,13 @@ class KayaEngine:
                 user_turn += f"\n\n({mcfg['mode_hint']})"
             if route.mode == router.ROAST:
                 user_turn += self._roast_hint(message, recent_lines)
+            # `_roast_hint` keeps the bot off the same PERSON; this keeps it off
+            # the same material about them. Peter asked to be roasted four times
+            # over three days and got Rotterdam, editing other people's videos
+            # and Five Guys every time — the per-chat repetition guard could not
+            # see it, being per-chat and per-session.
+            if open_ended:
+                user_turn += self._variety_hint(message, speaker)
             # Asked to think it through, the bot plans first and then answers
             # from the plan. Explicit request only — see wants_reasoning.
             if reasoning:
@@ -494,6 +587,60 @@ class KayaEngine:
             telemetry=self._telemetry(route, context, message, text,
                                       reasoning=reasoning),
         )
+
+    def _variety_hint(self, message: str, speaker: str) -> str:
+        """What the bot has already said about whoever this turn is about.
+
+        The subjects are the members named in the message plus the speaker, so
+        "roast me" resolves to the person asking — which is exactly the case that
+        produced four near-identical roasts of Peter.
+        """
+        if not self.retriever:
+            return ""
+        try:
+            subjects = list(self.retriever.named_members(message))
+            if speaker and speaker not in subjects and self.retriever.named_members(speaker):
+                subjects.append(speaker)
+            if not subjects:
+                return ""
+            from src.chat import metrics
+
+            rows = metrics.load_interactions(
+                metrics.log_path(self.config), limit=self._variety_window)
+            return variety.hint_for(subjects, rows, limit=self._variety_recall)
+        except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
+            print(f"⚠️  could not build the variety hint: {exc}")
+            return ""
+
+    def _count_context(self, message: str, scope: Optional[str]) -> str:
+        """The counted table for a "how many times" question. "" if unanswerable.
+
+        Deliberately returns nothing when the term cannot be identified: the
+        failure this replaces was not a refusal, it was a confident wrong answer,
+        so a tally that cannot be computed must not be improvised either. The
+        prompt's own "diz que não sabes" rule then applies.
+        """
+        from src.chat import tally
+
+        term = tally.extract_term(message)
+        if not term:
+            return ("Não foi possível identificar que palavra ou expressão contar. "
+                    "Pergunta qual é, em vez de dares um número.")
+        scope = scope or "shared"
+        try:
+            rows, total = tally.count_term(
+                term,
+                scope=scope,
+                resolver=tally.load_resolver(self.config),
+                # Only the shared scope reaches back into the pre-bot export; a
+                # DM's history is its own file and nothing else.
+                archive=tally.archive_path(self.config) if scope == "shared" else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed count must not drop the reply
+            print(f"⚠️  tally failed: {exc}")
+            return ("Não foi possível contar isso agora. Diz que não conseguiste "
+                    "contar, em vez de dares um número.")
+        return tally.format_table(term, rows, total)
 
     def _plan(self, system_prompt: str, user_turn: str) -> str:
         """One private pass of notes before the answer. "" on any failure.

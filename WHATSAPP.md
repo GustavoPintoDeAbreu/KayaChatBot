@@ -10,7 +10,8 @@ the model is loaded **once**, on the prod GPU.
 WhatsApp ⇄ WAHA container (Node, Docker)  ──webhook POST──▶  whatsapp_server.py
                   ▲                                            ├─ WhatsAppAdapter (routing)
                   └────────── sendText (reply) ────────────────┤─ KayaEngine  (shared model + RAG)
-                                                               └─ Gradio UI (mounted at /)
+                                                               └─ Gradio UI (mounted at /app, password-gated;
+                                                                  / is the public landing page)
 ```
 
 ## Components
@@ -64,8 +65,9 @@ curl -s localhost:7860/whatsapp/outbox
    docker compose --profile whatsapp up -d waha
    # open http://localhost:3000, start the "default" session, scan the QR with the bot's phone
    ```
-5. Run the bridge process (serves UI + webhook). Point the prod/dev container's
-   command at `python -m src.chat.whatsapp_server` instead of `src/chat/web_app.py`.
+5. Run the bridge process (serves UI + webhook). `kaya-prod` and `kaya-dev`
+   already ship `command: python -m src.chat.whatsapp_server` in
+   `docker-compose.yml`, so there is nothing to change.
 6. Test: DM the bot → reply. Add it to a group, `@`-mention it → reply; send
    unrelated chatter → silence; reply to its message → reply.
 
@@ -78,7 +80,30 @@ group they still need an @-mention like anything else.
 |---|---|---|
 | `/clear` | `/limpar` | Forget this chat's recent verbatim context |
 | `/bug <what happened>` | `/erro` | File a bug report |
-| `/feedback <your idea>` | `/sugestao` | Leave a suggestion |
+| `/feedback <your idea>` | `/sugestao`, `/sugestão` | Leave a suggestion |
+
+Most of what the group actually uses is not a slash command at all — the router
+reads it out of ordinary language (`src/chat/router.py`):
+
+| Asked like | Does |
+|---|---|
+| "responde-me só em áudio" / "volta a escrever" | switches this chat to voice or text, until changed |
+| "explica isso num áudio" | answers *this one* by voice, without changing the default |
+| "põe o Rafa vestido de rei" / "faz uma imagem de um gato astronauta" | edits the attached (or last) photo, or invents one |
+| "esquece o que falámos" | same as `/clear` |
+| "quantas vezes é que o Rafa disse isso?" | **counts** it |
+
+That last one does not go through retrieval. Semantic search returns the chunks
+nearest a question and cannot answer "how many times", so `CMD_COUNT` scans the
+logs directly (`src/chat/tally.py`) and hands the model a finished table to
+phrase. Two consequences worth knowing before someone reports them as bugs:
+
+- **Counts are scope-isolated.** A DM tallies only its own log; the group tallies
+  the group's. The same question therefore gives different numbers in a DM and in
+  the group, on purpose.
+- **Only the group's count includes the pre-bot export**
+  (`data/all_messages_cleaned.jsonl`) — the group is years older than the bot, and
+  a count starting at the install date is the wrong answer.
 
 `/bug` and `/feedback` take the rest of the message as the body; sent bare, they
 reply with usage and store nothing (no pending-capture state, so an unrelated
@@ -99,10 +124,13 @@ bug reports would come back out of retrieval as things the group said.
 private to itself. Two things hang off it, and both fail *silently* if it names
 the wrong chat:
 
-- **Image editing** is gated on `chat.imagegen.allowed_scopes: ["shared"]`. In a
-  non-shared group the bot answers *"Só faço imagens no grupo, não por aqui"* —
-  while standing in the group. That reads as a broken feature, not a
-  misconfiguration, which is exactly how it was reported on 2026-08-13.
+- **Image editing** used to be gated on `chat.imagegen.allowed_scopes:
+  ["shared"]`, so a group missing from `whatsapp_shared_chats.json` was told
+  *"Só faço imagens no grupo, não por aqui"* — while standing in the group.
+  Consent and memory scope are different questions, and `allowed_here` now
+  answers them separately, most specific first: `allowed_chats` → `allow_groups`
+  (true today: any group, whatever its memory scope) → `allowed_scopes` as the
+  fallback. So this no longer fails, but the scope file still drives retrieval:
 - **Retrieval asymmetry.** A DM may recall anything the group said; a non-shared
   group's history is invisible from DMs. Nobody notices, because the group can
   still read its own messages *and* the historical export (which is `shared`), so
@@ -147,7 +175,10 @@ shared-memory` and confirm the count matches what you expect.
 - **Offline:** if the bridge is down, WAHA can't deliver webhooks and messages go
   unanswered (the bridge ignores backlog on restart to avoid replying to stale msgs).
 - **Privacy:** in a group, every member's messages pass through the bot and are
-  logged to `data/feedback/` + stored as per-chat history. Tell the group.
+  written to `data/live_messages/<scope>.jsonl` (the memory the vector store is
+  built from), with per-chat history in `data/whatsapp_sessions/`. Answered turns
+  also land in `data/feedback/live_interactions.jsonl`, alongside `/bug` and
+  `/feedback` reports. Tell the group.
 ```
 
 

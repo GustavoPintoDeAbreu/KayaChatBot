@@ -178,6 +178,9 @@ models/piper/
 # images exactly as it covers chat history.
 reports/image_bakeoff/
 data/bench_photos/
+data/bench_objects/
+# The last N production renders, kept so a bad picture can be looked into.
+data/imagegen_log/
 
 # Simulator working data — a copy of the real store plus whatever a run invents.
 data_sim/

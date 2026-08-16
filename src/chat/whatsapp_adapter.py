@@ -254,6 +254,12 @@ _REFERS_TO_IMAGE = re.compile(
 )
 
 
+# A WhatsApp mention in the message body. Baileys writes the @lid or the phone
+# number, never the display name — what the group sees as "@Rafa" arrives here as
+# "@257487651496102".
+_MENTION = re.compile(r"@(\d{5,})\b")
+
+
 def refers_to_existing_image(text: str) -> bool:
     """Whether an image request points at a picture already in the conversation.
 
@@ -654,7 +660,7 @@ class WhatsAppAdapter:
             if reply:
                 self._deliver(msg.chat_id, reply)
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "command": "image", "image": "not_allowed"}
+                    "user_text": text, "command": "image", "image": "not_allowed"}
 
 
         # An attached photo is unambiguous — that is the subject. Without one, the
@@ -725,7 +731,7 @@ class WhatsAppAdapter:
             if reply:
                 self._deliver(msg.chat_id, reply)
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "command": "image", "image": "queue_full"}
+                    "user_text": text, "command": "image", "image": "queue_full"}
 
         waiting = imagegen.pause_remaining(self.config)
         if waiting:
@@ -760,10 +766,11 @@ class WhatsAppAdapter:
         if submitted is None:
             self._deliver(msg.chat_id, self.command_replies.get("image_queue_full", ""))
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "command": "image", "image": "queue_full"}
+                    "user_text": text, "command": "image", "image": "queue_full"}
 
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                "command": "image", "image": mode, "queue_position": submitted}
+                "user_text": text, "command": "image", "image": mode,
+                "queue_position": submitted}
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
@@ -817,7 +824,16 @@ class WhatsAppAdapter:
         ]
         for candidate in candidates:
             if candidate and candidate in self.contacts:
-                return self.contacts[candidate]
+                name = self.contacts[candidate]
+                # Learn the OTHER shapes of the same person while we are here. A
+                # member whose phone number is already mapped never reached the
+                # learning branch below, so their @lid stayed unknown — and @lid
+                # is the only form a mention in the message body comes in. Four
+                # of the group were in this state: perfectly identified as
+                # speakers, invisible when someone @-ed them.
+                if self.learn_contacts:
+                    self._learn_contact(candidates, name, verified=True)
+                return name
 
         # Not mapped yet, so fall back to the display name. That is resolved by
         # the SAME resolver the extraction pipeline uses, rather than the
@@ -858,7 +874,11 @@ class WhatsAppAdapter:
         if normalized in self.bot_jids:
             return "Kaya Bot"
         local = normalized.split("@", 1)[0]
-        for candidate in (normalized, f"{local}@c.us", local):
+        # ``@lid`` is in the list because that is how Baileys addresses people and
+        # therefore how most of data/whatsapp_contacts.json is keyed. A mention in
+        # the message body arrives as the bare number, with no suffix at all, so
+        # without this every @lid contact was a miss.
+        for candidate in (normalized, f"{local}@c.us", f"{local}@lid", local):
             if candidate in self.contacts:
                 return self.contacts[candidate]
         return ""
@@ -881,12 +901,12 @@ class WhatsAppAdapter:
         label = f"a responder a {who}" if who else "a responder a"
         return f"[{label}: \"{body}\"]"
 
-    def _learn_contact(self, candidates, name: str) -> None:
+    def _learn_contact(self, candidates, name: str, verified: bool = False) -> None:
         """Remember phone -> member name, persisting so it survives a restart.
 
-        A learned mapping is a GUESS: it comes from the sender's display name,
-        which the person chooses and which two people can share. One member is
-        known to the group by a nickname while his display name is another
+        A learned mapping is usually a GUESS: it comes from the sender's display
+        name, which the person chooses and which two people can share. One member
+        is known to the group by a nickname while his display name is another
         member's actual name, so this quietly learned him as that other member
         and every message he sent was attributed to the wrong man for weeks.
 
@@ -894,12 +914,17 @@ class WhatsAppAdapter:
         newly learned name that ALREADY belongs to a different id is the smell,
         and it is now said out loud. Two ids for one member is normal (a phone
         and a @lid); two *people* behind one member is the failure.
+
+        ``verified`` says the name came from an id already in the file rather
+        than from a display name, which is how the other shapes of an
+        already-known person get filled in. That case is precisely "two ids for
+        one member", so it must not raise the alarm meant for the other one.
         """
         key = next((c for c in candidates if c), None)
         if not key or key in self.contacts:
             return
         existing_ids = [i for i, n in self.contacts.items() if n == name and i != key]
-        if existing_ids:
+        if existing_ids and not verified:
             print(f"⚠️  learned {key} -> {name} from a display name, but {name} is "
                   f"already {', '.join(existing_ids)}. If this is a different "
                   f"person they need their own entry — check with "
@@ -931,6 +956,27 @@ class WhatsAppAdapter:
             if number:
                 cleaned = re.sub(rf"@{re.escape(number)}\b", "", cleaned)
         return cleaned.strip()
+
+    def _resolve_mentions(self, text: str) -> str:
+        """Turn ``@<lid>`` tokens into the member's name.
+
+        Only the bot's own mention was ever removed; everybody else's arrived at
+        the model as a bare number. So "@257487651496102 tas fraquinho. Que
+        desilusão" said nothing about Rafa to the model and nothing to
+        ``extract_query_persons``, which matches member NAMES — and the roast,
+        handed the usual pile of profiles with no one named in the question, went
+        to Manuel, who was not in the conversation at all. Both filed reports of
+        the bot "referencing the wrong people" are this.
+
+        A lid that maps to nobody is left as it is. An unknown mention is still a
+        mention, and deleting it would turn "@X e o @Y" into a sentence about one
+        person.
+        """
+        def replace(match: "re.Match") -> str:
+            name = self._name_for_jid(match.group(1))
+            return f"@{name}" if name else match.group(0)
+
+        return _MENTION.sub(replace, text)
 
     def _parse_command(self, text: str) -> Optional[Tuple[str, str]]:
         """Find a slash command anywhere in the message. ``(family, body)`` or None.
@@ -1086,7 +1132,10 @@ class WhatsAppAdapter:
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
                 sender=self.resolve_speaker(msg),
-                text=msg.text,
+                # Named, not numbered. This log is embedded into ChromaDB, and a
+                # message stored as "@257487651496102 tas fraquinho" can never be
+                # retrieved by a question about Rafa.
+                text=self._resolve_mentions(msg.text),
                 timestamp=msg.timestamp,
                 scope=scope_for_chat(msg.chat_id, self.shared_chats),
                 reply_to_id=msg.reply_to_id,
@@ -1103,7 +1152,10 @@ class WhatsAppAdapter:
             return None
 
         speaker = self.resolve_speaker(msg)
-        text = self._strip_bot_mention(msg.text)
+        # Strip the bot's own mention, then name everybody else's: the resolved
+        # text is what reaches the model, the retriever's person filter and the
+        # session store, and a bare @lid is invisible to all three.
+        text = self._resolve_mentions(self._strip_bot_mention(msg.text))
         if not text:
             return None
 
@@ -1170,6 +1222,11 @@ class WhatsAppAdapter:
         # state change.
         deliver_as_voice_once = command == "audio_once"
         if deliver_as_voice_once:
+            command = None
+        # A count was answered by generating, not by changing any state — the
+        # engine counted the log and the model phrased it. It reaches here as a
+        # command only so the routing decision stays visible in the telemetry.
+        if command == "count":
             command = None
 
         if command == "image":

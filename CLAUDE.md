@@ -183,12 +183,62 @@ traffic stages through system RAM.
   prepare_device_map`), so exposing both cards gives training **no extra
   capacity** anyway. Training above 24 GB would mean leaving Unsloth for HF+peft
   `device_map="auto"`.
-- GPU0 drives the desktop, is capped at 250 W and burn-in measured its sustained
-  clocks ~15% below GPU1's (1238 vs 1448 MHz), so it is the slow half of a split
-  — two-card serving uses `-ts 0.45,0.55` to give it fewer layers.
+- GPU0 drives the desktop and is capped at 300 W. Burn-in once measured its
+  sustained clocks ~15% below GPU1's (1238 vs 1448 MHz), which is why two-card
+  serving uses `-ts 0.45,0.55` to give it fewer layers. That gap was measured at
+  the old 250 W cap; at 300 W it sustains ~1620 MHz. Worth re-measuring before
+  trusting the 0.45/0.55 bias, but note the gap is partly real — see below.
+- **GPU0 is cooling-limited, not power-limited. The "intake-starved" note in
+  `gpu-power-limit.sh` is correct — 300 W is its ceiling.** Measured 2026-08-16 with
+  240 s sustained fp16 burns (harsher than a real render), all from a 61 °C start:
+
+  | GPU0 cap | Sustained | Temp | Fan | Throughput | Thermal slowdown |
+  |---|---|---|---|---|---|
+  | 300 W, alone | 299 W | 82–83 °C | 96% | 59.4 TFLOPS | none |
+  | 350 W, alone | 349 W | 85–86 °C | 93–99% | 63.5 TFLOPS | none |
+  | **350 W + GPU1 serving** | **falls 349 → 316 W** | **88 °C** | **100%** | **decays to 59.3** | **+112 s** |
+
+  The concurrent row is the real operating case, and it is why 350 W was tried and
+  reverted. With both cards working, GPU0 saturates: fans max out, it can no longer
+  hold its own cap, and throughput decays back to exactly the 300 W figure while
+  running 5 °C hotter and accruing real throttle time. **The extra 50 W buys nothing
+  and costs thermal margin.** Do not raise this card without fixing case airflow
+  first.
+- **`SW Thermal Slowdown` IS the meaningful counter — trust it.** It stays at zero
+  through 82–86 °C and only accrues once the card is genuinely saturated (88 °C,
+  fans pinned at 100%), which is exactly the state worth catching. It is frozen at
+  idle, so a jump between two idle readings means real distress happened in between.
+  Do **not** confuse it with `SW Power Capping`, which accrues continuously whenever
+  a cap is merely *set* and means nothing at all.
+- **PSU headroom is not the constraint.** Peak combined draw measured 672 W (GPU0
+  349 W + GPU1 350 W, both working) — comfortable on the HX1200i. Cooling binds long
+  before power does on this box.
 - Power caps are enforced by `gpu-power-limit.service` **by UUID** (indices are
-  not stable across reboots). `SwPowerCap` in the throttle bitmask is expected and
-  healthy. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
+  not stable across reboots). Raised from 250/280 W to 300/350 W on 2026-08-16,
+  once sustained fine-tuning stopped being the workload. GPU1 at 350 W measured
+  **+11% generation throughput** (56.3 → 62.6 tok/s on 250-token runs, 1300 →
+  1620 MHz) at 70 °C with fans at 65%, and serving was unaffected by a concurrent
+  GPU0 render (63.0 tok/s mean across 95 replies). GPU0 was tested at 350 W and
+  **reverted to 300 W** for the thermal reason above. `SwPowerCap` in the throttle
+  bitmask is expected and healthy.
+- **Manual fan control is impossible on this host, and not needed.** The driver is
+  `nvidia-driver-595-open` — the *open* kernel module (`/proc/driver/nvidia/version`
+  says "NVIDIA UNIX Open Kernel Module"; `modinfo nvidia` reports Dual MIT/GPL).
+  `nvidia-smi` has no fan option at all on GeForce, and `nvidia-settings` accepts
+  `GPUFanControlState=1` but rejects every `GPUTargetFanSpeed` write with
+  "Unknown Error" — with `Option "Coolbits" "4"` confirmed applied in the Xorg log.
+  Switching to the proprietary `nvidia-driver-595` would restore it, but the burn
+  above shows the automatic curve handles the card fine, so there is no reason to.
+  `/etc/X11/xorg.conf.d/20-nvidia-coolbits.conf` is inert; safe to delete.
+- **`nvidia-settings -a` exits 0 even when the write was rejected** — it prints
+  `ERROR: ... (Unknown Error)` to stderr and still returns 0, the same class of trap
+  as `nvidia-smi -pl`. Trusting the exit code would leave a card in *manual* fan
+  mode with its fans parked at zero, strictly worse than not touching it. **Always
+  read the attribute back and compare.** Note also that no attribute exposes which
+  fan belongs to which GPU, and an unverified probe write "succeeds" on all four.
+  `gpu0-fan-curve.service` is therefore a **user** unit: it takes over above
+  60 °C and hands back to the driver's automatic curve below 55 °C, so idle stays
+  in the zero-RPM band and the machine is no louder than before. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
   do not write monitoring that expects it.
 
 ### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
@@ -250,6 +300,73 @@ moved p05 `0.030 → 0.246` and p06 `0.184 → 0.370` (flux-kontext mean `0.409 
 artefact. Face detection is InsightFace `buffalo_l` on CPU, mounted into the
 containers from `~/.insightface`; every path degrades to a no-op without it.
 
+**Not everything in a photo is a person (2026-08-16).** The whole edit path
+assumed one. `imagegen_worker` chose its identity clause with `_face_count() > 1`,
+so **zero** faces took the same branch as one and a photo of four Monster cans on
+a shop counter was sent to Kontext with *"Keep the person's face … Do not change
+who they are"* appended — by `config.yaml`'s own note, the instruction a model
+best satisfies by changing nothing. `_INSTRUCTION_SYSTEM` was no better: five
+few-shot examples all of the form *"Dress the person…"*, so an object request was
+rewritten as a person edit before it reached the model. Then `pick_best` scored
+two candidates against a `None` reference and returned the first.
+
+Three changes. `_face_count` returns `Optional[int]` — `None` (cannot tell) keeps
+the singular clause, a real `0` drops it via `select_identity_clause`.
+`build_edit_instruction` now returns a fourth value, `SUBJECT: person|object|scene`,
+from the same local call; `object`/`scene` sends `--no-identity-clause`,
+`--no-face-crop`, `--candidates 1`. And `chat.imagegen.editors` maps subject to
+editor — the single-editor choice came from a bake-off whose every photo was
+picked for a large frontal face, so it ranked on identity preservation alone.
+
+**The bench could not see any of it.** `pick_bench_photos.py` *selects for* "a
+large, confidently-detected, roughly frontal face" and all five `EDITS` transform
+a person. `--grid objects` (photos chosen with `--no-faces`, into
+`data/bench_objects/`) runs `OBJECT_EDITS` and scores **preservation** — judged
+1-5, "did everything the instruction did not mention survive?" — in place of
+likeness, which is undefined without a face. The face grid keeps the
+`likeness_x_adherence` key so its reports stay comparable with everything before.
+
+**Ran it (2026-08-16, `reports/image_bakeoff/objects_20260816T164851Z`, 5 arms ×
+4 photos × 5 edits).** Klein wins the object grid outright and is 2.5× faster:
+
+| arm | presv | adh | presv×adh | usable | secs |
+|---|---|---|---|---|---|
+| **flux2-klein** | 4.78 | **4.78** | **0.852** | **17/20** | **67** |
+| qwen-image-edit-2511 | 4.79 | 4.21 | 0.760 | 14/20 | 453 |
+| flux-kontext-objects | 4.58 | 3.90 | 0.716 | 13/20 | 82 |
+| flux-kontext-prod | 4.61 | 4.00 | 0.706 | 13/20 | 166 |
+
+Two results worth keeping, both of which contradict what the fix was assumed to
+be doing:
+
+- **The identity clause was not the problem.** `flux-kontext-objects` (the fix:
+  no clause, no crop, one take) scored 0.716 against `flux-kontext-prod`'s 0.706,
+  and 13/20 usable either way. That difference is noise. What the fix actually
+  buys is **half the wall time** (82s vs 166s), because best-of-N ranked by
+  ArcFace against a photo with no face was two renders to pick the first one.
+- **Every arm scores 5.0/5.0 on `swap-object`** — which is precisely the Monster
+  request ("transform the cans into X"). So the live failure was almost certainly
+  the *prompt rewriter* reframing an object edit as a person edit, not the editor
+  and not the clause. This grid does not test the rewriter; its instructions are
+  clean English that never mentions a person. That half is covered by unit tests.
+
+Klein's margin comes from `recolour` (3.2→5.0) and `change-setting` (4.2→5.0).
+**`remove-object` fails on everything** — Kontext scores adherence 1.0 on all four
+photos, Klein 3.0 — so an object *removal* is the request most likely to come back
+as "não consegui", which is at least honest: `noop_threshold` catches it rather
+than sending the unchanged photo. Qwen matches Klein on quality and costs 453s an
+image, 6.8× Klein's, which is not a trade a chat bot can make.
+
+**And a render used to leave no trace at all.** `whatsapp_server` skipped any
+result carrying a `command`, and `_handle_image_request` always sets one, so no
+image request reached `live_interactions.jsonl`; the translated instruction and
+final prompt went to a `logger.info` on a logger nobody configures; the output
+lived in a `TemporaryDirectory`. The rule now lives in `metrics.should_log`
+(testable — importing `whatsapp_server` loads the model), `imagegen.run` takes an
+`on_report` callback that logs a `source="imagegen"` row, and
+`chat.imagegen.keep_outputs` keeps the last N renders plus a JSON sidecar in the
+gitignored `data/imagegen_log/`.
+
 **Making them.** `imagegen.run()` shells out to `scripts/imagegen_worker.py` — never in-process. Dropping a diffusion pipeline in Python leaves ~20GB allocated with no `nn.Module` alive, it would hold a card between requests, and an OOM would take the bot down. Editing runs **FLUX.1 Kontext** (bake-off winner: likeness 0.409 vs Qwen's 0.138, adherence 4.4/5, ~86s); text-to-image runs **Z-Image Turbo**. The router's `CMD_IMAGE` picks the subject: attached photo, else the last photo seen in that chat, else generate from text. The webhook only acknowledges — the picture is sent from a background thread. `chat.imagegen.allowed_scopes` gates editing to the shared group.
 
 **Kontext keeps its job (2026-08-12).** FLUX.2 Klein 9B ran the same 40-cell
@@ -283,6 +400,87 @@ scores those files with ArcFace and must not be measuring compression artefacts.
 A failed re-encode returns the original bytes rather than nothing.
 
 **Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
+
+### Who is being talked about, and counting (2026-08-16)
+
+**Mentions were numbers.** `_strip_bot_mention` removed only the *bot's* `@` token;
+everybody else's stayed as a bare `@lid`. So `@257487651496102 tas fraquinho` said
+nothing about Rafa to the model and nothing to `extract_query_persons`, which
+matches member *names* — and the roast, handed the usual pile of profiles with
+nobody named in the question, went to Manuel, who was not in the conversation.
+Both filed reports of the bot "referencing the wrong people" are this.
+`_resolve_mentions` rewrites each `@<lid>` via the existing `_name_for_jid`,
+applied to the responder text **and** to `message_log.append` (that log is
+embedded into ChromaDB; a message stored as a number is unretrievable by a
+question about Rafa). An unknown lid is left intact — deleting it would turn
+"@X e o @Y" into a sentence about one person.
+
+Two supporting fixes: `_name_for_jid` now tries the `@lid` shape (most of
+`whatsapp_contacts.json` is keyed that way, and a body mention arrives with no
+suffix at all), and `resolve_speaker` learns a member's *other* ids when it
+matches one — four members were mapped by phone, so they never reached the
+learning branch and their `@lid` stayed unknown: perfectly identified as
+speakers, invisible when someone @-ed them. `_learn_contact(verified=True)`
+suppresses the display-name-collision warning there, since two ids for one member
+is the normal case.
+
+**"O Gustavo tem de tratar disso", said to Gustavo.** Not misidentification — that
+sentence is a verbatim template in the banter/mixed/detailed prompts, and a
+technical complaint fired it exactly as written. The clause is now
+`{maintainer_clause}`, filled by `engine.apply_speaker_rules` per turn:
+`chat.maintainer_self_clause` when the speaker *is* `chat.maintainer`. Both
+builders call `fill_prompt_defaults` so surfaces that do not know the speaker
+(the web UI does not go through `respond`) never leak the placeholder. The
+third-person rule in `data.system_prompt` is deliberate and stays.
+
+**Counting is not retrieval** (`src/chat/tally.py`). Top-k semantic search returns
+the chunks nearest a question and cannot answer "how many times". Asked for a
+per-member tally the bot wrote a confident table that was out by 8x with the
+ranking inverted (the top user, 198, reported third at 3), then agreed when told
+it had probably missed some. `CMD_COUNT` routes those; `engine._count_context`
+counts the log and hands the model a finished table to phrase. It is scope-bound
+(a DM counts only its own file), folds aliases through `SenderResolver`, and
+includes the pre-bot export — the group is older than the bot. A term it cannot
+identify returns nothing rather than a number. The prompts also stopped accepting
+standing jobs the bot has no state for ("Consigo manter o contador atualizado",
+then "Aí está, Frederico" with no list).
+
+### An opinion may vary, a fact may not (2026-08-16)
+
+Peter asked to be roasted four times over three days and got the same four beats
+every time: Rotterdam and Queijas, editing other people's videos, Five Guys,
+posting concert videos like a music critic. Romano got *"analista político por
+ler tweets"* five times, Rafa *"ginásio próprio"* and *"o Iñaki no sparring"*
+five times. The model was not at fault — it was handed identical material every
+turn, by two mechanisms:
+
+- **`whatsapp_server` builds the system prompt once, at import.** So the member
+  profiles, *including the `shuffle=True` meant to vary them*, were byte-identical
+  for the whole uptime. `engine.system_prompt_factory` now rebuilds it per turn
+  (~0.6 ms) — but only for open-ended turns.
+- **`key_facts[:max_facts]` truncates.** With `max_facts_per_member: 4`, Peter's
+  first four of five facts went out in the same order forever, and the fifth
+  (*he owns a dog called Kobe*, *he hosts the group and organises the football*)
+  had **never been shown to the model at all**. `sample_facts=True` draws a random
+  handful instead; `rag.max_facts_open_ended` (3) makes that ten different
+  triples for Peter rather than one.
+
+`src/chat/variety.py` adds the third piece: what the bot has **already said**
+about this person. `previous_bot_replies` only ever covered the last few turns of
+one chat, so it could not see the same roast repeated three days later in a
+different thread. The interaction log already records `reply_members`, so the
+material was on disk and simply never read back. The subjects of a turn are the
+members named in the message **plus the speaker** — which is how "roast me"
+resolves to the person asking, the exact case that repeated. Noise is filtered
+out: only open-ended rows count (a count table names everyone and is nobody's
+joke), replies under 8 words carry no angle, and a reply naming more than 5
+members is about none of them.
+
+**`variety.is_open_ended` is the gate, and `factual` is deliberately outside it.**
+Sampling facts for a factual answer would make *"o que faz o Gil?"* depend on
+whether his job survived the draw, and `CMD_COUNT` borrows the factual mode
+config — it must not borrow this. Variety is for roasts, insults and opinions;
+a count must come out the same every time it is asked.
 
 ### Slash commands, and why they must not be remembered (2026-08-13)
 

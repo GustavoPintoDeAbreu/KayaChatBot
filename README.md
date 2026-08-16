@@ -23,9 +23,13 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Lives in WhatsApp**: a WAHA bridge puts the bot in the real group chat (`WHATSAPP.md`), plus a Gradio web UI
 - **Intent-routed retrieval**: every message is classified first, and the mode picks retrieval, prompt and reply length together — banter gets no group context at all
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
-- **Remembers the thread**: 60 turns verbatim plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
+- **Remembers the thread**: 60 lines verbatim — about thirty exchanges — plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
 - **Voice in and out**: voice notes are transcribed with faster-whisper; replies can be spoken with Piper, per-language and sticky per chat
-- **Sees and makes pictures**: inbound photos are described into text (and so become searchable later); FLUX.1 Kontext edits a photo, Z-Image Turbo invents one
+- **Sees and makes pictures**: inbound photos are described into text (and so become searchable later); the editor is picked per request by subject — FLUX.1 Kontext for a person, FLUX.2 Klein for an object or a scene — and Z-Image Turbo invents one from text
+- **Does not tell the same joke twice**: an open-ended answer (banter, a roast, an
+  opinion) is built from a random handful of each member's facts and is shown what
+  it already said about that person, so "roast me" stops returning the same four
+  beats. A factual answer keeps the full set and stays identical every time it is asked
 - **Tells you when it is wrong**: `/bug` and `/feedback` on WhatsApp (plus a web form) collect reports into the Feedback dashboard — and are deliberately never stored as group memory
 - **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
@@ -49,7 +53,13 @@ retrieval, prompt and reply length together:
 | `banter` | Social noise — laughter, emoji, greetings, insults, "roast me" | **None** |
 | `mixed` | Names a person or event without asking to be informed | Yes, answers short |
 | `factual` | A question about the group, its members or its history | Yes, full context |
+| `roast` | Asking for a verdict *aimed at* a member — "quem é o mais burro?" | Yes, and steered off whoever it just hit |
 | `general` | A question about the world — football, cooking, code, advice | **None**, and no member profiles |
+
+One request is not a mode at all: a **counting** question ("quantas vezes é que
+o Rafa disse isso?") bypasses retrieval entirely. Top-k search returns the
+chunks nearest a question and cannot answer "how many times", so `src/chat/tally.py`
+scans the message log and hands the model a finished table to phrase.
 
 Any router failure falls back to `factual`, i.e. the old always-on behaviour, so
 a bad classification degrades to a correct-but-verbose answer rather than a wrong
@@ -110,6 +120,9 @@ KayaChatBot/
 │   │   ├── generate_local_synthetic.py # On-prem synthetic training data (local teacher)
 │   │   ├── local_teacher.py          # Shared 4-bit local teacher model
 │   │   ├── build_vector_db.py        # Build ChromaDB collections
+│   │   ├── ingest.py                 # Incremental, watermarked ingest of live messages
+│   │   ├── message_log.py            # Append-only per-scope log of everything the bot sees
+│   │   ├── identity_resolver.py      # Display name → canonical member
 │   │   ├── prepare_portuguese_data.py
 │   │   ├── merge_datasets.py
 │   │   ├── format_direct_training.py
@@ -122,13 +135,22 @@ KayaChatBot/
 │   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
 │   │   ├── whatsapp_adapter.py       # Event parsing, mention/whitelist gating, speaker identity
 │   │   ├── engine.py                 # Shared generation engine (web + WhatsApp)
-│   │   ├── router.py                 # Intent classification: banter/mixed/factual/general + commands
+│   │   ├── router.py                 # Intent classification: banter/mixed/factual/general/roast + commands
 │   │   ├── retriever.py              # RAG retrieval (conversations + KB)
 │   │   ├── summary.py                # Per-chat rolling summary, written off the reply path
+│   │   ├── tally.py                  # Counting questions, answered by scanning the log not by search
+│   │   ├── variety.py                # Keeps an open-ended answer off what it already said
+│   │   ├── metrics.py                # The one interaction log every surface writes to
+│   │   ├── feedback.py               # /bug, /feedback and 👍/👎 ratings
+│   │   ├── memory.py                 # Per-chat session history and voice/text preferences
+│   │   ├── waha_client.py            # Outbound WhatsApp calls (real + mock)
+│   │   ├── response_utils.py         # Member profiles, cleanup, language detection
+│   │   ├── face_utils.py             # Face detection, framing and identity scoring for edits
 │   │   ├── scope.py                  # What is group-wide memory vs private to one chat
 │   │   ├── stt.py / tts.py           # faster-whisper transcription, Piper speech
 │   │   ├── vision.py / imagegen.py   # Describing photos; making and editing them
 │   │   ├── web_search.py             # Grok web results, synthesized locally into the reply
+│   │   ├── suggestions.py            # The follow-up question chips in the web UI
 │   │   ├── inference_backend.py      # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
 │   │   ├── inference.py
 │   │   └── gpu_lock.py               # One generation at a time; summaries skip rather than queue
@@ -238,7 +260,7 @@ kaya_chatbot_env/bin/python src/chat/chat.py
 ```
 
 The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
-- `"both"` — JSON profiles + ChromaDB KB (recommended)
+- `"both"` — JSON profiles + ChromaDB KB
 - `"json_only"` — JSON profiles only
 - `"chromadb_only"` — ChromaDB KB only
 - `"none"` — baseline (conversation history only)
@@ -309,7 +331,7 @@ pipeline:
 
 ```yaml
 rag:
-  knowledge_approach: "both"
+  knowledge_approach: "json_only"   # what the live config uses
   # "both"          — JSON members in system prompt + ChromaDB KB retrieval
   # "json_only"     — JSON injection only
   # "chromadb_only" — ChromaDB KB retrieval only
@@ -357,6 +379,41 @@ inference:
 ```
 
 `KAYA_INFERENCE_BACKEND` overrides this; `KAYA_LLAMA_URL` overrides the server address.
+
+### Who maintains the bot
+
+The bot cannot change its own code, so a technical complaint has to be pointed at
+a person — and that person is in the group, which the rule naming him did not
+allow for. Asked by its own maintainer why image generation was bad, the bot
+answered that the maintainer had to deal with it.
+
+```yaml
+chat:
+  maintainer: "Gustavo"
+  maintainer_clause: "...diz que o {maintainer} tem de tratar disso..."
+  maintainer_self_clause: "...quem está a escrever agora é o {maintainer}..."
+```
+
+`{maintainer_clause}` is a placeholder in three prompts (`data.system_prompt`,
+`chat.modes.banter`, `chat.modes.mixed`), filled per turn by
+`engine.apply_speaker_rules` with whichever form matches the speaker.
+
+### Variety, and where it must not apply
+
+```yaml
+rag:
+  max_facts_per_member: 4    # a factual answer: the same facts every time
+  max_facts_open_ended: 3    # a roast or an opinion: a different draw every time
+inference:
+  variety_scan_interactions: 400   # how far back to look for what was already said
+  variety_lines_per_member: 3      # how many of those lines to show the model
+```
+
+An open-ended turn (`banter`, `mixed`, `roast`) rebuilds the system prompt with a
+random handful of each member's facts and is shown what it already said about
+whoever it is about. `factual` does neither: sampling would make "o que faz o
+Gil?" depend on whether his job survived the draw, and a counting question must
+return the same number every time it is asked.
 
 ## 🧪 Testing
 
@@ -430,7 +487,7 @@ and the run exits non-zero on a failed assertion, so it can gate a deploy.
 
 ### RAG Benchmarking
 - Set `knowledge_approach: "json_only"` for simplest setup (no vector KB needed)
-- Set `knowledge_approach: "both"` for best coverage
+- Set `knowledge_approach: "both"` for both sources at once (live config uses `json_only`, which scored best)
 - Set `knowledge_approach: "none"` to measure baseline performance without any knowledge injection
 
 ### Training
@@ -459,7 +516,8 @@ The codebase uses Pydantic models for type safety (see [src/models.py](src/model
 Docker configuration is available (`Dockerfile`, `docker-compose.yml`) with profiles for prod, dev, test, and the Cloudflare Tunnel. See `DEPLOYMENT.md` for the full runbook and `WHATSAPP.md` for the WhatsApp bridge.
 
 ```bash
-docker-compose up --build                          # prod web app
+docker compose --profile prod up -d kaya-prod      # prod web app (scripts/deploy_prod.sh wraps this)
+docker-compose up --build                          # the data → training pipeline, NOT the web app
 docker compose --profile dev up -d kaya-dev        # dev UI on :7861
 docker compose --profile test run --rm kaya-test   # test suite in-container
 docker compose --profile sim up -d kaya-sim        # conversation simulator target
