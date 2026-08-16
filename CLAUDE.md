@@ -276,6 +276,37 @@ a person. `--grid objects` (photos chosen with `--no-faces`, into
 likeness, which is undefined without a face. The face grid keeps the
 `likeness_x_adherence` key so its reports stay comparable with everything before.
 
+**Ran it (2026-08-16, `reports/image_bakeoff/objects_20260816T164851Z`, 5 arms ×
+4 photos × 5 edits).** Klein wins the object grid outright and is 2.5× faster:
+
+| arm | presv | adh | presv×adh | usable | secs |
+|---|---|---|---|---|---|
+| **flux2-klein** | 4.78 | **4.78** | **0.852** | **17/20** | **67** |
+| qwen-image-edit-2511 | 4.79 | 4.21 | 0.760 | 14/20 | 453 |
+| flux-kontext-objects | 4.58 | 3.90 | 0.716 | 13/20 | 82 |
+| flux-kontext-prod | 4.61 | 4.00 | 0.706 | 13/20 | 166 |
+
+Two results worth keeping, both of which contradict what the fix was assumed to
+be doing:
+
+- **The identity clause was not the problem.** `flux-kontext-objects` (the fix:
+  no clause, no crop, one take) scored 0.716 against `flux-kontext-prod`'s 0.706,
+  and 13/20 usable either way. That difference is noise. What the fix actually
+  buys is **half the wall time** (82s vs 166s), because best-of-N ranked by
+  ArcFace against a photo with no face was two renders to pick the first one.
+- **Every arm scores 5.0/5.0 on `swap-object`** — which is precisely the Monster
+  request ("transform the cans into X"). So the live failure was almost certainly
+  the *prompt rewriter* reframing an object edit as a person edit, not the editor
+  and not the clause. This grid does not test the rewriter; its instructions are
+  clean English that never mentions a person. That half is covered by unit tests.
+
+Klein's margin comes from `recolour` (3.2→5.0) and `change-setting` (4.2→5.0).
+**`remove-object` fails on everything** — Kontext scores adherence 1.0 on all four
+photos, Klein 3.0 — so an object *removal* is the request most likely to come back
+as "não consegui", which is at least honest: `noop_threshold` catches it rather
+than sending the unchanged photo. Qwen matches Klein on quality and costs 453s an
+image, 6.8× Klein's, which is not a trade a chat bot can make.
+
 **And a render used to leave no trace at all.** `whatsapp_server` skipped any
 result carrying a `command`, and `_handle_image_request` always sets one, so no
 image request reached `live_interactions.jsonl`; the translated instruction and

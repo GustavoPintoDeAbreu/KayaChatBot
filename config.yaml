@@ -441,7 +441,12 @@ chat:
     # the open editors on the public arena (1014 vs Klein's 1168), which is the
     # trade the group has been paying on every edit that is not a portrait.
     #
-    # Set from the object grid: scripts/image_bakeoff.py --grid objects.
+    # Measured, not assumed: the object grid on 2026-08-16 (100 cells,
+    # reports/image_bakeoff/objects_20260816T164851Z) put klein at 0.852
+    # preservation*adherence and 17/20 usable in 67s, against Kontext's 0.71 and
+    # 13/20 at 82-166s. Qwen-2511 matches klein on quality and costs 453s an
+    # image, 6.8x klein, which is not a trade a chat bot can make.
+    # Re-run: scripts/image_bakeoff.py --grid objects
     # Known editors: flux-kontext | flux2-klein | qwen-image-edit | qwen-image-edit-2511
     editors:
       person: "flux-kontext"
