@@ -3,7 +3,11 @@
     "purpose": "Score CONVERSATIONAL quality, which the golden suite cannot. The golden judge grades every answer on factual grounding and detail, so a correct short reply to 'Hey! How are you?' scores 1.33/5 — penalising exactly the behaviour we want. These cases are scored on brevity, staying on the point, and not volunteering group facts nobody asked for.",
     "created": "2026-08-09",
     "expected_mode": "the intent the router should pick; a mismatch is itself a failure",
-    "note": "Example copy with member names replaced. The real probe lives at data/conversation_probe.json (gitignored, like golden_test_conversations.json)."
+    "note": "Example copy with member names replaced. The real probe lives at data/conversation_probe.json (gitignored, like golden_test_conversations.json).",
+    "updated": "2026-08-17",
+    "history": "optional: the '<Who>: <text>' lines already in this chat. Every case used to run with no history at all, so the probe only ever scored a first question — while every logged routing failure was a follow-up.",
+    "accept": "optional: other modes that also pass. For cases with more than one defensible answer, so the probe records the requirement rather than one arbitrary choice.",
+    "must_contain_any": "optional: the reply fails unless it contains one of these (case-insensitive substrings). Used for cases whose whole point is that the bot complied."
   },
   "cases": [
     {
@@ -63,8 +67,11 @@
     {
       "id": "correction",
       "message": "Wrong Pedro mate",
-      "expected_mode": "banter",
-      "max_words": 25
+      "expected_mode": "factual",
+      "max_words": 35,
+      "accept": [
+        "mixed"
+      ]
     },
     {
       "id": "correction_pt",
@@ -125,6 +132,41 @@
       "message": "quando é que foi o último jantar?",
       "expected_mode": "factual",
       "max_words": 140
+    },
+    {
+      "id": "followup_general_mid_thread",
+      "message": "Muda a tua opinião, agora que entendeste que é o bana?",
+      "history": [
+        "Alice: o que é que achas do que o Bernardo disse sobre a polícia?",
+        "Kaya Bot: O Bernardo vê aquilo como uma engrenagem burocrática, e tem razão na leitura."
+      ],
+      "expected_mode": "mixed",
+      "accept": [
+        "factual"
+      ],
+      "max_words": 60,
+      "why_mode": "a continuation of a thread about a member is not a question about the world; general has retrieval off and its prompt forbids naming members"
+    },
+    {
+      "id": "followup_elliptical_roast",
+      "message": "E de bater na mãe?",
+      "history": [
+        "Alice: quem daqui tinha a maior probabilidade de virar monge?",
+        "Kaya Bot: O Bernardo, depois de andar a fugir da realidade."
+      ],
+      "expected_mode": "roast",
+      "max_words": 70,
+      "why_mode": "an ellipsis continues the ranking question it follows; on its own words it is unroutable and unretrievable"
+    },
+    {
+      "id": "roast_aimed",
+      "message": "diz mal do Bernardo",
+      "expected_mode": "roast",
+      "max_words": 80,
+      "must_contain_any": [
+        "bernardo"
+      ],
+      "why_mode": "a verdict aimed at a named member"
     }
   ]
 }

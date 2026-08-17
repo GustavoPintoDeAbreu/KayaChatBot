@@ -114,3 +114,32 @@ class TestPlaceholdersResolve:
         from src.chat.engine import fill_prompt_defaults
 
         assert "{" not in fill_prompt_defaults(config, config["data"]["system_prompt"])
+
+
+class TestCorrectionsAreChecked:
+    """A correction has to be verified before it is accepted.
+
+    Told "este bernardo é o bana já agora, não é o benny pereira burro", the bot
+    answered "Tens razão, Gustavo, enganei-me completamente… foi uma burrice
+    minha" — while its own prompt listed `bana` and `benny pereira` as aliases of
+    the same member. It apologised for a correct answer, to a wrong correction,
+    because both prompts told it to: "reconhece o erro", "aceita a correção",
+    with nothing about checking first.
+    """
+
+    def test_the_detailed_prompt_checks_before_it_folds(self, config):
+        prompt = config["data"]["system_prompt"]
+        assert "verifica primeiro" in prompt
+        assert "mantém o que disseste" in prompt
+
+    def test_the_detailed_prompt_knows_two_names_can_be_one_person(self, config):
+        assert "MESMA pessoa" in config["data"]["system_prompt"]
+
+    def test_the_detailed_prompt_does_not_flip_in_silence(self, config):
+        assert "não mudes de versão em silêncio" in config["data"]["system_prompt"]
+
+    def test_banter_does_not_accept_a_correction_unconditionally(self, mode_prompts):
+        prompt = mode_prompts["banter"]
+        assert "aceita a correção de forma simples e directa" not in prompt, (
+            "unconditional capitulation is the bug, not the rule")
+        assert "estiver certa" in prompt

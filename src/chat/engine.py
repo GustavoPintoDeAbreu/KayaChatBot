@@ -259,6 +259,10 @@ class KayaEngine:
         # look, and how many previous lines about one person to show.
         self._variety_window = int(self._inf.get("variety_scan_interactions", 400))
         self._variety_recall = int(self._inf.get("variety_lines_per_member", 3))
+        # How many recent openings a short reply is told not to reuse. 0 disables
+        # it. Separate from the per-member recall above: this one is about the
+        # shape of a sentence, not about who it is aimed at.
+        self._opener_window = int(self._inf.get("variety_recent_openers", 6))
         # Set by the surface (the WhatsApp bridge) so an open-ended turn can be
         # given a freshly drawn handful of member facts. Left None by the CLI,
         # the benchmarks and the tests, which must stay reproducible.
@@ -280,6 +284,7 @@ class KayaEngine:
         exclude_from: Optional[str] = None,
         extra_context: str = "",
         summary: str = "",
+        retrieval_query: str = "",
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -293,12 +298,18 @@ class KayaEngine:
         has in hand (today: the web-search result), prepended ahead of RAG.
         ``summary`` is this chat's rolling summary of what has already scrolled
         out of the verbatim window (see ``src/chat/summary.py``).
+
+        ``retrieval_query`` is the router's standalone rewrite of the message.
+        It is used for the vector search ONLY: "E de bater na mãe?" embeds to
+        nothing useful, while "quem do grupo tinha maior probabilidade de bater
+        na mãe?" embeds to the question actually being asked. What the model
+        reads is still the message the person wrote.
         """
         context = ""
         if retrieval and self.rag_enabled and self.retriever:
             try:
                 context = self.retriever.retrieve_all(
-                    message,
+                    retrieval_query or message,
                     knowledge_approach=self.knowledge_approach,
                     top_k=top_k,
                     scope=scope,
@@ -322,7 +333,13 @@ class KayaEngine:
             # previous answers back verbatim (the repetition / "stuck" bug).
             max_words = int(self._inf.get("history_max_words", 40))
             trimmed = [truncate_history_line(line, max_words) for line in recent_lines]
-            parts.append("Conversa recente:\n" + "\n".join(trimmed))
+            # Said outright, because these lines are no longer a transcript of
+            # turns the bot took part in: it now reads everything said in the
+            # chat, and most of it was people talking to each other.
+            parts.append(
+                "Conversa recente no grupo (a maior parte destas mensagens não foi "
+                "dirigida a ti, é o grupo a falar; lê-as para teres contexto e "
+                "responde só à última):\n" + "\n".join(trimmed))
         # Who is writing, said outright. In a group every history line looks like
         # "Nome: texto", so a final line in the same shape is a weak signal — and
         # it failed: asked "why he roasting ME in my iq guess", the bot carried on
@@ -393,6 +410,13 @@ class KayaEngine:
             # 1. What kind of message is this? Inside the lock, so the whole turn
             #    costs one acquisition. Never raises; falls back to `factual`.
             route = router.classify(self.backend, self.config, message, recent_lines)
+            # A GENERAL that names somebody the conversation is already about is
+            # a follow-up that lost its thread, not a question about the world.
+            # Corrected deterministically rather than by asking the model again.
+            route = self._reconcile(route, message, recent_lines)
+            # Everything downstream that asks "who is this turn about" reads the
+            # rewrite too, so an elliptical follow-up resolves to a person.
+            subject_text = f"{message} {route.query}".strip()
             mcfg = router.mode_config(self.config, route.mode)
 
             # A pure command ("responde só em áudio") is executed by the caller,
@@ -407,7 +431,7 @@ class KayaEngine:
             if route.command and route.command not in (router.CMD_AUDIO_ONCE,
                                                        router.CMD_COUNT):
                 return Reply(text="", route=route,
-                             telemetry=self._telemetry(route, "", message, ""))
+                             telemetry=self._telemetry(route, "", subject_text, ""))
 
             # Counting is not retrieval. Top-k semantic search returns the chunks
             # nearest the question, which cannot answer "how many times" — asked
@@ -507,6 +531,7 @@ class KayaEngine:
                 # Banter gets no summary: it retrieves nothing by design, and a
                 # paragraph of background would undo exactly what that mode is for.
                 summary="" if route.mode == router.BANTER else summary,
+                retrieval_query=route.query,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
@@ -518,14 +543,14 @@ class KayaEngine:
             if mcfg.get("mode_hint"):
                 user_turn += f"\n\n({mcfg['mode_hint']})"
             if route.mode == router.ROAST:
-                user_turn += self._roast_hint(message, recent_lines)
+                user_turn += self._roast_hint(subject_text, recent_lines)
             # `_roast_hint` keeps the bot off the same PERSON; this keeps it off
             # the same material about them. Peter asked to be roasted four times
             # over three days and got Rotterdam, editing other people's videos
             # and Five Guys every time — the per-chat repetition guard could not
             # see it, being per-chat and per-session.
             if open_ended:
-                user_turn += self._variety_hint(message, speaker)
+                user_turn += self._variety_hint(subject_text, speaker, route.mode)
             # Asked to think it through, the bot plans first and then answers
             # from the plan. Explicit request only — see wants_reasoning.
             if reasoning:
@@ -584,16 +609,42 @@ class KayaEngine:
             text=text,
             route=route,
             citation=citation,
-            telemetry=self._telemetry(route, context, message, text,
+            telemetry=self._telemetry(route, context, subject_text, text,
                                       reasoning=reasoning),
         )
 
-    def _variety_hint(self, message: str, speaker: str) -> str:
-        """What the bot has already said about whoever this turn is about.
+    def _reconcile(self, route: "router.Route", message: str,
+                   recent_lines: Optional[List[str]]) -> "router.Route":
+        """Apply the GENERAL→MIXED correction, if a retriever can name members.
+
+        Without a retriever there is no name detection, so the route is returned
+        untouched — the CLI and the benchmarks run that way and must keep the
+        router's own decision.
+        """
+        if not self.retriever:
+            return route
+        try:
+            named = self.retriever.named_members(f"{message} {route.query}")
+            if not named:
+                return route
+            window = int((self.config.get("chat", {}) or {}).get(
+                "router", {}).get("context_lines", 6))
+            recent = "\n".join((recent_lines or [])[-window:])
+            return router.reconcile(route, named, self.retriever.named_members(recent))
+        except Exception as exc:  # noqa: BLE001 — a correction is never worth a failure
+            print(f"⚠️  could not reconcile the route: {exc}")
+            return route
+
+    def _variety_hint(self, message: str, speaker: str, mode: str = "") -> str:
+        """What the bot has already said, and how it has already started saying it.
 
         The subjects are the members named in the message plus the speaker, so
         "roast me" resolves to the person asking — which is exactly the case that
         produced four near-identical roasts of Peter.
+
+        The opener half needs no subject at all, and is the reason this now runs
+        even when nobody is named: a banter reply is usually about nothing, and
+        it is banter that recycles the same three sentence shapes.
         """
         if not self.retriever:
             return ""
@@ -601,13 +652,15 @@ class KayaEngine:
             subjects = list(self.retriever.named_members(message))
             if speaker and speaker not in subjects and self.retriever.named_members(speaker):
                 subjects.append(speaker)
-            if not subjects:
-                return ""
             from src.chat import metrics
 
             rows = metrics.load_interactions(
                 metrics.log_path(self.config), limit=self._variety_window)
-            return variety.hint_for(subjects, rows, limit=self._variety_recall)
+            hint = variety.hint_for(subjects, rows, limit=self._variety_recall) \
+                if subjects else ""
+            if mode in (router.BANTER, router.MIXED) and self._opener_window:
+                hint += variety.opener_hint_for(rows, mode, limit=self._opener_window)
+            return hint
         except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
             print(f"⚠️  could not build the variety hint: {exc}")
             return ""
@@ -723,6 +776,8 @@ class KayaEngine:
             "route_command": route.command or "",
             "route_fallback": route.fallback,
             "route_raw": route.raw,
+            "route_query": route.query,
+            "route_reconciled_from": route.reconciled_from,
             "retrieval_enabled": route.retrieval_enabled,
             "retrieved_chars": len(context or ""),
             "reasoning_used": reasoning,

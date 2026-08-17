@@ -453,7 +453,10 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
         "não como uma lista formatada). Cada facto pertence à pessoa na cuja linha "
         "está e a mais ninguém: nunca atribuas a alguém um facto que está listado "
         "noutra pessoa. Se não souberes algo sobre quem te perguntam, di-lo, em vez "
-        "de usares o que sabes de outro membro:\n"
+        "de usares o que sabes de outro membro. Os nomes entre parênteses ('também "
+        "lhe chamam …') são a MESMA pessoa: trata-os como um só membro e, se "
+        "alguém insistir que são duas pessoas diferentes, corrige-o em vez de "
+        "concordares:\n"
     )
     # The roster has to state that it is complete. Asked "a que Kaya-Avenger devo
     # ligar?", the bot answered "liga à Mel" — Mel is not in the group and never

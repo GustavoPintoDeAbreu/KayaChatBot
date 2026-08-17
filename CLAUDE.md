@@ -30,6 +30,33 @@ profile and came back as a sourced report about Kaya. `general` answers the worl
 with **no group retrieval and no member profiles**. `retrieval_enabled` is
 `mode not in (BANTER, GENERAL)`.
 
+**A follow-up is not classified on its own words (2026-08-17).** The router saw
+`recent_lines[-2:]`, so mid-thread about the Bernardo, "Muda a tua opinião, agora
+que entendeste que é o bana?" came back **GENERAL** — the one mode forbidden from
+naming a member — and answered about him with retrieval off. Eleven GENERAL turns
+in the live log named somebody. Three changes, all in the one call the router
+already makes:
+
+- `chat.router.context_lines` (**6**) instead of two, plus explicit continuation
+  rules. A reaction stays BANTER however much the thread is about a person —
+  without that clause, six lines of context turned a third of banter into `mixed`
+  ("Conheço uns quantos ya" became a question about Gil).
+- the router also emits `Q: <standalone question>` on a second line, carried on
+  `Route.query` and used for **retrieval only** — the model still reads what the
+  person wrote. "E de bater na mãe?" becomes "quem do grupo tinha maior
+  probabilidade de bater na mãe?"; "Do que é que se trata a minha start up?"
+  becomes "a startup do Pedro". No `Q:` line means the raw message, i.e. the old
+  behaviour. `_parse` reads the label from the **first line only**, or a rewrite
+  restating the question would outvote it.
+- `router.reconcile` downgrades GENERAL→MIXED when the message names a member who
+  is **already in the recent lines**. Naming one is not enough on its own: "o Gil
+  também acha que o Ronaldo é melhor, e tu?" is a question about Ronaldo.
+
+A **correction about a member** routes FACTUAL even though it is not a question:
+checking it needs the profiles, and only the retrieving modes carry them.
+Verify with `scripts/replay_routing.py`, which re-routes a logged session against
+the interleaved history it actually had.
+
 **Live model (since 2026-08-08): a STOCK `gemma-4-12b-it` at Q6_K, with no LoRA.**
 A 14-config bake-off found the stock 12B beat the fine-tuned E4B on every judged
 dimension (xai-judged golden 3.846 vs 3.068, knowledge 2.94 vs 1.84, refusals 0%
@@ -94,7 +121,8 @@ kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --only images,audio
 
 # Model bake-off (candidate models across GPU configurations)
 scripts/fetch_bakeoff_models.sh                          # download candidate GGUFs (~262GB)
-kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint/in-voice/no-dash/compliance
+kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint/in-voice/no-dash/compliance (cases may carry `history` and `accept`)
+kaya_chatbot_env/bin/python scripts/replay_routing.py --date YYYY-MM-DD  # re-route a logged session against the history it really had
 kaya_chatbot_env/bin/python scripts/run_offensive_probe.py      # refusal rate; the group wants 0%
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
@@ -482,6 +510,43 @@ whether his job survived the draw, and `CMD_COUNT` borrows the factual mode
 config — it must not borrow this. Variety is for roasts, insults and opinions;
 a count must come out the same every time it is asked.
 
+**And the same sentence, not just the same material (2026-08-17).** All of the
+above guards WHO a joke is about. 198 of 339 routed turns were banter and they
+recycled the shape: *"Estás só a tentar X mas Y"*, *"É só mais um exemplo de
+alguém X"*, *"Pelo menos eu não Z"*. `variety.recent_openers` reads the first
+three words of the bot's recent replies **in that mode** out of the interaction
+log — cross-chat and cross-session, which `previous_bot_replies` (one chat, last
+four lines) structurally cannot be — and tells it not to open that way again.
+Banter and mixed only, `inference.variety_recent_openers` (**6**), and it runs
+even when nobody is named: a banter reply is usually about nothing, and it is
+banter that repeats itself.
+
+### Agreeing is not answering (2026-08-17)
+
+`data.system_prompt` said *"Se alguém te corrigir, reconhece o erro"* — with
+nothing about checking first — and the banter prompt said *"aceita a correção"*.
+So told *"este bernardo é o bana já agora, não é o benny pereira burro"*, the bot
+answered *"Tens razão, Gustavo, enganei-me completamente… foi uma burrice minha"*
+— while `bana` and `benny pereira` were both listed in its own prompt as aliases
+of the same member. It apologised for a correct answer, to a wrong correction.
+Forty seconds apart it also said Romano worked at Glovo, then flipped to Gil and
+accused Romano of *"desinformação"*; Romano has no `occupation` at all and Gil
+*"works remotely from WeWork in the Glovo building"*. Neither was right and it
+never said "não sei". Pedro got invented startup detail until he wrote *"Bruv is
+hallucinating hard"*.
+
+The clause is now conditional in all three prompts that carry one (detailed,
+banter, mixed): verify against the profiles, accept in one sentence if it holds,
+hold the position and say why if it does not, say you do not know if you have
+nothing — and **never open with "tens razão", "peço desculpa", "confundi" or
+"enganei-me"**. That last line is what finally moved it: given the check, the
+model found the right fact and then apologised anyway. `build_member_prompt_suffix`
+states that the names in *"também lhe chamam …"* are one person, and the detailed
+prompt adds a no-silent-flip rule and a no-embroidering rule for a member with only
+a generic line. `scripts/audit_interactions.py` wanted *"tens TODA a razão"* and so
+scored this morning clean on the very failure it exists to catch; its regex and its
+remediation pointer (which recommended the clause that caused this) are fixed.
+
 ### Slash commands, and why they must not be remembered (2026-08-13)
 
 `/clear` (`/limpar`), `/bug` (`/erro`) and `/feedback` (`/sugestao`) are matched
@@ -516,6 +581,28 @@ reached the model verbatim while the served context is 32768 tokens and needle
 recall is 60/60 out to 27,411. `whatsapp.history_turns` is **60** and
 `inference.history_max_words` (**40**) truncates each line, so the recent thread
 is carried instead of re-retrieved.
+
+**Those lines are the whole room now (2026-08-17).** `session_store.append` ran
+only on turns the bot ANSWERED, and in a group it answers on a mention or a reply,
+so its history was a thread of its own mentions stitched to its own replies. One
+live morning: 46 messages in the room, 29 in the prompt. It never saw "Bruh nunca
+vi programador tão fraco" or "Bruv is hallucinating hard", which is why a "toma
+aí" between them came back as an unrelated stock insult. The durable `MessageLog`
+had all of it; it just never reached the model. Every message the bot sees is now
+appended **before** the reply gate, mention-resolved, with the same
+`_is_command()` guard the log uses — this window feeds the rolling summary, and a
+week of `/bug` reports must not become things "the group said".
+
+Three consequences. The answered message is appended once, before the gate, and
+dropped from the `recent` it is handed back (it would otherwise arrive as both the
+question and something already said). `KeyedSessionMemory.max_lines` went 2x→3x
+`history_turns`, since a busy group writes several inbound lines per reply. And
+the retrieval-exclusion window is no longer a fraction: `_inbound_window` is gone,
+`_note_message_time` fires for every message, and `_session_window_start` takes the
+count of non-`Kaya Bot:` lines actually being sent. Getting that wrong opens a
+**hole**, not a duplicate — retrieval would drop chunks nothing carries verbatim.
+It is close to token-neutral: the window is capped in lines, so denser lines cover
+less time rather than costing more prefill.
 
 Past that window a per-chat **rolling summary** (`ChatSummaryStore` +
 `SummaryWriter`) is refreshed on a background thread and prepended to the user
@@ -572,6 +659,12 @@ full feature surface, ~10 min), `long_haul` (5 people, overflows the retrieval
 budget and the session window, ~28 min). Reports land in `reports/sim/<stamp>/`
 with an `index.html` contact sheet; the run exits non-zero on any failed
 assertion, so it can gate a deploy. Personas cost a few cents to ~€1 per run.
+
+`KAYA_SIM_LLAMA_URL` picks which llama-server answers. Unset (the default) it
+falls through to `inference.gguf.server_url`, i.e. **the one prod is using** —
+right for a run meant to mirror production, wrong when the point is to leave the
+live model alone. `http://llama-bench:8080` drives the bench server instead; that
+one has no `--mmproj`, so any preset involving photos needs the prod one.
 
 ### Config System (`src/config_loader.py`)
 

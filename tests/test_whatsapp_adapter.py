@@ -1240,11 +1240,12 @@ def test_the_window_start_follows_history_turns(tmp_path):
     base = 1_700_000_000
     for i in range(10):
         adapter.handle_event(_dm_at(f"mensagem {i}", base + i), system_prompt="")
-    # 6 lines is 3 answered turns, so the window covers the last THREE inbound
-    # messages — the 10th, 9th and 8th. It starts at the 8th (base + 7).
+    # In a DM with one reply per message, 6 lines is 3 answered turns: three
+    # inbound lines plus the message being answered, so the window covers four
+    # messages — the 10th, 9th, 8th and 7th. It starts at the 7th (base + 6).
     from datetime import datetime, timezone
 
-    expected = datetime.fromtimestamp(base + 7, tz=timezone.utc).replace(
+    expected = datetime.fromtimestamp(base + 6, tz=timezone.utc).replace(
         tzinfo=None).isoformat()
     assert seen["exclude_from"] == expected, (
         "the window must be measured in inbound messages, not session lines")
@@ -1308,11 +1309,12 @@ def test_a_responder_that_takes_no_summary_still_works(tmp_path):
 def test_the_exclusion_window_counts_inbound_messages_not_lines(tmp_path):
     """The window start must not reach back further than the prompt actually goes.
 
-    Each answered turn writes TWO session lines (the asker's and the bot's), so
-    `history_turns` lines is half that many inbound messages. Measuring the
-    exclusion window in lines pushes its start too far back, and retrieval then
-    drops chunks covering messages that are NOT held verbatim — a hole, not a
-    duplicate, and silent.
+    How many inbound messages `history_turns` lines represent is not a fixed
+    fraction: every message the bot SEES is a line now, so a burst of chatter
+    fills the window with inbound lines and a quiet exchange with alternating
+    ones. The count has to come from the lines actually being sent. Guessing it
+    pushes the start too far back, and retrieval then drops chunks covering
+    messages that are NOT held verbatim — a hole, not a duplicate, and silent.
     """
     adapter, seen = _capture_responder(tmp_path, history_turns=6)
     base = 1_700_000_000
@@ -1326,13 +1328,18 @@ def test_the_exclusion_window_counts_inbound_messages_not_lines(tmp_path):
     from datetime import datetime, timezone
 
     start = seen["exclude_from"]
-    oldest_inbound_ts = base + 12 - len(inbound)
+    # The prompt carries the history lines PLUS the message being answered.
+    carried = len(inbound) + 1
+    oldest_inbound_ts = base + 12 - carried
     earliest_allowed = datetime.fromtimestamp(
         oldest_inbound_ts, tz=timezone.utc).replace(tzinfo=None).isoformat()
     assert start >= earliest_allowed, (
         f"window starts at {start}, earlier than the oldest message actually in "
         f"the prompt ({earliest_allowed}) — chunks in between would be excluded "
         f"from retrieval without being carried verbatim")
+    assert start == earliest_allowed, (
+        "the boundary is counted from the lines being sent, so it should land "
+        "exactly on the oldest message carried, not short of it")
 
 
 # ── /bug and /feedback (2026-08-13) ──────────────────────────────────────────
@@ -2033,3 +2040,69 @@ def test_a_member_still_wins_over_the_bot_check(tmp_path):
     adapter, _ = _mention_adapter(tmp_path)
     adapter.bot_jids = {"237065786642635@lid"}
     assert adapter._name_for_jid("257487651496102") == "Rafa"
+
+
+# ── the bot reads the room (2026-08-17) ──────────────────────────────────────
+# In a group it replies on a mention or a reply, and it used to record only the
+# turns it answered. One live morning that was 46 messages in the room and 29 in
+# the prompt: it never saw "Bruh nunca vi programador tão fraco" or "Bruv is
+# hallucinating hard", which is why a "toma aí" between them came back as an
+# unrelated stock insult. The durable log had all of it; it just never reached
+# the model.
+
+def test_chatter_the_bot_was_not_addressed_in_reaches_the_next_turn(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=20)
+    adapter.handle_event(group_event("Bruh nunca vi programador tão fraco"),
+                         system_prompt="")
+    adapter.handle_event(group_event("toma aí", mention=True), system_prompt="")
+    assert any("programador tão fraco" in line for line in seen["recent"]), (
+        "a message the bot was not addressed in must still be in the context of "
+        "the next one it answers")
+
+
+def test_the_answered_message_is_not_also_handed_back_as_history(tmp_path):
+    """It is appended before the reply gate, so it would otherwise arrive twice —
+    once as the question and once as something already said."""
+    adapter, seen = _capture_responder(tmp_path, history_turns=20)
+    adapter.handle_event(group_event("toma aí", mention=True), system_prompt="")
+    assert not any("toma aí" in line for line in seen["recent"])
+
+
+def test_the_asker_is_stored_exactly_once(tmp_path):
+    adapter, _ = _capture_responder(tmp_path, history_turns=20)
+    adapter.handle_event(group_event("olá bot", mention=True), system_prompt="")
+    lines = adapter.session_store.recent(GROUP, None)
+    assert sum(1 for line in lines if "olá bot" in line) == 1
+
+
+def test_chatter_is_named_not_numbered(tmp_path):
+    """This window is also what the rolling summary is built from, and a line
+    stored as a bare @lid says nothing to the model or to the person filter."""
+    adapter, seen = _capture_responder(tmp_path, history_turns=20)
+    adapter.contacts[ALICE] = "Alice"
+    other = "351922222222@c.us"
+    event = group_event("@" + ALICE.split("@")[0] + " tas fraquinho", sender=other,
+                        name="Outro")
+    adapter.handle_event(event, system_prompt="")
+    adapter.handle_event(group_event("e então", mention=True), system_prompt="")
+    joined = "\n".join(seen["recent"])
+    assert "Alice" in joined and "tas fraquinho" in joined
+
+
+def test_a_slash_command_never_enters_the_verbatim_window(tmp_path):
+    """Same rule as the durable log: a week of bug reports must not become
+    things "the group said" — and this window feeds the rolling summary."""
+    adapter, seen = _capture_responder(tmp_path, history_turns=20)
+    adapter.handle_event(group_event("/bug não respondeu ao meu áudio"),
+                         system_prompt="")
+    adapter.handle_event(group_event("e então", mention=True), system_prompt="")
+    assert not any("não respondeu ao meu áudio" in line for line in seen["recent"])
+
+
+def test_the_bots_own_messages_are_not_read_back_as_chatter(tmp_path):
+    adapter, seen = _capture_responder(tmp_path, history_turns=20)
+    event = group_event("isto sou eu")
+    event["payload"]["fromMe"] = True
+    adapter.handle_event(event, system_prompt="")
+    adapter.handle_event(group_event("e então", mention=True), system_prompt="")
+    assert not any("isto sou eu" in line for line in seen["recent"])

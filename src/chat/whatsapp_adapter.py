@@ -428,11 +428,6 @@ class WhatsAppAdapter:
         )
         self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
-        # How many INBOUND messages those lines represent. An answered turn writes
-        # two lines (the asker's and the bot's), so it is half — and this is what
-        # the retrieval-exclusion window must be measured in. See
-        # _note_message_time for what goes wrong when the two disagree.
-        self._inbound_window = max(1, self.history_turns // 2)
         self.send_seen = bool(wcfg.get("send_seen", True))
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
@@ -440,9 +435,13 @@ class WhatsAppAdapter:
         # Message ids already answered, so a replay is not answered twice.
         self._answered_ids: "OrderedDict[str, bool]" = OrderedDict()
         self._answered_max = 2000
+        # Deeper than the read window, so the file always has more than the prompt
+        # asks for. It used to be 2x on the assumption of one asker line per bot
+        # line; now every message the bot SEES goes in, and in a busy group that
+        # is several inbound lines per reply.
         self.session_store = session_store or KeyedSessionMemory(
             base_dir=wcfg.get("sessions_dir", "data/whatsapp_sessions"),
-            max_lines=max(2 * self.history_turns, 20),
+            max_lines=max(3 * self.history_turns, 20),
         )
         # Sticky per-chat settings (currently the reply modality). "Responde só em
         # áudio" holds until changed, so it is state on disk, not a per-message flag.
@@ -604,28 +603,45 @@ class WhatsAppAdapter:
             return
         window = self._session_times.setdefault(chat_id, [])
         window.append(int(ts))
-        # Keep one timestamp per INBOUND message actually inside the window, not
-        # one per line. Each answered turn appends two lines to the session store
-        # — the asker's and the bot's — so `history_turns` lines is only half that
-        # many inbound messages.
+        # One timestamp per INBOUND message the bot saw. How many of those are
+        # still inside the verbatim window is not a fixed fraction any more —
+        # every message goes in, so a burst of chatter fills it with inbound
+        # lines and a quiet exchange with alternating ones. The caller counts the
+        # lines it is actually sending and asks for that many; this only bounds
+        # the list, since more lines than the window can hold is the one thing
+        # that is certainly wrong.
         #
         # Getting this wrong opens a hole rather than a duplicate: the window
         # start would sit further back than what the prompt actually carries, so
         # retrieval would drop chunks covering messages that are NOT held
         # verbatim, and nothing would have them. At history_turns=6 the hole was
         # three messages wide and easy to miss; at 60 it would be thirty.
-        del window[: max(0, len(window) - self._inbound_window)]
+        del window[: max(0, len(window) - self.history_turns)]
 
-    def _session_window_start(self, chat_id: str) -> Optional[str]:
+    @staticmethod
+    def _inbound_lines(recent: List[str]) -> int:
+        """How many of these history lines are messages rather than bot replies."""
+        return sum(1 for line in recent if not line.startswith("Kaya Bot:"))
+
+    def _session_window_start(self, chat_id: str,
+                              inbound_lines: Optional[int] = None) -> Optional[str]:
         """ISO timestamp of the oldest message still held verbatim in this chat.
 
         Retrieval drops chunks at or after this, so the session store owns recent
         history and the vector DB owns everything older — the two can never inject
         the same text. None when this chat has not been active since startup.
+
+        ``inbound_lines`` is how many messages the prompt is actually carrying,
+        counted by the caller from the lines it is about to send. Passing it makes
+        the boundary exact instead of a fraction assumed from the line budget.
+        Omitting it falls back to the whole tracked window, which errs old and can
+        open a hole — see ``_note_message_time``.
         """
         window = self._session_times.get(chat_id)
         if not window:
             return None
+        if inbound_lines is not None:
+            window = window[-max(1, inbound_lines):]
         return datetime.datetime.fromtimestamp(
             window[0], tz=datetime.timezone.utc
         ).replace(tzinfo=None).isoformat()
@@ -1129,14 +1145,20 @@ class WhatsAppAdapter:
         # Mention-stripped first: in a group the text arrives as "@Kaya /bug ...".
         _command = self._parse_command(self._strip_bot_mention(msg.text))
 
+        # Who wrote this, resolved once: the durable log, the verbatim window and
+        # the reply itself must all agree on the name, and resolve_speaker learns
+        # contacts as a side effect.
+        speaker = self.resolve_speaker(msg)
+        seen = (not msg.from_me and msg.text.strip() and not _command)
+
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth
         # keeping, and it would otherwise be dropped by the gate below.
-        if self.log_messages and not msg.from_me and msg.text.strip() and not _command:
+        if self.log_messages and seen:
             self.message_log.append(
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
-                sender=self.resolve_speaker(msg),
+                sender=speaker,
                 # Named, not numbered. This log is embedded into ChromaDB, and a
                 # message stored as "@257487651496102 tas fraquinho" can never be
                 # retrieved by a question about Rafa.
@@ -1153,14 +1175,36 @@ class WhatsAppAdapter:
 
         self._note_photo(msg)
 
-        if not self.should_respond(msg):
-            return None
-
-        speaker = self.resolve_speaker(msg)
         # Strip the bot's own mention, then name everybody else's: the resolved
         # text is what reaches the model, the retriever's person filter and the
         # session store, and a bare @lid is invisible to all three.
         text = self._resolve_mentions(self._strip_bot_mention(msg.text))
+        # A reply carries the message it answers, or it is a fragment.
+        quoted = self.quoted_context(msg)
+
+        # The verbatim window gets every message the bot SEES, not only the ones
+        # it answers. In a group it replies on a mention or a reply, so its own
+        # history was a thread of its own mentions stitched to its own answers:
+        # one live morning, 46 messages in the room and 29 in the prompt. It never
+        # saw "Bruh nunca vi programador tão fraco" or "Bruv is hallucinating
+        # hard", which is why a "toma aí" between them came back as an unrelated
+        # stock insult. The durable log already had all of it; it just never
+        # reached the model.
+        #
+        # Written BEFORE the reply gate, and skipped for a slash command for the
+        # same reason the log skips one: this window is also what the rolling
+        # summary is built from, and a week of bug reports must not become things
+        # "the group said".
+        own_line = ""
+        if seen and text:
+            own_line = (f"{speaker}: {quoted} {text}" if quoted
+                        else f"{speaker}: {text}")
+            self._note_message_time(msg.chat_id, msg.timestamp)
+            self.session_store.append(msg.chat_id, own_line)
+
+        if not self.should_respond(msg):
+            return None
+
         if not text:
             return None
 
@@ -1185,13 +1229,19 @@ class WhatsAppAdapter:
             self.waha_client.send_seen(msg.chat_id)
             self.waha_client.start_typing(msg.chat_id)
 
-        recent = self.session_store.recent(msg.chat_id, self.history_turns)
+        # One line further back, then drop the message being answered: it was
+        # appended above, and handing it to the model both as history and as the
+        # question is how a turn reads its own message as something already said.
+        recent = self.session_store.recent(msg.chat_id, self.history_turns + 1)
+        if own_line and recent and recent[-1] == own_line:
+            recent = recent[:-1]
+        else:
+            recent = recent[-self.history_turns:]
         # What long-term memory may this chat see, and from when. `recent` already
         # holds the last turns verbatim, so retrieval is told to skip anything
         # covering the same window rather than inject it twice.
-        self._note_message_time(msg.chat_id, msg.timestamp)
         scope = scope_for_chat(msg.chat_id, self.shared_chats)
-        exclude_from = self._session_window_start(msg.chat_id)
+        exclude_from = self._session_window_start(msg.chat_id, self._inbound_lines(recent) + 1)
         kwargs = {"scope": scope, "exclude_from": exclude_from}
         # Older responders (test stubs, the simulators) take no `summary`. Ask the
         # signature rather than catching TypeError, which would swallow a real one
@@ -1201,10 +1251,6 @@ class WhatsAppAdapter:
                 kwargs["summary"] = self.summary_writer.store.summary_for(msg.chat_id)
             except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
                 logger.warning("could not read the summary for this chat: %s", exc)
-        # A reply carries the message it answers, or it is a fragment. This is
-        # added AFTER the command checks, so "/bug" quoting something still reads
-        # as the command and not as a message about it.
-        quoted = self.quoted_context(msg)
         asked = f"{quoted}\n{text}" if quoted else text
         try:
             result = self.responder(asked, speaker, recent, **kwargs)
@@ -1251,12 +1297,8 @@ class WhatsAppAdapter:
         if not reply or not reply.strip():
             return None
 
-        # Persist both sides so the next turn in this chat has context. The
-        # quoted line goes in too: the parent is usually NOT in this history
-        # (the bot only records turns it answered), so dropping it here would
-        # make the follow-up turn as contextless as this one was.
-        self.session_store.append(
-            msg.chat_id, f"{speaker}: {quoted} {text}" if quoted else f"{speaker}: {text}")
+        # Only the bot's side is persisted here — the asker's line went in above,
+        # with every other message the bot saw, before the reply gate.
         self.session_store.append(msg.chat_id, f"Kaya Bot: {reply}")
 
         # Quote the asker's message in groups so it's clear who the bot answers.

@@ -117,17 +117,32 @@ def main() -> None:
 
     for case in cases:
         t0 = time.perf_counter()
-        reply = engine.respond(case["message"], args.speaker, None, system_prompt)
+        # `history` is what makes a follow-up testable at all. Every case used to
+        # be handed None, so the probe scored a bot that had just been asked its
+        # first question — while the live failures were all continuations: a
+        # thread about the Bernardo, then "Muda a tua opinião, agora que
+        # entendeste que é o bana?", classified GENERAL and answered with
+        # retrieval off.
+        reply = engine.respond(case["message"], args.speaker,
+                               case.get("history") or None, system_prompt)
         elapsed = time.perf_counter() - t0
 
         text = (reply.text or "").strip()
         words = len(text.split())
         mode = getattr(reply.route, "mode", "?") if reply.route else "?"
         want = case["expected_mode"]
+        # Some cases have more than one defensible answer, and pretending
+        # otherwise turns the probe into a record of one arbitrary choice. A
+        # follow-up asking the bot to revise an opinion about a member is fine as
+        # `factual` and fine as `mixed`; what it must not be is `general`, which
+        # answers with no group memory at all. `accept` names the others.
+        accepted = {want, *(case.get("accept") or [])}
 
         # Members named in the reply that were not named in the prompt — the
-        # "answered 😂 with a paragraph about Gil" failure.
-        asked = case["message"].lower()
+        # "answered 😂 with a paragraph about Gil" failure. The history counts as
+        # having named them: continuing to talk about whoever the thread is
+        # already about is the opposite of volunteering somebody.
+        asked = " ".join([case["message"], *(case.get("history") or [])]).lower()
         volunteered = sorted(
             n for n in members
             if re.search(rf"\b{re.escape(n)}\b", text.lower()) and n not in asked
@@ -138,13 +153,16 @@ def main() -> None:
         row = {
             "id": case["id"], "message": case["message"],
             "expected_mode": want, "actual_mode": mode,
-            "routing_ok": mode == want,
+            "routing_ok": mode in accepted,
+            "accepted_modes": sorted(accepted),
             "words": words, "max_words": case["max_words"],
             "brevity_ok": words <= case["max_words"],
             "volunteered_members": volunteered,
-            # Only factual answers are expected to name members; that is the point
-            # of the mode. `general` must not — the question is not about them.
-            "restraint_ok": want == "factual" or not volunteered,
+            # The informational and aimed modes are expected to name members;
+            # that is the point of them. `general` and `banter` must not — the
+            # question is not about anybody.
+            "restraint_ok": bool(accepted & {"factual", "roast", "mixed"})
+                            or not volunteered,
             "substance_ok": words > 0,
             "robotic_match": robotic.group(0) if robotic else "",
             "in_voice_ok": robotic is None,

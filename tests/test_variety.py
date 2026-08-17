@@ -170,3 +170,64 @@ class TestFactDraw:
         thin = {"members": [{"name": "Murgeiro", "aliases": [], "key_facts": ["aparece sempre"]}]}
         text = build_member_prompt_suffix(thin, max_facts=4, sample_facts=True)
         assert "aparece sempre" in text
+
+
+class TestRecentOpeners:
+    """Banter repeats its own sentence SHAPE, which the per-member guard cannot see.
+
+    198 of the 339 routed turns in the live log were banter, recycling a handful
+    of openings: "Estás só a tentar parecer profundo…", "Estás a tentar dar um
+    golpe de mestre…", "É só mais um exemplo de alguém…", "Pelo menos eu não…".
+    `previous_bot_replies` reads one chat's last four lines and so cannot catch a
+    shape that recurs across chats and across days; the interaction log can.
+    """
+
+    @staticmethod
+    def _row(reply, mode="banter", command=""):
+        return {"route_mode": mode, "route_command": command,
+                "assistant_response": reply}
+
+    def test_it_collects_how_replies_started(self):
+        rows = [self._row("Estás só a tentar parecer profundo mas não tens conteúdo"),
+                self._row("Pelo menos eu não finjo que tenho personalidade")]
+        openers = variety.recent_openers(rows, "banter")
+        assert "Pelo menos eu" in openers and "Estás só a" in openers
+
+    def test_newest_first(self):
+        rows = [self._row("Antiga resposta qualquer aqui"),
+                self._row("Recente resposta qualquer aqui")]
+        assert variety.recent_openers(rows, "banter")[0] == "Recente resposta qualquer"
+
+    def test_the_same_opening_is_listed_once(self):
+        rows = [self._row("Estás só a tentar parecer profundo"),
+                self._row("Estás só a tentar dar um golpe de mestre")]
+        assert len(variety.recent_openers(rows, "banter")) == 1
+
+    def test_another_mode_is_not_material(self):
+        rows = [self._row("O Gil trabalha em vendas com bónus altos", mode="factual")]
+        assert variety.recent_openers(rows, "banter") == []
+
+    def test_a_command_answer_is_not_material(self):
+        rows = [self._row("O Rafa disse isso 198 vezes", command="count")]
+        assert variety.recent_openers(rows, "banter") == []
+
+    def test_a_two_word_reply_carries_no_shape(self):
+        assert variety.recent_openers([self._row("Pois é")], "banter") == []
+
+    def test_the_limit_is_respected(self):
+        rows = [self._row(f"Abertura número {i} qualquer") for i in range(20)]
+        assert len(variety.recent_openers(rows, "banter", limit=4)) == 4
+
+    def test_the_hint_names_them_and_asks_for_another(self):
+        hint = variety.build_opener_hint(["Estás só a", "Pelo menos eu"])
+        assert "Estás só a" in hint and "Pelo menos eu" in hint
+        assert "outra maneira" in hint
+
+    def test_no_openers_means_no_hint(self):
+        assert variety.build_opener_hint([]) == ""
+
+    def test_a_broken_log_costs_no_reply(self):
+        assert variety.opener_hint_for([{"route_mode": None}], "banter") == ""
+
+    def test_punctuation_does_not_split_one_shape_into_two(self):
+        assert variety.opener_of("Pois é, o mundo está cheio") == "Pois é"

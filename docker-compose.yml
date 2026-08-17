@@ -308,6 +308,13 @@ services:
       - KAYA_ENV=sim
       - KAYA_VERSION=${KAYA_VERSION:-sim}
       - KAYA_INFERENCE_BACKEND=gguf
+      # Which llama-server answers. Empty (the default) falls through to
+      # inference.gguf.server_url, i.e. the one prod is using — which is the right
+      # default for a run that is meant to mirror production, and the wrong one
+      # when the point is to leave the live model alone. Set it to
+      # http://llama-bench:8080 to drive a bench server instead. Note that server
+      # has no --mmproj, so presets involving photos need the prod one.
+      - KAYA_LLAMA_URL=${KAYA_SIM_LLAMA_URL:-}
       # Mock: no WAHA, no real messages. Also skips the ingest scheduler, so the
       # harness controls when (and whether) anything is ingested.
       - KAYA_WHATSAPP_MOCK=1

@@ -250,3 +250,94 @@ def test_the_prompt_describes_counting():
     assert "CMD_COUNT" in system
     # The distinction that matters: a fact about the group is not a tally.
     assert "quantos membros tem o grupo?\" -> FACTUAL" in system
+
+
+# ── the standalone rewrite, and the thread it comes from (2026-08-17) ─────────
+# A follow-up is unroutable and unretrievable on its own words. Mid-thread about
+# the Bernardo, "Muda a tua opinião, agora que entendeste que é o bana?" was
+# classified GENERAL — the one mode whose prompt forbids naming a member — and
+# "E de bater na mãe?" was embedded into the vector store as that literal string.
+
+def test_the_rewrite_is_carried_on_the_route():
+    route = router.classify(
+        StubBackend("ROAST\nQ: quem do grupo tinha maior probabilidade de bater na mãe?"),
+        _config(), "E de bater na mãe?")
+    assert route.mode == router.ROAST
+    assert route.query == "quem do grupo tinha maior probabilidade de bater na mãe?"
+
+
+def test_no_rewrite_leaves_the_query_empty():
+    """The caller then falls back to the raw message, i.e. the old behaviour."""
+    route = router.classify(StubBackend("BANTER"), _config(), "Ahahhha")
+    assert route.mode == router.BANTER and route.query == ""
+
+
+def test_the_label_is_read_from_the_first_line_only():
+    """A rewrite restating the question must not outvote the chosen label."""
+    route = router.classify(
+        StubBackend("BANTER\nQ: quantas vezes é que o Gil disse isso?"),
+        _config(), "ya")
+    assert route.mode == router.BANTER and route.command is None
+
+
+def test_a_rambling_rewrite_is_dropped_rather_than_embedded():
+    """Past a sane length the model is answering, not restating, and a paragraph
+    is a worse search query than the original message."""
+    route = router.classify(
+        StubBackend("FACTUAL\nQ: " + " ".join(["palavra"] * 60)),
+        _config(), "e ele?")
+    assert route.mode == router.FACTUAL and route.query == ""
+
+
+def test_the_classifier_sees_more_than_two_lines_of_thread():
+    backend = StubBackend("MIXED")
+    lines = [f"Pessoa: linha {i}" for i in range(10)]
+    router.classify(backend, _config(context_lines=6), "e ele?", lines)
+    user = backend.calls[0]["messages"][1]["content"]
+    assert "linha 4" in user and "linha 9" in user
+    assert "linha 3" not in user
+
+
+def test_the_prompt_asks_for_a_standalone_rewrite():
+    backend = StubBackend("BANTER")
+    router.classify(backend, _config(), "e ele?")
+    system = backend.calls[0]["messages"][0]["content"]
+    assert "Q: " in system
+    assert "CONTINUATION" in system
+
+
+# ── reconcile: a GENERAL that is really mid-thread ───────────────────────────
+
+def _route(mode, **kw):
+    return router.Route(mode=mode, **kw)
+
+
+def test_a_general_naming_someone_already_in_the_thread_becomes_mixed():
+    route = router.reconcile(_route(router.GENERAL), ["Bernardo"], ["Bernardo", "Gustavo"])
+    assert route.mode == router.MIXED
+    assert route.reconciled_from == router.GENERAL
+    assert route.retrieval_enabled is True
+
+
+def test_a_general_about_a_fresh_subject_stays_general():
+    """"o Gil também acha que o Ronaldo é melhor, e tu?" is a question about
+    Ronaldo. Naming a member is not on its own enough to make it about him."""
+    route = router.reconcile(_route(router.GENERAL), ["Gil"], ["Peter"])
+    assert route.mode == router.GENERAL and route.reconciled_from == ""
+
+
+def test_reconcile_leaves_every_other_mode_alone():
+    for mode in (router.BANTER, router.MIXED, router.FACTUAL, router.ROAST):
+        route = router.reconcile(_route(mode), ["Bernardo"], ["Bernardo"])
+        assert route.mode == mode and route.reconciled_from == ""
+
+
+def test_reconcile_never_overrides_a_command():
+    route = router.reconcile(
+        _route(router.GENERAL, command=router.CMD_IMAGE), ["Rafa"], ["Rafa"])
+    assert route.command == router.CMD_IMAGE and route.mode == router.GENERAL
+
+
+def test_the_match_is_case_insensitive():
+    route = router.reconcile(_route(router.GENERAL), ["Bernardo"], ["bernardo"])
+    assert route.mode == router.MIXED

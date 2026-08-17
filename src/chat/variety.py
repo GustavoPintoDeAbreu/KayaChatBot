@@ -27,6 +27,7 @@ a new way.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from src.chat.response_utils import truncate_history_line
@@ -128,4 +129,69 @@ def hint_for(members: Sequence[str], rows: Iterable[Dict[str, Any]],
         return build_hint(recent_lines_about(members, rows, limit=limit))
     except Exception as exc:  # noqa: BLE001 — a hint is never worth a dropped reply
         logger.warning("could not build the variety hint: %s", exc)
+        return ""
+
+
+# How many words of a reply count as its opening. Three is enough to catch the
+# shape ("Estás só a", "É só mais", "Pelo menos eu") without pinning the whole
+# clause, which would only forbid the exact sentence the near-duplicate check
+# already catches.
+OPENER_WORDS = 3
+
+
+def opener_of(reply: str, words: int = OPENER_WORDS) -> str:
+    """The first few words of a reply, normalised for comparison and display.
+
+    Cut at the first clause boundary inside that window, so "Pois é, o mundo está
+    cheio" and "Pois é, isso mesmo" are recognised as the same opening rather
+    than as two different three-word strings.
+    """
+    tokens = " ".join((reply or "").split()).split(" ")
+    head = " ".join(tokens[:words])
+    clause = re.split(r"[,;:!?.]", head, maxsplit=1)[0]
+    return (clause or head).strip(" ,.;:!?")
+
+
+def recent_openers(rows: Iterable[Dict[str, Any]], mode: str,
+                   limit: int = 6) -> List[str]:
+    """How the bot has been starting its replies in this mode lately.
+
+    198 of the 339 routed turns in the live log were banter, and they recycle a
+    handful of openings — "Estás só a tentar…", "É só mais um exemplo…", "Pelo
+    menos eu não…". ``previous_bot_replies`` cannot see this: it reads one chat's
+    last four lines, and the shape recurs across chats and across days. The
+    interaction log can, and is already being loaded for ``recent_lines_about``.
+
+    Newest first and deduplicated, so a shape used three times costs one line.
+    """
+    seen: List[str] = []
+    for row in reversed(list(rows)):
+        if row.get("route_mode") != mode or row.get("route_command"):
+            continue
+        reply = (row.get("assistant_response") or "").strip()
+        if len(reply.split()) < 3:
+            continue
+        opener = opener_of(reply)
+        if opener and opener.lower() not in {item.lower() for item in seen}:
+            seen.append(opener)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def build_opener_hint(openers: Sequence[str]) -> str:
+    """The nudge that keeps a short reply from reusing its own opening."""
+    if not openers:
+        return ""
+    return ("\n\n(Já começaste respostas assim: " + "; ".join(openers) +
+            ". Começa esta de outra maneira e com outra construção.)")
+
+
+def opener_hint_for(rows: Iterable[Dict[str, Any]], mode: str,
+                    limit: int = 6) -> str:
+    """``recent_openers`` and ``build_opener_hint`` in one call. "" on failure."""
+    try:
+        return build_opener_hint(recent_openers(rows, mode, limit=limit))
+    except Exception as exc:  # noqa: BLE001 — a hint is never worth a dropped reply
+        logger.warning("could not build the opener hint: %s", exc)
         return ""

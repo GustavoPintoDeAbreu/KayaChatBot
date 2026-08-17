@@ -30,13 +30,22 @@ because `whatsapp_server._process` DROPS a message when the lock is contended
 rather than queueing it — taking the lock twice would double the drop rate in a
 busy group.
 
-Any failure falls back to `factual`, i.e. exactly the previous behaviour.
+The same call also rewrites the message as a **standalone question** (`Q:`),
+because a follow-up is unroutable and unretrievable on its own words. The live
+logs show both halves failing at once: mid-thread about Bernardo, "Muda a tua
+opinião, agora que entendeste que é o bana?" was classified GENERAL — the one
+mode whose prompt forbids naming a member — and "E de bater na mãe?" was embedded
+into the vector store as that literal string. The rewrite is for the router and
+the embedder; the model still reads the message the person actually wrote.
+
+Any failure falls back to `factual`, i.e. exactly the previous behaviour, and a
+missing `Q:` line simply leaves the raw message as the retrieval query.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Any, Dict, List, Optional, Sequence
 
 BANTER = "banter"
 MIXED = "mixed"
@@ -67,9 +76,9 @@ _LABELS = {
     "CMD_COUNT": (None, CMD_COUNT),
 }
 
-_ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens and nothing else:
+_ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens on the first line:
 
-BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me".
+BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Naming a member does not change that when nothing about them has to be looked up. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me", "manda o Gil para o caralho", "diz mal deste aqui".
 MIXED — chat that references a person or event but is not really asking to be informed. Examples: "o Rafa outra vez a fazer disso", "ainda me lembro daquele jantar".
 FACTUAL — a request for information, memory or detail about THE GROUP: its members, its history, what was said or shared in it. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?", "quem mandou aquela foto do barco?".
 ROAST — asking the bot to judge, rank, mock or pick on someone in the group. The answer is aimed AT a member rather than being information about one. Examples: "quem é o mais burro?", "roast the Gil", "quem tem o search history mais sus?", "diz mal do Pedro", "quem é que ganha uma luta aqui?", "who's the biggest loser here?".
@@ -85,6 +94,16 @@ FACTUAL and GENERAL differ only in whether the group is the subject. If answerin
   "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
   "o Gil joga à bola?" -> FACTUAL (the question is about Gil)
   "manda o Gil para o caralho, e já agora quem ganhou a Champions?" -> GENERAL (nothing has to be looked up about Gil)
+
+A CORRECTION about a member — their name, who they are, what they do, what they
+said — is FACTUAL even though it is not phrased as a question, because answering
+it means checking it against what is known about that member, and only FACTUAL is
+given that to check against:
+  "esse não é o Gil, é o Peter" -> FACTUAL
+  "este bernardo é o bana, não é o benny pereira" -> FACTUAL
+  "o Romano nunca trabalhou na Glovo" -> FACTUAL
+  "estás enganado" -> the mode the thread is in
+  "escreveste isso mal" -> BANTER (about the message, not about a member)
 
 FACTUAL and ROAST differ in what the answer is FOR. Information about a member is FACTUAL; a verdict aimed at one is ROAST:
   "o que faz o Gil?" -> FACTUAL (asking to be informed)
@@ -110,17 +129,61 @@ CMD_COUNT is only for questions that need TALLYING every message. A question abo
   "quantas vezes é que o Gil falou de correr?" -> CMD_COUNT (every message has to be counted)
   "o Rafa diz muito isso" -> MIXED (an observation, not a request for a number)
 
-Reply with the token only."""
+A message is often a CONTINUATION of the recent conversation rather than a new
+subject: a pronoun with no antecedent, an ellipsis, a challenge, a bare "e o X?".
+Classify those by what the recent conversation is ABOUT, not by the isolated
+sentence. Given a recent thread about the Bernardo:
+  "e ele?" -> the mode the thread is in, not BANTER
+  "muda a tua opinião, agora que percebeste?" -> FACTUAL (still about Bernardo)
+  "porquê?" -> the mode the thread is in
+  "e de bater na mãe?" after "quem tinha mais probabilidade de virar monge?" -> ROAST
+A message that starts a genuinely new subject is classified on its own, even if
+the recent conversation was about something else.
+
+But most of a group chat is people reacting to each other, and a reaction stays
+BANTER however much the thread around it is about somebody. Agreement, laughter,
+a jab, a protest and a throwaway aside are social noise even mid-conversation, and
+nothing has to be looked up to answer them. In a thread about the Gustavo being a
+bad programmer:
+  "É isso mesmo. É o chamado fala barato" -> BANTER (agreeing, not asking)
+  "Conheço uns quantos ya" -> BANTER (an aside about nobody in particular)
+  "Calma crl. Tava a elogiar te" -> BANTER (protesting at the bot)
+  "ja sao amiguinhos e o crl" -> BANTER (a jab at the exchange itself)
+  "o Gustavo até programava bem no outro projeto" -> MIXED (an actual claim about him)
+MIXED needs the message to say something ABOUT a person or an episode. If the
+subject only exists in the lines above it, it is BANTER.
+
+Then, on a SECOND line, write "Q: " followed by the message rewritten as a
+standalone question or request, with every pronoun and ellipsis resolved from the
+recent conversation, naming the people it is about. This is used to search the
+group's memory, so it must stand on its own without the conversation:
+  "e ele?" -> Q: o Bernardo também faz isso?
+  "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
+  "quem é o Peter?" -> Q: quem é o Peter?
+  "do que se trata a minha start up?" -> Q: do que se trata a startup do Pedro?
+Omit the Q: line entirely when there is nothing to look up — for BANTER and for
+pure commands. Do not invent a question that was not asked:
+  "Conheço uns quantos ya" -> no Q: line (nobody asked anything)
+  "Ahahhha" -> no Q: line
+
+Reply with the token, and the Q: line when there is one. Nothing else."""
 
 
 @dataclass
 class Route:
-    """The routing decision for one inbound message."""
+    """The routing decision for one inbound message.
+
+    ``query`` is the message rewritten to stand on its own, used for retrieval
+    and for working out who the turn is about. Empty when the router did not
+    supply one, in which case every caller falls back to the raw message.
+    """
 
     mode: str
     command: Optional[str] = None
     raw: str = ""
     fallback: bool = False
+    query: str = ""
+    reconciled_from: str = ""
 
     @property
     def retrieval_enabled(self) -> bool:
@@ -137,17 +200,72 @@ def mode_config(config: Dict[str, Any], mode: str) -> Dict[str, Any]:
     return modes.get(mode, {}) or {}
 
 
+_QUERY_RE = re.compile(r"^\s*Q\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+# A rewrite longer than this is the model answering the question instead of
+# restating it, and feeding a paragraph to the embedder is worse than feeding the
+# original message.
+_MAX_QUERY_WORDS = 40
+
+
+def _parse_query(text: str) -> str:
+    """The standalone rewrite, or "" when the router did not give a usable one."""
+    match = _QUERY_RE.search(text or "")
+    if not match:
+        return ""
+    query = " ".join(match.group(1).split())
+    if not query or len(query.split()) > _MAX_QUERY_WORDS:
+        return ""
+    return query
+
+
 def _parse(text: str) -> Optional[Route]:
-    """Pull a known label out of the model's output, tolerating stray tokens."""
+    """Pull a known label out of the model's output, tolerating stray tokens.
+
+    The label scan runs over the first line only. It used to see the whole
+    output, which was safe when the output WAS the label; now that a ``Q:`` line
+    follows it, a rewrite like "quem é o mais burro do grupo?" would otherwise
+    let a stray word in the restated question outvote the label the model chose.
+    """
     if not text:
         return None
-    upper = text.upper()
+    head = text.strip().splitlines()[0] if text.strip() else ""
+    upper = head.upper()
     # Longest labels first so CMD_TEXT is not shadowed by a bare TEXT match.
     for label in sorted(_LABELS, key=len, reverse=True):
         if re.search(rf"\b{label}\b", upper):
             mode, command = _LABELS[label]
-            return Route(mode=mode or FACTUAL, command=command, raw=text.strip())
+            return Route(mode=mode or FACTUAL, command=command, raw=text.strip(),
+                         query=_parse_query(text))
     return None
+
+
+def reconcile(route: Route, named_in_message: Sequence[str],
+              named_in_recent: Sequence[str]) -> Route:
+    """Correct a GENERAL that is really the middle of a thread about a member.
+
+    `general` exists to answer the world with no group retrieval and no member
+    profiles, and its prompt says so outright: "não menciones membros do grupo".
+    The live logs show it firing 11 times on turns that named one anyway. The
+    clearest case is a follow-up: a thread about the Bernardo, then "Muda a tua
+    opinião, agora que entendeste que é o bana?" — classified GENERAL, answered
+    entirely about Bernardo, with retrieval switched off.
+
+    Deliberately narrow and stateless. A member named in the message is not
+    enough on its own: "o Gil também acha que o Ronaldo é melhor, e tu?" is a
+    question about Ronaldo and must stay GENERAL. It only downgrades when that
+    same member is ALREADY in the recent conversation, which is what makes the
+    message a continuation rather than a new subject.
+
+    `mixed` rather than `factual`: the turn is still chat, so it retrieves and
+    keeps the member profiles but answers short.
+    """
+    if route.mode != GENERAL or route.command:
+        return route
+    in_recent = {str(name).lower() for name in named_in_recent}
+    if not any(str(name).lower() in in_recent for name in named_in_message):
+        return route
+    return replace(route, mode=MIXED, reconciled_from=GENERAL)
 
 
 def classify(
@@ -170,11 +288,15 @@ def classify(
     if not text:
         return Route(mode=BANTER, raw="(empty)", fallback=True)
 
-    # A couple of lines of context so "e o Rafa?" is read as a follow-up rather
-    # than as noise. Kept tiny — this call must stay cheap.
+    # Enough context that a follow-up is read as one. Two lines was not: a
+    # thread about the Bernardo, then "Muda a tua opinião, agora que entendeste
+    # que é o bana?", and the two lines in front of the router held the bot's own
+    # last answer and nothing that said who the thread was about. Still bounded —
+    # this call runs on every message and re-prefills from scratch.
     context = ""
     if recent_lines:
-        context = "Recent conversation:\n" + "\n".join(recent_lines[-2:]) + "\n\n"
+        window = max(1, int(rcfg.get("context_lines", 6)))
+        context = "Recent conversation:\n" + "\n".join(recent_lines[-window:]) + "\n\n"
 
     messages = [
         {"role": "system", "content": _ROUTER_SYSTEM},
@@ -183,7 +305,7 @@ def classify(
     try:
         raw = backend.generate(
             messages,
-            max_new_tokens=int(rcfg.get("max_new_tokens", 8)),
+            max_new_tokens=int(rcfg.get("max_new_tokens", 48)),
             sampling={
                 "temperature": float(rcfg.get("temperature", 0.0)),
                 "top_p": 1.0,
