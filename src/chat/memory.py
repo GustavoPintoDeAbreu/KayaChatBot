@@ -27,9 +27,18 @@ class SessionMemory:
     no external dependencies beyond the standard library.
     """
 
-    MAX_SAVED_MESSAGES = 100  # Hard cap to prevent unbounded file growth
+    # Default cap, for the standalone CLI. A caller that keeps a larger window
+    # MUST pass its own: this used to be an unconditional 100 that silently
+    # overrode KeyedSessionMemory.max_lines (180), and because the summary
+    # trigger compares lines_seen against len(history), a window pinned at 100
+    # with lines_seen at 90 could never again reach the 30-line threshold. The
+    # group's rolling summary was dead from 2026-08-13 to 2026-09-04 on exactly
+    # that arithmetic.
+    MAX_SAVED_MESSAGES = 100
 
-    def __init__(self, history_file: str = "data/chat_history.json"):
+    def __init__(self, history_file: str = "data/chat_history.json",
+                 max_messages: Optional[int] = None):
+        self.max_messages = int(max_messages or self.MAX_SAVED_MESSAGES)
         self.history_file = Path(history_file)
         # Resolve relative to project root if not absolute
         if not self.history_file.is_absolute():
@@ -58,14 +67,14 @@ class SessionMemory:
     def save(self, history: List[str]) -> bool:
         """Save history to local file. Returns True on success, False on failure.
         
-        Caps the stored history at MAX_SAVED_MESSAGES to prevent unbounded growth.
+        Caps the stored history at ``max_messages`` to prevent unbounded growth.
         """
         if not history:
             return True
         try:
             self.history_file.parent.mkdir(parents=True, exist_ok=True)
             # Apply hard cap before saving
-            to_save = history[-self.MAX_SAVED_MESSAGES:]
+            to_save = history[-self.max_messages:]
             # Atomic write: write to a temp file in the same directory, then
             # os.replace() so a crash mid-write can't corrupt the history file.
             # The temp name carries the writer's identity because it used to be a
@@ -135,7 +144,11 @@ class KeyedSessionMemory:
         with self._lock:
             if chat_id not in self._stores:
                 path = self.base_dir / f"{_safe_key(chat_id)}.json"
-                self._stores[chat_id] = SessionMemory(str(path))
+                # The window size is ours, not SessionMemory's default. Letting
+                # its 100 win is what killed the rolling summary; see the note on
+                # MAX_SAVED_MESSAGES.
+                self._stores[chat_id] = SessionMemory(
+                    str(path), max_messages=self.max_lines)
             return self._stores[chat_id]
 
     def _chat_lock(self, chat_id: str) -> threading.Lock:

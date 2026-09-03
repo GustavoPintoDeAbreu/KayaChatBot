@@ -64,12 +64,42 @@ _FIRST = (
 )
 
 
+# How many trailing lines identify where the last summary stopped. One line
+# collides too easily in a chat full of "Fds" and "Ahahah"; three effectively
+# never do.
+_MARKER_LINES = 3
+
+
+def new_lines_since(history: List[str], state: Dict[str, Any]) -> List[str]:
+    """The lines written since the last summary, found by content not by count.
+
+    A count cannot work here. The session window is capped, so ``len(history)``
+    stops growing while the conversation does not, and ``lines_seen`` ratchets up
+    to meet it — the live group sat at lines_seen=90 against a 100-line window
+    for three weeks, which made ``len(history) - lines_seen >= 30`` permanently
+    unsatisfiable and silently killed the rolling summary.
+
+    So the marker is the last few lines that were summarised. Everything after
+    them is new. If they are not in the window at all the conversation has moved
+    on entirely and all of it is new, which is both correct and what heals a
+    state file written by the old, broken counter.
+    """
+    marker = [line for line in (state.get("marker") or []) if line]
+    if not marker:
+        return list(history)
+    width = len(marker)
+    for start in range(len(history) - width, -1, -1):
+        if history[start:start + width] == marker:
+            return history[start + width:]
+    return list(history)
+
+
 class ChatSummaryStore:
     """One JSON file per chat, holding its rolling summary and a position marker.
 
-    ``lines_seen`` is the total number of lines the chat's session store had at
-    the last update. It is what makes the trigger cheap: the caller compares it
-    against the current count instead of re-reading the conversation.
+    ``marker`` is the last few lines covered by the summary; ``new_lines_since``
+    locates them to work out what is new. ``lines_seen`` is kept for readability
+    when someone opens the file, and is no longer read by anything.
     """
 
     def __init__(self, base_dir: str = "data/whatsapp_summaries"):
@@ -84,20 +114,23 @@ class ChatSummaryStore:
     def load(self, chat_id: str) -> Dict[str, Any]:
         path = self._path(chat_id)
         if not path.exists():
-            return {"summary": "", "lines_seen": 0, "updated": ""}
+            return {"summary": "", "lines_seen": 0, "marker": [], "updated": ""}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            state = json.loads(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 — a corrupt summary must not break a reply
-            return {"summary": "", "lines_seen": 0, "updated": ""}
+            return {"summary": "", "lines_seen": 0, "marker": [], "updated": ""}
+        state.setdefault("marker", [])
+        return state
 
     def summary_for(self, chat_id: str) -> str:
         return (self.load(chat_id).get("summary") or "").strip()
 
-    def save(self, chat_id: str, summary: str, lines_seen: int) -> None:
+    def save(self, chat_id: str, summary: str, history: List[str]) -> None:
         path = self._path(chat_id)
         payload = {
             "summary": summary.strip(),
-            "lines_seen": int(lines_seen),
+            "lines_seen": len(history),
+            "marker": [line for line in history[-_MARKER_LINES:] if line],
             "updated": datetime.now(timezone.utc).isoformat(),
         }
         with self._lock:
@@ -145,8 +178,7 @@ class SummaryWriter:
         if not self.enabled or not chat_id or not history:
             return False
         state = self.store.load(chat_id)
-        seen = int(state.get("lines_seen") or 0)
-        if len(history) - seen < self.every_lines:
+        if len(new_lines_since(history, state)) < self.every_lines:
             return False
         with self._guard:
             if chat_id in self._pending:
@@ -186,8 +218,7 @@ class SummaryWriter:
                     state: Dict[str, Any]) -> None:
         from src.chat.gpu_lock import GpuBusyError, gpu_section
 
-        seen = int(state.get("lines_seen") or 0)
-        new_lines = history[seen:]
+        new_lines = new_lines_since(history, state)
         if not new_lines:
             return
         previous = (state.get("summary") or "").strip()
@@ -208,10 +239,10 @@ class SummaryWriter:
                               "repetition_penalty": 1.05},
                 )
         except GpuBusyError:
-            # lines_seen is untouched, so the next message re-queues this chat.
+            # The marker is untouched, so the next message re-queues this chat.
             print(f"⏳ summary for {chat_id} deferred — GPU busy")
             return
         summary = (raw or "").strip()
         if not summary:
             return
-        self.store.save(chat_id, summary, len(history))
+        self.store.save(chat_id, summary, history)

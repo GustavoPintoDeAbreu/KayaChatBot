@@ -555,6 +555,26 @@ turn. Two rules matter: the writer takes `gpu_section()` and **skips on
 nothing — hand the model a digest of the group and it will find someone to talk
 about.
 
+**It was dead for three weeks, and a counter is why (2026-09-04).** The live
+group's last summary was written 2026-08-13; ~1,500 messages later nothing had
+changed. Not a `GpuBusyError` skip — that path retries correctly and was never
+reached. `SessionMemory.save` capped history at an unconditional
+`MAX_SAVED_MESSAGES = 100`, *below* the `max_lines` (180) `KeyedSessionMemory`
+believed it had, so `len(history)` could never exceed 100. `maybe_update` fired
+on `len(history) - lines_seen >= every_lines` and then ratcheted
+`lines_seen = len(history)`. At `lines_seen=90` against a pinned 100 that is
+`10 >= 30`, evaluated on every message, forever. Simulated against the same
+300-message slide, the old trigger fires **once** and never again.
+
+Two fixes, because either alone leaves it fragile. `SessionMemory` now takes
+`max_messages` and `KeyedSessionMemory` passes its own `max_lines`, so the two
+caps cannot disagree again. And the trigger no longer counts: `summary.new_lines_since`
+locates the last **three summarised lines** by content (one line collides in a
+chat full of "Fds"; three do not) and returns everything after them. A window
+that has moved on entirely yields all of it — which is correct, and is also what
+heals a state file written by the old counter, so no manual repair was needed.
+`lines_seen` is still written, for whoever opens the file, and is read by nothing.
+
 Ingestion is incremental and watermarked. `build_chunks` returns
 `(chunks, consumed_through)` and a chunk within `settle_minutes` (**10**) of now
 is left for the next pass, because a chunk closed mid-conversation is a chunk

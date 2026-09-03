@@ -59,6 +59,18 @@ def _settle(writer, chat_id="c1", timeout=5.0):
     return False
 
 
+def _settle_again(writer, chat_id, timeout=5.0):
+    """Wait for a queued update to drain when a summary already exists."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with writer._guard:
+            pending = chat_id in writer._pending
+        if not pending:
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def _lines(n, start=0):
     return [f"Alguém: linha {i}" for i in range(start, start + n)]
 
@@ -93,6 +105,59 @@ class TestTrigger:
         writer = _writer(tmp_path)
         assert writer.maybe_update("c1", []) is False
         assert writer.maybe_update("", _lines(50)) is False
+
+
+class TestASaturatedWindowStillTriggers:
+    """The bug that killed the live summary from 2026-08-13 to 2026-09-04.
+
+    The session window is capped, so len(history) stops growing while the
+    conversation does not. The old trigger compared lines_seen against
+    len(history) and ratcheted lines_seen up to meet it, so once the two got
+    within every_lines of each other the condition was unsatisfiable FOREVER —
+    the group sat at lines_seen=90 against a 100-line window for three weeks and
+    ~1,500 messages, and nothing fired.
+    """
+
+    def test_a_capped_window_keeps_firing_as_the_chat_moves_on(self, tmp_path):
+        writer = _writer(tmp_path)
+        window = 100
+        history = _lines(window)
+        assert writer.maybe_update("c1", history) is True
+        assert _settle(writer)
+
+        # 300 more messages arrive. The window never grows past 100; it slides.
+        fired = 0
+        for batch in range(1, 31):
+            history = (history + _lines(10, start=window + (batch - 1) * 10))[-window:]
+            assert len(history) == window
+            if writer.maybe_update("c1", history):
+                fired += 1
+                assert _settle_again(writer, "c1")
+        assert fired >= 8, f"only {fired} updates across 300 messages"
+
+    def test_a_state_file_left_stuck_by_the_old_counter_heals(self, tmp_path):
+        """The three live files had lines_seen and no marker. They must not stay
+        stuck once the code is fixed — no manual repair should be needed."""
+        writer = _writer(tmp_path)
+        writer.store.save("c1", "resumo antigo", _lines(90))
+        path = writer.store._path("c1")
+        import json
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["marker"]           # exactly what was on disk in prod
+        state["lines_seen"] = 90
+        path.write_text(json.dumps(state), encoding="utf-8")
+
+        assert writer.maybe_update("c1", _lines(100, start=500)) is True
+
+    def test_a_quiet_chat_still_does_not_retrigger(self, tmp_path):
+        """The heal must not become "always fire": an unchanged window is not
+        new material."""
+        writer = _writer(tmp_path)
+        history = _lines(40)
+        assert writer.maybe_update("c1", history) is True
+        assert _settle(writer)
+        assert writer.maybe_update("c1", history) is False
+        assert writer.maybe_update("c1", history + _lines(3, start=40)) is False
 
 
 class TestGeneration:
@@ -175,13 +240,13 @@ class TestStore:
 
     def test_a_corrupt_file_does_not_raise(self, tmp_path):
         store = ChatSummaryStore(str(tmp_path / "s"))
-        store.save("c1", "fine", 3)
+        store.save("c1", "fine", ["a", "b", "c"])
         store._path("c1").write_text("{not json", encoding="utf-8")
         assert store.summary_for("c1") == ""
 
     def test_chats_are_isolated_from_each_other(self, tmp_path):
         store = ChatSummaryStore(str(tmp_path / "s"))
-        store.save("dm:alice", "segredo da Alice", 5)
-        store.save("group:kaya", "planos do grupo", 5)
+        store.save("dm:alice", "segredo da Alice", ["a"] * 5)
+        store.save("group:kaya", "planos do grupo", ["b"] * 5)
         assert store.summary_for("dm:alice") == "segredo da Alice"
         assert store.summary_for("group:kaya") == "planos do grupo"
