@@ -301,133 +301,43 @@ The interaction log records `delivered_as` and `spoken_text`, and
 
 Voice replies use Piper on CPU (~28× realtime, so speaking never competes with the GPU). Kokoro, the usual default, only ships Brazilian Portuguese. A Piper voice speaks **one** language, so `synthesize_wav()` splits the reply into sentences, groups consecutive same-language runs (`split_by_language()`, using `language_signal()` from `response_utils.py`), and speaks each with the voice configured under `chat.audio.voices` (`pt` → `pt_PT-tugão`, `en` → `en_GB-alan`) before concatenating the WAV and encoding once to OGG/Opus via PyAV (ffmpeg is not installed on this box). A sentence with no language marker inherits the previous one; a missing voice file falls back to `pt`. Voice replies are sticky per chat (`ChatPreferences`), set through the router's `CMD_AUDIO` / `CMD_TEXT`; `CMD_AUDIO_ONCE` is a one-off delivery hint that does not change the preference.
 
-### Images (`src/chat/vision.py`, `src/chat/imagegen.py`)
+### Images (`src/chat/vision.py`) — read only
 
 **Reading them.** The serving model is multimodal, so `--mmproj` on the `llama` service is all it takes — no second model, ~180MB. An inbound photo is described (`vision.describe_url`) exactly the way a voice note is transcribed, and the description replaces/augments the message text. That reuse is the design: once it is text, the message log, the ingester, the router and retrieval need no changes, which is why "aquela foto do barco" is findable later. A caption is kept alongside the description. Without `--mmproj` the bot answers as though nothing were attached.
 
-**Keeping the face (2026-08-12).** The `0.409` likeness in the bake-off was
-measured with an English instruction ending `"Keep the face exactly the same."`
-Production was sending the user's **raw Portuguese** with no such clause, at a
-fixed seed, through two successive downscales. Four changes, all in
-`chat.imagegen`: `identity_clause` is appended to every edit;
-`translate_prompt` has the local model rewrite the Portuguese request as a short
-English instruction first (Kontext's CLIP-L + T5-XXL are English-trained);
-`face_crop` tightens the frame around detected faces when the largest is under
-`face_min_ratio` of the width, and `src/chat/face_utils.prepare_source` resizes
-**once** straight to a `PREFERRED_KONTEXT_RESOLUTIONS` bucket (`_auto_resize=False`);
-`candidates` renders N takes from one model load and ships the one with the
-highest ArcFace similarity to the source face. `seed: null` means a fresh seed per
-request — the old fixed `1234` made a bad face reproducible.
+`vision.py` depends on nothing but PIL (`flatten_animation`, for animated-WebP
+stickers), `stt.rewrite_media_url` and an HTTP POST to the same llama-server.
+There is no second model and no GPU of its own.
 
-**The likeness metric was partly measuring the wrong thing.** `image_bakeoff.py`
-compared the *largest* face in the output against the largest in the source. Half
-the bench photos are group shots by design, so on those it frequently compared two
-different people. Re-scoring the 2026-08-09 run against the closest-matching face
-moved p05 `0.030 → 0.246` and p06 `0.184 → 0.370` (flux-kontext mean `0.409 → 0.459`).
-`medieval-king` stayed at `0.109`: head-covering edits are a real failure, not an
-artefact. Face detection is InsightFace `buffalo_l` on CPU, mounted into the
-containers from `~/.insightface`; every path degrades to a no-op without it.
+**Making them was removed on 2026-09-04.** Generation and editing are gone —
+`imagegen.py`, `face_utils.py`, `imagegen_worker.py`, the bake-off harness, the
+GPU0 lease and ~264GB of diffusion weights. Two weeks of live logs recorded
+**one** image request, and it was wrong: *"mete maquilhagem de palhaço nesta
+cara"* routed as `generate` rather than `edit`, so with no source photo it
+invented a stranger's Joker face, took 62 seconds, and was logged `ok: true`.
+That is the whole production record for the feature. It cost a reserved GPU,
+~1,500 lines, three test files and 150 lines of `config.yaml`.
 
-**Not everything in a photo is a person (2026-08-16).** The whole edit path
-assumed one. `imagegen_worker` chose its identity clause with `_face_count() > 1`,
-so **zero** faces took the same branch as one and a photo of four Monster cans on
-a shop counter was sent to Kontext with *"Keep the person's face … Do not change
-who they are"* appended — by `config.yaml`'s own note, the instruction a model
-best satisfies by changing nothing. `_INSTRUCTION_SYSTEM` was no better: five
-few-shot examples all of the form *"Dress the person…"*, so an object request was
-rewritten as a person edit before it reached the model. Then `pick_best` scored
-two candidates against a `None` reference and returned the first.
+**`CMD_IMAGE` stays in the router on purpose.** Dropping the intent would let
+"faz uma imagem de um gato astronauta" fall through to GENERAL, where the model
+answers conversationally — in practice by describing the picture it is not
+making, or by promising to send one later. The command now returns a fixed
+`image_unsupported` line: no LLM call, no GPU, nothing it can promise. The two
+router examples that route a question *about* a photo to FACTUAL ("quem está
+nesta foto?", "manda a foto do jantar") are what keep photo questions working
+and must stay.
 
-Three changes. `_face_count` returns `Optional[int]` — `None` (cannot tell) keeps
-the singular clause, a real `0` drops it via `select_identity_clause`.
-`build_edit_instruction` now returns a fourth value, `SUBJECT: person|object|scene`,
-from the same local call; `object`/`scene` sends `--no-identity-clause`,
-`--no-face-crop`, `--candidates 1`. And `chat.imagegen.editors` maps subject to
-editor — the single-editor choice came from a bake-off whose every photo was
-picked for a large frontal face, so it ranked on identity preservation alone.
+Image turns are still written to the interaction log (`metrics.should_log` keeps
+`image` out of `BOOKKEEPING_COMMANDS`): how often the group keeps asking anyway
+is the only evidence there will be about whether removing it hurt.
 
-**The bench could not see any of it.** `pick_bench_photos.py` *selects for* "a
-large, confidently-detected, roughly frontal face" and all five `EDITS` transform
-a person. `--grid objects` (photos chosen with `--no-faces`, into
-`data/bench_objects/`) runs `OBJECT_EDITS` and scores **preservation** — judged
-1-5, "did everything the instruction did not mention survive?" — in place of
-likeness, which is undefined without a face. The face grid keeps the
-`likeness_x_adherence` key so its reports stay comparable with everything before.
-
-**Ran it (2026-08-16, `reports/image_bakeoff/objects_20260816T164851Z`, 5 arms ×
-4 photos × 5 edits).** Klein wins the object grid outright and is 2.5× faster:
-
-| arm | presv | adh | presv×adh | usable | secs |
-|---|---|---|---|---|---|
-| **flux2-klein** | 4.78 | **4.78** | **0.852** | **17/20** | **67** |
-| qwen-image-edit-2511 | 4.79 | 4.21 | 0.760 | 14/20 | 453 |
-| flux-kontext-objects | 4.58 | 3.90 | 0.716 | 13/20 | 82 |
-| flux-kontext-prod | 4.61 | 4.00 | 0.706 | 13/20 | 166 |
-
-Two results worth keeping, both of which contradict what the fix was assumed to
-be doing:
-
-- **The identity clause was not the problem.** `flux-kontext-objects` (the fix:
-  no clause, no crop, one take) scored 0.716 against `flux-kontext-prod`'s 0.706,
-  and 13/20 usable either way. That difference is noise. What the fix actually
-  buys is **half the wall time** (82s vs 166s), because best-of-N ranked by
-  ArcFace against a photo with no face was two renders to pick the first one.
-- **Every arm scores 5.0/5.0 on `swap-object`** — which is precisely the Monster
-  request ("transform the cans into X"). So the live failure was almost certainly
-  the *prompt rewriter* reframing an object edit as a person edit, not the editor
-  and not the clause. This grid does not test the rewriter; its instructions are
-  clean English that never mentions a person. That half is covered by unit tests.
-
-Klein's margin comes from `recolour` (3.2→5.0) and `change-setting` (4.2→5.0).
-**`remove-object` fails on everything** — Kontext scores adherence 1.0 on all four
-photos, Klein 3.0 — so an object *removal* is the request most likely to come back
-as "não consegui", which is at least honest: `noop_threshold` catches it rather
-than sending the unchanged photo. Qwen matches Klein on quality and costs 453s an
-image, 6.8× Klein's, which is not a trade a chat bot can make.
-
-**And a render used to leave no trace at all.** `whatsapp_server` skipped any
-result carrying a `command`, and `_handle_image_request` always sets one, so no
-image request reached `live_interactions.jsonl`; the translated instruction and
-final prompt went to a `logger.info` on a logger nobody configures; the output
-lived in a `TemporaryDirectory`. The rule now lives in `metrics.should_log`
-(testable — importing `whatsapp_server` loads the model), `imagegen.run` takes an
-`on_report` callback that logs a `source="imagegen"` row, and
-`chat.imagegen.keep_outputs` keeps the last N renders plus a JSON sidecar in the
-gitignored `data/imagegen_log/`.
-
-**Making them.** `imagegen.run()` shells out to `scripts/imagegen_worker.py` — never in-process. Dropping a diffusion pipeline in Python leaves ~20GB allocated with no `nn.Module` alive, it would hold a card between requests, and an OOM would take the bot down. Editing runs **FLUX.1 Kontext** (bake-off winner: likeness 0.409 vs Qwen's 0.138, adherence 4.4/5, ~86s); text-to-image runs **Z-Image Turbo**. The router's `CMD_IMAGE` picks the subject: attached photo, else the last photo seen in that chat, else generate from text. The webhook only acknowledges — the picture is sent from a background thread. `chat.imagegen.allowed_scopes` gates editing to the shared group.
-
-**Kontext keeps its job (2026-08-12).** FLUX.2 Klein 9B ran the same 40-cell
-standard grid and lost where it counts:
-
-| arm | likeness | adherence | lik×adh | usable | realism | secs |
-|---|---|---|---|---|---|---|
-| `flux-kontext-prod` | **0.695** | 4.05 | **0.536** | 21/40 | 2.83 | 177 |
-| `flux2-klein-prod` | 0.417 | **4.98** | 0.414 | **23/40** | **4.25** | **145** |
-
-Klein follows instructions almost perfectly and looks more photographic, but a
-40% drop in likeness is the wrong trade for a bot whose images are jokes about
-specific faces. Two more usable cells do not buy that back.
-
-**The two-stage restore is built but OFF** (`chat.imagegen.restore_face`). The
-editor commits to the scene and a LoRA (`Alissonerdx/BFS-Best-Face-Swap` on Klein
-9B) puts the face back, gated on the local model answering `FACE: keep` vs
-`FACE: change` — restoring the original face onto "faz dele um zombie" would undo
-the request. A malformed answer skips the restore, i.e. today's behaviour. The
-result is kept **only if it beats the editor's own output** on ArcFace similarity
-to the source. It runs (GPU0; it OOMs on GPU1 because the LLM lives there), and
-on its one measured sample the guard discarded it: 0.811 restored against 0.881
-unrestored. It costs ~90s and a second 17GB load, so it stays off until the
-40-cell grid says it earns them.
-
-**JPEG on the wire, PNG on disk.** `send_image` base64-inlines the bytes into the
-WAHA JSON body and WhatsApp recompresses to JPEG at the far end regardless, so
-`imagegen.run` re-encodes at `jpeg_quality` (92) before returning — a few hundred
-KB instead of several MB. The **worker keeps writing PNG**: `image_bakeoff.py`
-scores those files with ArcFace and must not be measuring compression artefacts.
-A failed re-encode returns the original bytes rather than nothing.
-
-**Quantization rules learned the hard way** (`reports/PHASE5_IMPLEMENTATION.md`): NF4 turns a 20B diffusion transformer's output into a crystalline mosaic — use 8-bit. **Never `enable_model_cpu_offload()` with bitsandbytes weights**: the hooks duplicate rather than move them, which took FLUX from 14.5GB to 22.4GB and OOMed every image. `device_map="balanced"` across both cards is *slower*, not faster (no P2P). Two cards buy parallelism across images, not within one.
+The historical bake-off reports stay in `reports/image_bakeoff/` — they contain
+real photos of real people, so the `.gitignore` guard stays with them.
+`reports/PHASE5_IMPLEMENTATION.md` is kept for the same reason: its hardware
+findings (NF4 destroys a 20B diffusion transformer, never
+`enable_model_cpu_offload()` with bitsandbytes weights, `device_map="balanced"`
+is *slower* here because there is no P2P) cost real time to measure and would
+have to be re-learned by anyone trying a diffusion model on this box again.
 
 ### Who is being talked about, and counting (2026-08-16)
 

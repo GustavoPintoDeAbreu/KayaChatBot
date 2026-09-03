@@ -1,5 +1,13 @@
 # Phase 5 — image generation, image understanding, and the bake-off
 
+> **Historical, kept deliberately.** Image generation and editing were removed on
+> 2026-09-04 — two weeks of live logs held one request and it misfired. Reading
+> photos (`src/chat/vision.py`, the `--mmproj` half of this document) is still
+> live and unchanged. The hardware findings below cost real time to measure and
+> would have to be re-learned by anyone who tries a diffusion model on this box
+> again, which is why this is not deleted. `src/chat/imagegen.py`,
+> `scripts/imagegen_worker.py` and `scripts/pick_bench_photos.py` no longer exist.
+
 Written 2026-08-10. Companion to `reports/image_bakeoff/<stamp>/index.html`,
 which holds the measurements and the pictures themselves.
 

@@ -21,9 +21,9 @@ _DEFAULT_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "feedbac
 
 
 # Commands whose reply is a confirmation rather than conversation ("volto a
-# responder por texto"). `image` is deliberately absent: excluding EVERY command
-# is why the edit the group complained about left no record at all — not the
-# prompt it was given, not the editor, not the outcome.
+# responder por texto"). `image` is deliberately absent, still: it is now a
+# fixed "não faço imagens" (2026-09-04), and how often the group keeps asking
+# anyway is the only evidence there will be about whether removing it hurt.
 BOOKKEEPING_COMMANDS = frozenset(
     {"audio", "audio_once", "text", "clear", "bug", "feedback"})
 

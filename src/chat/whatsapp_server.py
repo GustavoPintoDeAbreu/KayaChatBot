@@ -269,35 +269,6 @@ def _stt(url: str, mimetype: str):
     )
 
 
-def _fetch_media(url: str, mimetype: str):
-    """Download an inbound photo to a temp path, or None. Same localhost rewrite
-    as voice notes: WAHA describes its files by its own hostname."""
-    import tempfile
-
-    import httpx
-
-    from src.chat.stt import rewrite_media_url
-
-    url = rewrite_media_url(
-        url, os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""))
-    api_key = os.environ.get("KAYA_WAHA_API_KEY", "")
-    try:
-        headers = {"X-Api-Key": api_key} if api_key else {}
-        with httpx.Client(timeout=60.0, headers=headers, follow_redirects=True) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            payload = response.content
-    except Exception as exc:  # noqa: BLE001 — a failed fetch must not raise
-        print(f"⚠️  could not fetch image {url}: {exc}")
-        return None
-
-    suffix = ".png" if "png" in (mimetype or "") else ".jpg"
-    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    handle.write(payload)
-    handle.close()
-    return handle.name
-
-
 def _describe(url: str, mimetype: str):
     """Read an inbound photo with the serving model, or None if vision is off."""
     from src.chat import vision
@@ -311,52 +282,6 @@ def _describe(url: str, mimetype: str):
     )
 
 
-def _imagegen(mode: str, prompt: str, image_path=None):
-    """Make one image, or None. Blocking — the adapter calls it off-thread.
-
-    An edit request is rewritten into a short English instruction first: Kontext's
-    text encoders are English-trained and the request arrives in Portuguese. The
-    rewrite is one small local generation and falls back to the raw text.
-    """
-    from src.chat import imagegen
-
-    requested = prompt
-    # Generation from scratch has no original face to restore.
-    restore_face = False
-    heavy = False
-    subject = imagegen.SUBJECT_PERSON
-    if mode == "edit":
-        with gpu_section(config):
-            # The same call also answers what the edit is about — a person, a
-            # thing, or the whole scene — whether it is meant to change the
-            # person's face (restoring the original face onto a zombie would undo
-            # the request), and how far the picture has to move. A pose or
-            # interaction change ("põe estes dois a beijarem-se") needs to be
-            # pushed harder than a costume swap, and was coming back unchanged.
-            prompt, restore_face, heavy, subject = imagegen.build_edit_instruction(
-                config, prompt, engine.backend)
-
-    def report(info: dict) -> None:
-        """One row per render, so a bad picture can be looked into afterwards.
-
-        Separate from the conversational row the webhook logs for the request
-        itself: this one is written when the worker finishes, minutes later and
-        on another thread, and carries what the model was actually given.
-        """
-        metrics.log_interaction(
-            source="imagegen",
-            user_message=requested,
-            assistant_response=str(info.get("prompt") or ""),
-            latency_ms=float(info.get("seconds") or 0.0) * 1000.0,
-            **{f"image_{key}": value for key, value in info.items()
-               if key != "prompt"},
-        )
-
-    return imagegen.run(config, prompt, mode=mode, image_path=image_path,
-                        restore_face=restore_face, heavy=heavy, subject=subject,
-                        on_report=report)
-
-
 from src.chat.summary import SummaryWriter
 
 # Rolling per-chat summary of what has scrolled out of the verbatim window.
@@ -366,7 +291,6 @@ _summary_writer = SummaryWriter(config, engine.backend)
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
                           transcribe=_stt,
-                          image_generate=_imagegen, fetch_media=_fetch_media,
                           describe_image=_describe,
                           summary_writer=_summary_writer,
                           sender_resolver=_sender_resolver)

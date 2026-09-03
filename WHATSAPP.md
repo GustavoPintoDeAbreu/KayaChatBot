@@ -125,12 +125,11 @@ private to itself. Two things hang off it, and both fail *silently* if it names
 the wrong chat:
 
 - **Image editing** used to be gated on `chat.imagegen.allowed_scopes:
-  ["shared"]`, so a group missing from `whatsapp_shared_chats.json` was told
-  *"Só faço imagens no grupo, não por aqui"* — while standing in the group.
-  Consent and memory scope are different questions, and `allowed_here` now
-  answers them separately, most specific first: `allowed_chats` → `allow_groups`
-  (true today: any group, whatever its memory scope) → `allowed_scopes` as the
-  fallback. So this no longer fails, but the scope file still drives retrieval:
+  ["shared"]`, so a group missing from this file was told *"Só faço imagens no
+  grupo, não por aqui"* — while standing in the group. The lesson outlived the
+  feature (removed 2026-09-04): consent and memory scope are different
+  questions, and anything gated on this file must say which one it means. What
+  the scope file still drives is retrieval:
 - **Retrieval asymmetry.** A DM may recall anything the group said; a non-shared
   group's history is invisible from DMs. Nobody notices, because the group can
   still read its own messages *and* the historical export (which is `shared`), so

@@ -18,18 +18,6 @@ from src.chat.scope import scope_for_chat
 from src.chat.waha_client import MockWahaClient
 from src.chat.whatsapp_adapter import WhatsAppAdapter, parse_waha_message
 
-@pytest.fixture(autouse=True)
-def _fresh_image_queue():
-    """The image queue is process-wide, so one test's leftovers change the next
-    test's behaviour — a full queue from one case silently refused another's job."""
-    from src.chat import imagegen
-
-    previous = imagegen._default_queue
-    imagegen._default_queue = imagegen.ImageQueue()
-    yield
-    imagegen._default_queue = previous
-
-
 BOT_JID = "351900000000@c.us"
 GROUP = "12036300000000@g.us"
 ALICE = "351911111111@c.us"
@@ -678,58 +666,6 @@ def test_voice_paths_fall_back_to_the_portuguese_voice(tmp_path):
     assert tts._voice_paths(config)["pt"] == tts.DEFAULT_VOICES["pt"]
 
 
-# ── image generation / editing (Phase 5) ─────────────────────────────────────
-# Making a picture takes minutes, so the webhook must return immediately and the
-# image arrive later. These pin the acknowledgement, the choice of subject, and
-# the refusals — a bot that promises a picture it will never send is worse than
-# one that says no.
-def make_image_adapter(tmp_path, reply, imagegen_result=b"PNGDATA", **overrides):
-    from src.chat.memory import ChatPreferences
-
-    config = {
-        "whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
-                     "shared_chats": [GROUP], **overrides},
-        "chat": {"imagegen": {"enabled": True, "allowed_scopes": ["shared"]}},
-    }
-    calls = []
-
-    def fake_imagegen(mode, prompt, image_path=None):
-        calls.append({"mode": mode, "prompt": prompt, "image_path": image_path})
-        return imagegen_result
-
-    adapter = WhatsAppAdapter(
-        responder=lambda message, speaker, recent_lines, **kw: reply,
-        waha_client=MockWahaClient(echo=False),
-        config=config,
-        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
-        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
-        image_generate=fake_imagegen,
-        fetch_media=lambda url, mimetype: str(tmp_path / "photo.jpg"),
-    )
-    adapter.imagegen_calls = calls
-    return adapter
-
-
-def _wait_for_image(adapter, timeout=5.0, count=1):
-    """Wait for ``count`` images to land, and for the queue to be done.
-
-    Both conditions, because a test that asserts on the LAST imagegen call has
-    to wait for every job — waiting only for the first image passes or fails
-    depending on how much work the scheduler got through in between.
-    """
-    import time
-
-    from src.chat import imagegen
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        landed = sum(1 for s in adapter.waha_client.sent if "image_bytes" in s)
-        if landed >= count and imagegen.get_queue().depth == 0:
-            return True
-        time.sleep(0.02)
-    return False
-
-
 def image_group_event(text, media_url="", mimetype=""):
     event = group_event(text, mention=True)
     if media_url:
@@ -737,108 +673,73 @@ def image_group_event(text, media_url="", mimetype=""):
     return event
 
 
-def test_image_request_acknowledges_immediately(tmp_path):
-    """Five minutes of silence reads as a broken bot."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    result = adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
-                                  system_prompt="")
-
-    assert result["command"] == "image"
-    assert result["reply"], "the request must be acknowledged before the work starts"
-    assert _wait_for_image(adapter)
-
-
-def test_request_without_a_photo_generates_from_text(tmp_path):
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
-                         system_prompt="")
-
-    assert _wait_for_image(adapter)
-    assert adapter.imagegen_calls[0]["mode"] == "generate"
-    assert adapter.imagegen_calls[0]["image_path"] is None
-
-
-def test_attached_photo_is_edited(tmp_path):
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    adapter.handle_event(
-        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
-                          mimetype="image/jpeg"),
-        system_prompt="")
-
-    assert _wait_for_image(adapter)
-    assert adapter.imagegen_calls[0]["mode"] == "edit"
-    assert adapter.imagegen_calls[0]["image_path"]
-
-
-def test_the_last_photo_in_the_chat_is_the_implicit_subject(tmp_path):
-    """"põe-lhe uma coroa" right after someone posts a picture must edit it."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    # A photo posted to the group without addressing the bot: not replied to, but
-    # seen — and it is what the next request refers to.
-    adapter.handle_event(image_group_event("olhem esta", media_url="http://waha:3000/f.jpg",
-                                           mimetype="image/jpeg"),
-                         system_prompt="")
-    adapter.handle_event(image_group_event("põe-lhe uma coroa"), system_prompt="")
-
-    assert _wait_for_image(adapter)
-    assert adapter.imagegen_calls[-1]["mode"] == "edit"
-
-
-def test_a_dm_may_not_ask_for_an_edit(tmp_path):
-    """Editing puts a real member's face in an invented scene; the group opted in
-    to having the bot in the room, a random DM did not."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    result = adapter.handle_event(dm_event("põe o Rafa de rei"), system_prompt="")
-
-    assert result["image"] == "not_allowed"
-    assert not adapter.imagegen_calls
-    assert "só faço imagens no grupo" in adapter.waha_client.sent[-1]["text"].lower()
-
-
-def test_failed_generation_says_so(tmp_path):
-    """Silence after a promise is the failure mode to avoid."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
-                                 imagegen_result=None)
-
-    adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
-
-    # Wait for the QUEUE to drain, not for a message count. The job runs on a
-    # background thread, so counting sends races with the scheduler — this failed
-    # once on a box that was busy rendering a bake-off, and only then.
-    import time
-
-    from src.chat import imagegen
-
-    deadline = time.time() + 10.0
-    while time.time() < deadline and (
-            imagegen.get_queue().depth > 0 or len(adapter.waha_client.sent) < 2):
-        time.sleep(0.02)
-    assert "não consegui" in adapter.waha_client.sent[-1]["text"].lower()
-
-
-def test_without_a_worker_the_bot_declines(tmp_path):
-    """image_generate=None (feature off) must decline, not hang."""
+# ── asking for a picture (removed 2026-09-04) ────────────────────────────────
+# Generation and editing are gone. CMD_IMAGE is deliberately kept so the ask
+# gets a fixed answer rather than falling through to the model, which used to
+# promise a picture and then never send one.
+def make_declining_adapter(tmp_path):
     from src.chat.memory import ChatPreferences
 
-    adapter = WhatsAppAdapter(
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                           "shared_chats": [GROUP]}}
+    return WhatsAppAdapter(
         responder=lambda message, speaker, recent_lines, **kw: RoutedReply(
             command="image", mode="factual"),
         waha_client=MockWahaClient(echo=False),
-        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
-                             "shared_chats": [GROUP]},
-                "chat": {"imagegen": {"enabled": True, "allowed_scopes": ["shared"]}}},
+        config=config,
         session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
         prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
     )
 
-    result = adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
 
-    assert result["image"] == "not_allowed"
+def test_an_image_request_is_declined_not_attempted(tmp_path):
+    adapter = make_declining_adapter(tmp_path)
+
+    result = adapter.handle_event(
+        image_group_event("faz uma imagem de um gato astronauta"),
+        system_prompt="")
+
+    assert result["command"] == "image"
+    assert "não faço" in result["reply"].lower()
+    assert len(adapter.waha_client.sent) == 1
+
+
+def test_an_edit_request_with_a_photo_is_declined_too(tmp_path):
+    """An attached photo used to make this the unambiguous edit path."""
+    adapter = make_declining_adapter(tmp_path)
+
+    result = adapter.handle_event(
+        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
+                          mimetype="image/jpeg"),
+        system_prompt="")
+
+    assert result["command"] == "image"
+    assert "não faço" in result["reply"].lower()
+
+
+def test_the_decline_never_promises_a_picture(tmp_path):
+    """The failure this replaces: "Vou fazer isso, dá-me um bocado." followed by
+    nothing. Nothing in the reply may suggest one is coming."""
+    adapter = make_declining_adapter(tmp_path)
+
+    result = adapter.handle_event(
+        image_group_event("faz uma imagem de um gato astronauta"),
+        system_prompt="")
+
+    lowered = result["reply"].lower()
+    for promise in ("já mando", "dá-me", "uns minutos", "em fila", "assim que"):
+        assert promise not in lowered, promise
+
+
+def test_no_image_is_ever_sent(tmp_path):
+    """send_image is gone from the client; nothing may try to call it."""
+    adapter = make_declining_adapter(tmp_path)
+
+    adapter.handle_event(image_group_event("faz uma imagem de um cão"),
+                         system_prompt="")
+
+    assert not any("image_bytes" in s for s in adapter.waha_client.sent)
+    assert not hasattr(adapter.waha_client, "send_image")
 
 
 # ── reading inbound photos ───────────────────────────────────────────────────
@@ -949,58 +850,7 @@ def test_vision_failure_falls_back_to_the_old_behaviour(tmp_path):
     assert "olhem isto" in result["reply"]
 
 
-# ── which picture an image request is about ──────────────────────────────────
-# The last photo in a chat is a good implicit subject for "põe-lhe uma coroa" and
-# a terrible one for "faz uma imagem de um gato astronauta". Treating every
-# request as an edit meant any image request after any photo silently edited
-# somebody's holiday snap instead of drawing what was asked for.
-def test_a_request_describing_something_new_generates():
-    from src.chat.whatsapp_adapter import refers_to_existing_image
-
-    for text in ("faz uma imagem de um gato astronauta",
-                 "gera uma imagem de um cão a conduzir",
-                 "desenha um robot gigante",
-                 "make me a picture of a dragon"):
-        assert refers_to_existing_image(text) is False, text
-
-
-def test_a_request_pointing_at_a_photo_edits():
-    from src.chat.whatsapp_adapter import refers_to_existing_image
-
-    for text in ("põe-lhe uma coroa",
-                 "edita esta foto e mete-lhe um chapéu",
-                 "põe este gajo de rei medieval",
-                 "nesta foto mete-lhe óculos",
-                 "put a crown on him"):
-        assert refers_to_existing_image(text) is True, text
-
-
-def test_last_photo_is_only_used_when_the_request_refers_to_it(tmp_path):
-    """End to end: a generate-style request must not consume the last photo."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    adapter.handle_event(image_group_event("olhem esta", media_url="http://waha:3000/f.jpg",
-                                           mimetype="image/jpeg"), system_prompt="")
-    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
-                         system_prompt="")
-
-    assert _wait_for_image(adapter, count=2)
-    assert adapter.imagegen_calls[-1]["mode"] == "generate"
-    assert adapter.imagegen_calls[-1]["image_path"] is None
-
-
-def test_an_attached_photo_still_edits_regardless_of_wording(tmp_path):
-    """An attachment is unambiguous and never consults the wording."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    adapter.handle_event(
-        image_group_event("faz uma imagem gira", media_url="http://waha:3000/f.jpg",
-                          mimetype="image/jpeg"),
-        system_prompt="")
-
-    assert _wait_for_image(adapter)
-    assert adapter.imagegen_calls[-1]["mode"] == "edit"
-
+# ── replay protection ────────────────────────────────────────────────────────
 
 def test_a_replayed_message_is_answered_only_once(tmp_path):
     """WAHA replays its backlog after a reconnect. Answering twice is visible to
@@ -1025,74 +875,6 @@ def test_different_messages_are_both_answered(tmp_path):
         event["payload"]["id"] = f"distinct-{index}"
         assert adapter.handle_event(event) is not None
     assert len(client.sent) == 2
-
-
-# ── the image queue ──────────────────────────────────────────────────────────
-# One GPU means one render at a time, but refusing the second request loses it:
-# a long simulator run had two edits asked for, told "estou ocupado", and never
-# made. They queue now. The queue is separate from the text path — generation
-# runs on the other card — so conversation continues at full speed meanwhile.
-def test_a_second_image_request_is_queued_not_refused(tmp_path):
-    import threading
-
-    from src.chat import imagegen
-
-    release = threading.Event()
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-
-    def slow_imagegen(mode, prompt, image_path=None):
-        release.wait(timeout=5)
-        return b"PNGDATA"
-
-    adapter.image_generate = slow_imagegen
-    imagegen._default_queue = imagegen.ImageQueue()
-
-    first = adapter.handle_event(image_group_event("faz uma imagem de um gato"),
-                                 system_prompt="")
-    second = adapter.handle_event(image_group_event("faz uma imagem de um cão"),
-                                  system_prompt="")
-
-    assert first["queue_position"] == 1
-    assert second["queue_position"] == 2, "the second request must wait, not be dropped"
-    assert "fila" in second["reply"].lower()
-    # position 2 means ONE job ahead, not two
-    assert "1 à frente" in second["reply"]
-    release.set()
-
-
-def test_a_full_queue_declines_rather_than_promising(tmp_path):
-    import threading
-
-    from src.chat import imagegen
-
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-    imagegen._default_queue = imagegen.ImageQueue(maxsize=1)
-    # The job must still be occupying the slot when the second request arrives,
-    # otherwise the first finishes instantly and the queue is empty again.
-    release = threading.Event()
-    adapter.image_generate = lambda mode, prompt, image_path=None: (
-        release.wait(timeout=5) and b"PNG")
-
-    adapter.handle_event(image_group_event("faz uma imagem 1"), system_prompt="")
-    result = adapter.handle_event(image_group_event("faz uma imagem 2"), system_prompt="")
-    release.set()
-
-    assert result["image"] == "queue_full"
-
-
-def test_a_pending_image_is_visible_in_the_conversation(tmp_path):
-    """Asked "então e a foto?" two turns later, the bot must know one is coming."""
-    from src.chat import imagegen
-
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-    imagegen._default_queue = imagegen.ImageQueue()
-
-    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
-                         system_prompt="")
-
-    history = adapter.session_store.recent(GROUP, 10)
-    assert any("a preparar uma imagem" in line for line in history)
-    assert any("gato astronauta" in line for line in history)
 
 
 # ── what is SPOKEN vs what is WRITTEN ────────────────────────────────────────
@@ -1188,7 +970,7 @@ def test_text_delivery_is_reported_as_text(tmp_path):
     assert result["spoken_text"] == ""
 
 
-def test_image_acknowledgements_carry_no_dashes(tmp_path):
+def test_no_canned_reply_carries_a_dash(tmp_path):
     adapter, _ = make_adapter(tmp_path)
     for key, reply in adapter.command_replies.items():
         assert "—" not in reply and "–" not in reply, key
@@ -1633,56 +1415,6 @@ def _wait_for_text(adapter, needle, timeout=5.0):
     return False
 
 
-def test_an_unchanged_edit_is_reported_honestly(tmp_path):
-    """The editor handing the photo back was delivered as a success. The group
-    had to work it out ("Was the generation rejected? The image looks exactly
-    the same"), and asked about it the bot invented content filters."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
-                                 imagegen_result=None)
-
-    adapter.handle_event(
-        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
-                          mimetype="image/jpeg"),
-        system_prompt="")
-
-    assert _wait_for_text(adapter, "saiu na mesma")
-
-
-def test_a_failed_edit_is_recorded_in_the_conversation(tmp_path):
-    """So the follow-up turn answers from fact instead of inventing a reason."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
-                                 imagegen_result=None)
-
-    adapter.handle_event(
-        image_group_event("põe-lhe uma coroa", media_url="http://waha:3000/f.jpg",
-                          mimetype="image/jpeg"),
-        system_prompt="")
-
-    # The history line is written after the message is sent, both on the image
-    # thread, so wait on the line itself rather than on the send.
-    import time
-
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
-        history = adapter.session_store.recent(GROUP, 10)
-        if any("a imagem não saiu" in line for line in history):
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"the failed edit was never recorded: {history}")
-
-
-def test_a_failed_generation_keeps_its_own_message(tmp_path):
-    """Generation from scratch cannot "come back unchanged" — there is no
-    source for it to be unchanged from."""
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
-                                 imagegen_result=None)
-
-    adapter.handle_event(image_group_event("faz uma imagem de um gato astronauta"),
-                         system_prompt="")
-
-    assert _wait_for_text(adapter, "Não consegui fazer a imagem")
-
-
 # ── the message a reply is answering (bug 7acbc092, 2026-08-13) ──────────────
 # Gil replied to an earlier message with "A culpa é do" and the bot answered
 # "A culpa é do quem? Completa lá a frase, papi." parse_waha_message read the
@@ -1785,57 +1517,6 @@ def test_a_command_quoting_something_is_still_a_command(tmp_path):
     result = adapter.handle_event(dm_event("/bug o áudio corta a meio"))
 
     assert result["logged"] is True
-
-
-# ── image requests during maintenance (2026-08-13) ───────────────────────────
-def test_a_request_during_maintenance_is_queued_with_the_wait(tmp_path):
-    """GPU0 is on loan. The request keeps its place and the wait is stated,
-    rather than acknowledged normally and delivered forty minutes later."""
-    from src.chat import imagegen
-
-    lease = tmp_path / "gpu0_lease.json"
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-    adapter.config["chat"]["imagegen"]["lease_file"] = str(lease)
-    imagegen.acquire_lease(adapter.config, "regenerating profiles", 600)
-    try:
-        result = adapter.handle_event(
-            image_group_event("faz uma imagem de um gato astronauta"), system_prompt="")
-
-        assert "manutenção" in result["reply"]
-        assert "10 min" in result["reply"]
-        assert result["queue_position"] == 1, "queued, not refused"
-    finally:
-        imagegen.release_lease(adapter.config)
-
-
-def test_the_normal_acknowledgement_returns_after_release(tmp_path):
-    from src.chat import imagegen
-
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"))
-    adapter.config["chat"]["imagegen"]["lease_file"] = str(tmp_path / "gpu0_lease.json")
-
-    result = adapter.handle_event(
-        image_group_event("faz uma imagem de um gato astronauta"), system_prompt="")
-
-    assert "manutenção" not in result["reply"]
-
-
-def test_the_promise_is_sent_before_the_work_starts(tmp_path):
-    """A job that fails instantly must not answer before the bot has promised.
-
-    imagegen.run returns immediately when the feature is off or an edit has no
-    source photo, so submitting before acknowledging let "não consegui" arrive
-    ahead of "vou fazer isso" — the bot replying to itself backwards.
-    """
-    adapter = make_image_adapter(tmp_path, RoutedReply(command="image", mode="factual"),
-                                 imagegen_result=None)
-
-    adapter.handle_event(image_group_event("faz uma imagem"), system_prompt="")
-    _wait_for_text(adapter, "Não consegui")
-
-    texts = [s.get("text") or "" for s in adapter.waha_client.sent]
-    assert "Vou fazer isso" in texts[0]
-    assert "Não consegui" in texts[1]
 
 
 # ── the live path resolves display names like the pipeline does (2026-08-13) ─

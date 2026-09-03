@@ -81,37 +81,6 @@ class WahaClient:
         resp.raise_for_status()
         return resp.json()
 
-    def send_image(self, chat_id: str, image_bytes: bytes, caption: str = "",
-                   reply_to: Optional[str] = None,
-                   mimetype: str = "image/jpeg",
-                   filename: str = "kaya.jpg") -> Dict[str, Any]:
-        """Send a photo. Generation can take minutes, so this call gets its own
-        longer timeout — the shared client's 30s would abort a send that is only
-        slow because the file is large.
-
-        The format is the caller's to choose. These bytes are base64-inlined into
-        the JSON body, and WhatsApp recompresses to JPEG at the far end anyway, so
-        the default is JPEG rather than the multi-megabyte PNG this used to
-        hardcode."""
-        import base64
-
-        body: Dict[str, Any] = {
-            "session": self.session,
-            "chatId": chat_id,
-            "file": {
-                "mimetype": mimetype,
-                "filename": filename,
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-            },
-        }
-        if caption:
-            body["caption"] = caption
-        if reply_to:
-            body["reply_to"] = reply_to
-        resp = self._client.post("/api/sendImage", json=body, timeout=120.0)
-        resp.raise_for_status()
-        return resp.json()
-
     def send_seen(self, chat_id: str) -> None:
         try:
             self._client.post("/api/sendSeen", json={"session": self.session, "chatId": chat_id})
@@ -169,18 +138,6 @@ class MockWahaClient:
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] {text}\n")
         return {"mocked": True, "id": message_id, **record}
-
-    def send_image(self, chat_id: str, image_bytes: bytes, caption: str = "",
-                   reply_to: Optional[str] = None,
-                   mimetype: str = "image/jpeg",
-                   filename: str = "kaya.jpg") -> Dict[str, Any]:
-        self._counter += 1
-        record = {"chat_id": chat_id, "image_bytes": len(image_bytes or b""),
-                  "caption": caption, "reply_to": reply_to}
-        self.sent.append(record)
-        if self.echo:
-            print(f"\n[→ WhatsApp {chat_id}] (image, {len(image_bytes or b'')} bytes) {caption}\n")
-        return {"mocked": True, "id": f"mock-image-{self._counter}"}
 
     def send_seen(self, chat_id: str) -> None:
         self.seen.append(chat_id)

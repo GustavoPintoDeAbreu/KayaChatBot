@@ -22,12 +22,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     ninja-build \
-    # OpenCV's shared libs. insightface (face framing / candidate scoring, see
-    # src/chat/face_utils.py) declares `opencv-python` by name, so the headless
-    # build alone does not satisfy it and the regular wheel is what gets imported
-    # — and that one dlopens libGL, which a CUDA base image does not carry.
-    libgl1 \
-    libglib2.0-0 \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y \
     python3.12 \
@@ -52,7 +46,6 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
 # Gemma 4 inference behaviour in the image is identical to local.
 RUN python -m pip install --no-cache-dir \
     torch==2.6.0 \
-    torchvision==0.21.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Install all remaining dependencies from requirements.txt — the single source

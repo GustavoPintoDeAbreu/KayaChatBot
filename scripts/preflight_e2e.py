@@ -83,7 +83,12 @@ def check_recall(config: Dict[str, Any]) -> bool:
 
 
 def check_router(config: Dict[str, Any]) -> bool:
-    """The line that matters: asking FOR a picture vs talking ABOUT one."""
+    """The line that matters: asking FOR a picture vs talking ABOUT one.
+
+    Pictures are no longer made (2026-09-04), but CMD_IMAGE is kept so the ask
+    gets a straight "I do not do that" instead of the model improvising. Talking
+    about a photo must still route normally.
+    """
     from src.chat import router
     from src.chat.engine import get_engine
 
@@ -115,64 +120,9 @@ def check_tts(config: Dict[str, Any]) -> bool:
                   f"split={languages}, {len(wav or b'')} bytes")
 
 
-def check_generate(config: Dict[str, Any]) -> bool:
-    from src.chat import imagegen
-
-    started = time.time()
-    png = imagegen.run(config, "um gato astronauta a flutuar numa nave", mode="generate")
-    if not png:
-        return record("generate", False, "worker returned nothing")
-    return record("generate", png[:4] == b"\x89PNG",
-                  f"{time.time() - started:.0f}s, {len(png) // 1024}KB")
-
-
-def check_edit(config: Dict[str, Any]) -> bool:
-    """The whole point: does the edited photo still look like the person?"""
-    import numpy as np
-
-    from src.chat import imagegen
-    from scripts.pick_bench_photos import load_analyser
-
-    photos = sorted(PHOTOS.glob("*.jpg"))
-    if not photos:
-        return record("edit", False, "no bench photos")
-    source = photos[0]
-    reference_path = source.with_suffix(".npy")
-    if not reference_path.exists():
-        return record("edit", False, "no reference embedding for the source photo")
-
-    started = time.time()
-    png = imagegen.run(config, "Dress the person as a medieval king with a golden crown. "
-                               "Keep the face exactly the same.",
-                       mode="edit", image_path=str(source))
-    if not png:
-        return record("edit", False, "worker returned nothing")
-
-    out = BASE_DIR / "reports" / "image_bakeoff" / "preflight_edit.png"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(png)
-
-    import cv2
-
-    app = load_analyser()
-    image = cv2.imread(str(out))
-    faces = app.get(image) if image is not None else []
-    if not faces:
-        return record("edit", False, "no face survived the edit")
-    faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
-    likeness = float(np.dot(np.load(reference_path),
-                            np.asarray(faces[0].normed_embedding, dtype=np.float32)))
-    # 0.28 is a deliberately modest bar: a strong edit legitimately moves the
-    # embedding, and the bake-off is what ranks the models. This only catches an
-    # editor that replaced the person entirely.
-    return record("edit", likeness >= 0.28,
-                  f"{time.time() - started:.0f}s, likeness {likeness:.3f} → {out}")
-
-
 CHECKS = {
     "llama": check_llama, "vision": check_vision, "recall": check_recall,
-    "router": check_router, "tts": check_tts, "generate": check_generate,
-    "edit": check_edit,
+    "router": check_router, "tts": check_tts,
 }
 
 

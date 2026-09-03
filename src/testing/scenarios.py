@@ -73,7 +73,7 @@ CONVERSATION: List[Dict[str, Any]] = [
 ]
 
 
-# ── images ───────────────────────────────────────────────────────────────────
+# ── images: reading them (the bot no longer makes any) ───────────────────────
 
 IMAGES: List[Dict[str, Any]] = [
     {"kind": "say", "who": "Manel", "chat": "group", "media": "photo_a",
@@ -99,31 +99,18 @@ IMAGES: List[Dict[str, Any]] = [
 
     {"kind": "say", "who": "Bruno", "chat": "group",
      "text": "faz uma imagem de um gato astronauta a flutuar numa nave",
-     "note": "text-to-image: no photo in play, so generate from scratch",
-     "expect": {"handled": True, "command": "image", "image": "generate"}},
-
-    {"kind": "wait", "for": "image", "seconds": 300,
-     "note": "generation is async — the picture must actually arrive"},
-
-    {"kind": "say", "who": "Tó Zé", "chat": "group", "media": "photo_b",
-     "text": "põe este gajo vestido de rei medieval com uma coroa dourada",
      "mention": True,
-     "note": "edit with an attached photo",
-     "expect": {"handled": True, "command": "image", "image": "edit"}},
-
-    {"kind": "wait", "for": "image", "seconds": 600,
-     "note": "an edit takes ~90s"},
+     "note": "pictures are not made any more — the ask must get a straight no",
+     "expect": {"handled": True, "command": "image"}},
 
     {"kind": "say", "who": "Chico", "chat": "group", "media": "photo_c",
      "text": "olhem esta", "mention": False,
-     "note": "a photo nobody asked the bot about — remembered as the subject"},
+     "note": "a photo nobody asked the bot about — still logged and described"},
 
     {"kind": "say", "who": "Chico", "chat": "group",
      "text": "agora põe-lhe um capacete de astronauta", "mention": True,
-     "note": "implicit subject: the last photo seen in this chat",
-     "expect": {"handled": True, "command": "image", "image": "edit"}},
-
-    {"kind": "wait", "for": "image", "seconds": 600},
+     "note": "an edit request is declined, not attempted",
+     "expect": {"handled": True, "command": "image"}},
 ]
 
 
@@ -233,20 +220,18 @@ CHAOS: List[Dict[str, Any]] = [
      "note": "unfetchable media must degrade to a normal reply",
      "expect": {"handled": True}},
 
-    # Two image requests back to back: the second must be told to wait rather
-    # than silently queued or dropped.
+    # Two image requests back to back. Both are declined now, but the point of
+    # the beat survives: neither may stall the conversation behind it.
     {"kind": "say", "who": "Bruno", "chat": "group",
      "text": "faz uma imagem de um cão a conduzir um carro", "mention": True,
      "expect": {"handled": True, "command": "image"}},
     {"kind": "say", "who": "Nuno", "chat": "group",
      "text": "faz uma imagem de um peixe de bicicleta", "mention": True,
-     "note": "a second request queues behind the first rather than being refused",
      "expect": {"handled": True, "command": "image"}},
     {"kind": "say", "who": "Chico", "chat": "group",
      "text": "entretanto, quem é o Peter?", "mention": True,
-     "note": "conversation must keep flowing while a picture renders",
+     "note": "conversation keeps flowing after a declined request",
      "expect": {"handled": True, "min_words": 3}},
-    {"kind": "wait", "for": "image", "seconds": 400, "required": False},
 ]
 
 

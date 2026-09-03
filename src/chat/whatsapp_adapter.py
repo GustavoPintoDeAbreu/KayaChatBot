@@ -241,36 +241,10 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
 # Words that make an image request point at a picture already in the chat rather
 # than describe a new one from scratch. "põe-LHE uma coroa" and "edita ESTA foto"
 # refer; "faz uma imagem de um gato astronauta" does not. Without this test every
-# request became an edit of whatever photo was last posted.
-# Only *referring* words count. A bare "imagem" or "foto" does not refer to
-# anything — "faz uma imagem de um gato astronauta" describes a new picture — so
-# matching those nouns is what turned every request into an edit.
-_REFERS_TO_IMAGE = re.compile(
-    r"\b(lhe|lhes|nele|nela|dele|dela|isto|isso|est[ae]s?|aquel[ae]s?)\b"
-    r"|\b(nesta|nessa|naquela|desta|dessa)\s+(foto|imagem|fotografia)\b"
-    r"|\b(this|that|him|her)\b"
-    r"|\bthe\s+(photo|picture|image)\b",
-    re.IGNORECASE,
-)
-
-
 # A WhatsApp mention in the message body. Baileys writes the @lid or the phone
 # number, never the display name — what the group sees as "@Rafa" arrives here as
 # "@257487651496102".
 _MENTION = re.compile(r"@(\d{5,})\b")
-
-
-def refers_to_existing_image(text: str) -> bool:
-    """Whether an image request points at a picture already in the conversation.
-
-    Deliberately conservative, because the two mistakes are not symmetric:
-    wrongly generating gives someone a picture they did not ask for, while
-    wrongly editing puts a real person's face into an invented scene nobody
-    requested. So an ambiguous request generates, and anyone who genuinely wants
-    an edit can attach the photo — which skips this test entirely, being
-    unambiguous.
-    """
-    return bool(_REFERS_TO_IMAGE.search(text or ""))
 
 
 # Thumbs reactions we treat as quality signal. Skin-tone modifiers and variation
@@ -344,8 +318,6 @@ class WhatsAppAdapter:
         tts_synthesize: Optional[Callable[[str], Optional[bytes]]] = None,
         speech_text: Optional[Callable[[str], str]] = None,
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
-        image_generate: Optional[Callable[..., Optional[bytes]]] = None,
-        fetch_media: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
         summary_writer: Any = None,
         sender_resolver: Any = None,
@@ -406,17 +378,8 @@ class WhatsAppAdapter:
         # Where a new report is announced. A JID (…@c.us); empty disables it.
         # Real numbers stay out of git, so this comes from KAYA_REPORT_JID.
         self.report_jid = _normalize_jid(str(wcfg.get("report_to") or ""))
-        # Making a picture takes minutes, so it never happens on the webhook
-        # thread: the bot acknowledges, works in the background and sends the
-        # result when it exists. None disables the feature entirely.
-        self.image_generate = image_generate
-        self.fetch_media = fetch_media
         self.describe_image = describe_image
         self.config = config
-        # An edit needs a photo. Usually it is attached to the request, but "põe-lhe
-        # uma coroa" right after someone posts a picture is just as natural, so the
-        # last photo seen in each chat is remembered as the implicit subject.
-        self._last_photo: Dict[str, Dict[str, str]] = {}
         # Chat ids whose content is group-wide memory (the Kaya group). Everything
         # else is private to its own chat — see src/chat/scope.py.
         self.shared_chats = set(wcfg.get("shared_chats", []) or [])
@@ -459,26 +422,12 @@ class WhatsAppAdapter:
             # Until TTS exists, saying yes and then answering in text forever is
             # worse than saying no. See chat.audio.reply_enabled.
             "audio_unavailable": "Ainda não sei responder por áudio, o Gustavo está a tratar disso. Por agora continuo a escrever.",
-            # An edit takes minutes, so the acknowledgement has to set the
-            # expectation — silence for five minutes reads as a broken bot.
-            "image_editing": "Dá-me uns minutos que isto demora, já mando.",
-            "image_generating": "Vou fazer isso, dá-me um bocado.",
-            "image_queued": "Fica em fila, tenho {ahead} à frente, mando assim que estiver.",
-            "image_queue_full": "Tenho imagens a mais em fila. Pede daqui a uns minutos.",
-            # GPU0 is lent to a maintenance job. The request keeps its place; the
-            # wait is stated rather than discovered.
-            "image_maintenance": ("Estou em manutenção, a placa das imagens está "
-                                  "ocupada. Fica em fila, mando daqui a ~{minutes} min."),
-            "image_failed": "Não consegui fazer a imagem. Tenta outra vez ou muda o pedido.",
-            # The editor handing the photo back unchanged used to be delivered as
-            # a success, and the group had to work out for itself that nothing
-            # had happened ("Was the generation rejected? The image looks exactly
-            # the same"). Asked about it, the bot invented content filters. It
-            # says this instead, and the same line goes into the history so the
-            # follow-up turn answers from fact.
-            "image_unchanged": ("Essa edição não pegou, a imagem saiu na mesma. "
-                                "Tenta pedir de outra maneira ou com mais detalhe."),
-            "image_not_allowed": "Só faço imagens no grupo, não por aqui.",
+            # The bot reads photos but no longer makes or edits them (removed
+            # 2026-09-04). Saying so plainly is the whole handler: an unanswered
+            # image request used to be answered by the model, which cheerfully
+            # promised a picture that was never coming.
+            "image_unsupported": ("Já não faço nem edito imagens. Ver e falar "
+                                  "sobre elas ainda sim, manda a foto."),
             # Reports are collected for a week before anything is acted on, so the
             # confirmation has to say the message landed somewhere a person reads.
             "bug_logged": "Registado. Obrigado, o Gustavo vai ver isto.",
@@ -646,147 +595,21 @@ class WhatsAppAdapter:
             window[0], tz=datetime.timezone.utc
         ).replace(tzinfo=None).isoformat()
 
-    def _note_photo(self, msg: "InboundMessage") -> None:
-        """Remember the last photo seen in a chat, as the implicit edit subject."""
-        if msg.media_url and (msg.media_mimetype or "").startswith("image/"):
-            self._last_photo[msg.chat_id] = {
-                "url": msg.media_url, "mimetype": msg.media_mimetype,
-                "sender": msg.sender_name or msg.sender_phone,
-            }
-
     def _handle_image_request(self, msg: "InboundMessage", speaker: str,
                               text: str) -> Dict[str, Any]:
-        """Acknowledge now, make the picture on a background thread, send it later.
+        """Say plainly that pictures are not a thing the bot does any more.
 
-        Generation takes minutes. Holding the webhook open for that would stall
-        every other message in the group, so the only thing that happens inline is
-        the acknowledgement.
+        CMD_IMAGE is deliberately kept in the router. Dropping the intent would
+        let "faz uma imagem de um gato astronauta" fall through to GENERAL, where
+        the model answers conversationally — which in practice means describing
+        the picture it is not making, or promising to send one later. A fixed
+        line costs no GPU and cannot promise anything.
         """
-        import threading
-
-        from src.chat import imagegen
-
-        scope = scope_for_chat(msg.chat_id, self.shared_chats)
-        # Declining is better than promising. A chat that may not ask, or a box
-        # with the feature switched off, gets told so rather than left waiting for
-        # a picture that is never coming.
-        if self.image_generate is None or not imagegen.allowed_here(
-                self.config, scope, chat_id=msg.chat_id, is_group=msg.is_group):
-            reply = self.command_replies.get("image_not_allowed", "")
-            if reply:
-                self._deliver(msg.chat_id, reply)
-            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "user_text": text, "command": "image", "image": "not_allowed"}
-
-
-        # An attached photo is unambiguous — that is the subject. Without one, the
-        # last photo seen counts ONLY if the request actually points at something
-        # ("põe-LHE uma coroa", "edita ESTA"). Treating every request as an edit
-        # of the last photo meant "faz uma imagem de um gato astronauta" edited
-        # somebody's holiday snap instead of drawing a cat, for as long as a photo
-        # sat in the chat's history.
-        source = None
-        if msg.media_url and (msg.media_mimetype or "").startswith("image/"):
-            source = {"url": msg.media_url, "mimetype": msg.media_mimetype}
-        elif msg.chat_id in self._last_photo and refers_to_existing_image(text):
-            source = self._last_photo[msg.chat_id]
-        if source and self.fetch_media is None:
-            source = None
-        mode = "edit" if source else "generate"
-
-        def work() -> None:
-            path = None
-            try:
-                if source:
-                    path = self.fetch_media(source["url"], source.get("mimetype", ""))
-                    if not path:
-                        self._deliver(msg.chat_id,
-                                      self.command_replies.get("image_failed", ""))
-                        return
-                image = self.image_generate(mode=mode, prompt=text, image_path=path)
-                if not image:
-                    # An edit that produced nothing is reported as an edit that
-                    # produced nothing. The bot must not be left guessing why
-                    # two turns later — that is how "it got blocked by the
-                    # content filters" was invented in the group.
-                    reply = self.command_replies.get(
-                        "image_unchanged" if mode == "edit" else "image_failed", "")
-                    self._deliver(msg.chat_id, reply)
-                    self.session_store.append(
-                        msg.chat_id, f"Kaya Bot: (a imagem não saiu, pedido: {text[:80]})")
-                    return
-                self.waha_client.send_image(
-                    msg.chat_id, image,
-                    reply_to=msg.message_id if msg.is_group else None)
-                # Close the loop in the history, so the bot stops saying a
-                # picture is still coming once it has arrived.
-                self.session_store.append(msg.chat_id, "Kaya Bot: (imagem enviada)")
-            except Exception as exc:  # noqa: BLE001 — a worker crash must not kill the thread pool
-                logger.warning("image job failed: %s", exc)
-                self._deliver(msg.chat_id, self.command_replies.get("image_failed", ""))
-            finally:
-                if path:
-                    Path(path).unlink(missing_ok=True)
-
-        # Queued rather than refused. Telling someone "estou ocupado, tenta
-        # depois" loses the request — a long simulator run had two edits asked
-        # for, refused, and never made. The queue is separate from the text path:
-        # generation runs on the other GPU, so the bot keeps answering questions
-        # at full speed while a picture renders.
-        queue = imagegen.get_queue()
-        queue.configure(self.config)
-
-        # The acknowledgement goes out BEFORE the job is queued. Submitting
-        # first means a job that fails instantly — the feature switched off, an
-        # edit with no source photo, both of which return without touching the
-        # GPU — can deliver "não consegui" ahead of "vou fazer isso", which
-        # reads as the bot answering itself backwards.
-        position = queue.depth + 1
-        if position > queue.maxsize:
-            reply = self.command_replies.get("image_queue_full", "")
-            if reply:
-                self._deliver(msg.chat_id, reply)
-            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "user_text": text, "command": "image", "image": "queue_full"}
-
-        waiting = imagegen.pause_remaining(self.config)
-        if waiting:
-            # GPU0 is on loan to a maintenance job. Say so with the wait, rather
-            # than acknowledging normally and delivering forty minutes later —
-            # the bounded queue exists precisely because a picture nobody still
-            # wants is worse than an honest no. If the job releases early the
-            # queue drains at once and this was merely pessimistic.
-            reply = self.command_replies.get("image_maintenance", "").format(
-                minutes=waiting)
-        elif position > 1:
-            # position is 1-based, so the number of jobs AHEAD is one less —
-            # saying "2 pela frente" at position 2 reads as one picture too many.
-            reply = self.command_replies.get("image_queued", "").format(
-                ahead=position - 1, position=position)
-        else:
-            reply = self.command_replies.get(
-                "image_editing" if mode == "edit" else "image_generating", "")
+        reply = self.command_replies.get("image_unsupported", "")
         if reply:
             self._deliver(msg.chat_id, reply)
-
-        # So the conversation knows a picture is on the way. Without this the bot
-        # is asked "então e a foto?" two turns later and has no idea what it
-        # agreed to make; the pending request has to be in the history it reads.
-        self.session_store.append(
-            msg.chat_id,
-            f"Kaya Bot: (a preparar uma imagem, ainda não enviada — pedido: {text[:120]})")
-
-        # Only now, with the promise already sent, does the work start. A
-        # concurrent request can still have taken the last slot in the gap.
-        submitted = queue.submit(work)
-        if submitted is None:
-            self._deliver(msg.chat_id, self.command_replies.get("image_queue_full", ""))
-            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "user_text": text, "command": "image", "image": "queue_full"}
-
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                "user_text": text, "command": "image", "image": mode,
-                "queue_position": submitted}
+                "user_text": text, "command": "image"}
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
@@ -1172,8 +995,6 @@ class WhatsAppAdapter:
                 sender_id=msg.sender_id,
                 sender_phone=msg.sender_phone,
             )
-
-        self._note_photo(msg)
 
         # Strip the bot's own mention, then name everybody else's: the resolved
         # text is what reaches the model, the retriever's person filter and the

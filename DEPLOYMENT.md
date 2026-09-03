@@ -157,7 +157,6 @@ of this file said. `models/` is shared because it is 42GB of read-only weights;
 | `data/ingest_state.json` | the ingest watermark. A dev watermark makes prod re-read or skip chunks. |
 | `data/whatsapp_sessions/`, `whatsapp_prefs/`, `whatsapp_summaries/` | live per-chat state |
 | `data/feedback/` | bug reports, ratings and the interaction log |
-| `data/imagegen_log/` | the last `chat.imagegen.keep_outputs` renders, with a JSON sidecar per image |
 
 The `data.bak.*` directory on the box is what a previous attempt at the symlink
 cost. Seed it once, then leave it alone.

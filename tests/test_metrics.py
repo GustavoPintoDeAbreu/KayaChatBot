@@ -67,13 +67,12 @@ def test_malformed_lines_skipped(tmp_path):
 
 
 # ── what gets logged at all ──────────────────────────────────────────────────
-# Every result carrying a `command` was excluded, and `_handle_image_request`
-# always sets one. So the edit the group complained about left no record: not the
-# prompt it was given, not the editor, not the outcome. The exclusion is meant
-# for bookkeeping confirmations ("volto a responder por texto"), not for a real
-# turn that happens to produce a picture.
+# Every result carrying a `command` was excluded, and the image handler always
+# sets one, so image turns left no record at all. Generation is gone (2026-09-04)
+# but the ask still routes CMD_IMAGE and still gets a reply, and how often the
+# group keeps asking is the only evidence about whether removing it hurt.
 def test_an_image_turn_is_logged():
-    assert metrics.should_log({"reply": "vou fazer isso", "command": "image"})
+    assert metrics.should_log({"reply": "já não faço imagens", "command": "image"})
 
 
 def test_bookkeeping_confirmations_are_still_excluded():
@@ -103,18 +102,3 @@ def test_the_speaker_is_recorded(tmp_path):
     row = metrics.load_interactions(log)[0]
     assert row["speaker"] == "Gustavo"
     assert row["speaker"] in row["reply_members"]
-
-
-def test_a_render_is_recorded_with_what_produced_it(tmp_path):
-    """The translated instruction, the final prompt and the editor only ever
-    existed as a logger.info on a logger nobody configures."""
-    log = tmp_path / "i.jsonl"
-    metrics.log_interaction(
-        source="imagegen", user_message="transform the monster cans into dildos",
-        assistant_response="Replace the cans. Keep the person's face...",
-        image_subject="object", image_editor="flux2-klein",
-        image_seed=42, image_edited=True, path=log)
-    row = metrics.load_interactions(log)[0]
-    assert row["image_subject"] == "object"
-    assert row["image_editor"] == "flux2-klein"
-    assert row["image_edited"] is True

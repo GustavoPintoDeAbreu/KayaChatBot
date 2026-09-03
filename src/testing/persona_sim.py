@@ -10,7 +10,7 @@ Two ideas carry it:
 
 **Drive the real webhook.** Every message is a synthetic WAHA event POSTed to the
 `kaya-sim` instance, which runs the production `whatsapp_server` in mock mode.
-Parsing, routing, the GPU lock, scoping, media handling and the async image path
+Parsing, routing, the GPU lock, scoping and media handling
 are all the real ones; only the outbound WhatsApp client is a mock. In mock mode
 the webhook *awaits* generation and returns the full result dict, so a beat can
 assert on the routing decision rather than infer it from the reply text.
@@ -239,7 +239,6 @@ class TurnRecord:
     text: str
     reply: str = ""
     command: Optional[str] = None
-    image: Optional[str] = None
     handled: bool = False
     seconds: float = 0.0
     media: str = ""
@@ -254,7 +253,6 @@ class SimResult:
     started: str
     turns: List[TurnRecord] = field(default_factory=list)
     metrics: Dict[str, Any] = field(default_factory=dict)
-    images: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def failures(self) -> List[TurnRecord]:
@@ -282,9 +280,6 @@ def check_expectations(result: Dict[str, Any], expect: Dict[str, Any],
     if "command" in expect and result.get("command") != expect["command"]:
         failures.append(f"command={result.get('command')!r}, expected {expect['command']!r}")
 
-    if "image" in expect and result.get("image") != expect["image"]:
-        failures.append(f"image={result.get('image')!r}, expected {expect['image']!r}")
-
     if "max_words" in expect and _words(reply) > expect["max_words"]:
         failures.append(f"reply is {_words(reply)} words, expected at most {expect['max_words']}")
 
@@ -303,10 +298,6 @@ def check_expectations(result: Dict[str, Any], expect: Dict[str, Any],
     for needle in expect.get("not_contains", []):
         if needle.lower() in lowered:
             failures.append(f"reply should not mention {needle!r}")
-
-    if expect.get("image_sent"):
-        if not any("image_bytes" in item for item in outbox_delta):
-            failures.append("no image reached the outbox")
 
     if expect.get("voice_sent"):
         if not any("voice_bytes" in item for item in outbox_delta):
@@ -327,7 +318,7 @@ def check_expectations(result: Dict[str, Any], expect: Dict[str, Any],
         failures.append(f"the voice note said none of {spoken_any}")
 
     if expect.get("text_only"):
-        if any("voice_bytes" in item or "image_bytes" in item for item in outbox_delta):
+        if any("voice_bytes" in item for item in outbox_delta):
             failures.append("expected a text reply, got media")
 
     return failures
@@ -462,7 +453,7 @@ class SimRunner:
         record = TurnRecord(
             index=len(result.turns) + 1, beat=beat_kind, speaker=persona.name,
             chat=chat, text=text, reply=payload.get("reply") or "",
-            command=payload.get("command"), image=payload.get("image"),
+            command=payload.get("command"),
             handled=bool(payload.get("handled")), seconds=round(seconds, 2),
             media=media, note=note,
         )
@@ -570,13 +561,12 @@ class SimRunner:
                  f"{len(senders) - answered} dropped")
 
     def _beat_wait(self, beat: Dict[str, Any], result: SimResult) -> None:
-        """Wait for an async delivery (an image takes ~90s) or just pause.
+        """Wait for an async delivery (a voice note) or just pause.
 
-        The mark is the outbox length recorded when the *request* was made, not 0:
-        looking at the whole outbox finds an image from an earlier beat and
+        The mark is the outbox length recorded when the *request* was made, not
+        0: looking at the whole outbox finds a delivery from an earlier beat and
         returns immediately, so the wait silently passes and the next beat runs
-        while the render is still going. That is what made the "implicit subject"
-        beat come back busy instead of editing.
+        while the work is still going.
         """
         seconds = float(beat.get("seconds", 5))
         want = beat.get("for")
@@ -586,8 +576,6 @@ class SimRunner:
 
         while time.time() < deadline:
             delta = self.client.outbox()
-            if want == "image" and any("image_bytes" in item for item in delta[mark:]):
-                break
             if want == "voice" and any("voice_bytes" in item for item in delta[mark:]):
                 break
             if want is None:
@@ -601,9 +589,6 @@ class SimRunner:
             ok = bool(delta)
             self.log(f"  ~ waited {elapsed:.0f}s for {want}: "
                      f"{'arrived' if ok else 'NEVER ARRIVED'}")
-            if want == "image":
-                result.images.append({"seconds": round(elapsed, 1), "arrived": ok,
-                                      "bytes": delta[0].get("image_bytes") if delta else 0})
             if not ok and beat.get("required", True):
                 result.turns.append(TurnRecord(
                     index=len(result.turns) + 1, beat="wait", speaker="-",

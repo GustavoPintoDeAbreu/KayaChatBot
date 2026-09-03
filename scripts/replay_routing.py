@@ -69,7 +69,7 @@ def load_timeline(messages_path: Path, interactions_path: Path, date: str):
         if not line.strip():
             continue
         row = json.loads(line)
-        if row.get("source") == "imagegen" or not row.get("timestamp"):
+        if not row.get("timestamp"):
             continue
         if date and not str(row["timestamp"]).startswith(date):
             continue

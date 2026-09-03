@@ -175,7 +175,10 @@ models/piper/
 
 # Image bake-off — real photos of real people, and edits of their faces.
 # Nothing here may ever reach a remote: the privacy invariant covers generated
-# images exactly as it covers chat history.
+# images exactly as it covers chat history. Generation was removed on
+# 2026-09-04 and nothing writes these any more, but the directories still exist
+# on the box, so the guard stays. data/bench_photos/ is also still read by
+# scripts/preflight_e2e.py check_vision.
 reports/image_bakeoff/
 data/bench_photos/
 data/bench_objects/

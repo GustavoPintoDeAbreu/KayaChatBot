@@ -363,62 +363,6 @@ class TestIngestWatermark:
         assert [m["message_count"] for m in collection.metadatas] == [4]
 
 
-# ── image consent is not memory scope (2026-08-13) ───────────────────────────
-def _image_config(**imagegen):
-    return {"chat": {"imagegen": {"enabled": True, **imagegen}}}
-
-
-def test_a_group_may_edit_even_when_its_memory_is_private():
-    """The filed bug. The Kaya group was missing from whatsapp_shared_chats.json,
-    so scope_for_chat returned "group:…" and an edit asked for IN the group was
-    refused with "Só faço imagens no grupo, não por aqui."."""
-    from src.chat import imagegen
-
-    config = _image_config(allow_groups=True, allowed_scopes=["shared"])
-    private_group = scope_for_chat("351939498856-1585236524@g.us", [])
-
-    assert imagegen.allowed_here(config, private_group,
-                                 chat_id="351939498856-1585236524@g.us",
-                                 is_group=True) is True
-
-
-def test_a_dm_is_still_refused():
-    """Consent is the point of the gate: an arbitrary DM may not put a real
-    member's face into an invented scene."""
-    from src.chat import imagegen
-
-    config = _image_config(allow_groups=True, allowed_scopes=["shared"])
-
-    assert imagegen.allowed_here(config, scope_for_chat("351911111111@c.us", []),
-                                 chat_id="351911111111@c.us", is_group=False) is False
-
-
-def test_allowed_chats_wins_over_everything_else():
-    from src.chat import imagegen
-
-    config = _image_config(allowed_chats=["120363@g.us"], allow_groups=True)
-
-    assert imagegen.allowed_here(config, "shared", chat_id="120363@g.us", is_group=True)
-    assert not imagegen.allowed_here(config, "shared", chat_id="999@g.us", is_group=True)
-
-
-def test_the_original_scope_rule_still_applies_when_nothing_else_is_set():
-    from src.chat import imagegen
-
-    config = _image_config(allowed_scopes=["shared"])
-
-    assert imagegen.allowed_here(config, "shared", chat_id="x@g.us", is_group=True)
-    assert not imagegen.allowed_here(config, "dm:abc", chat_id="x@c.us", is_group=False)
-
-
-def test_a_disabled_feature_refuses_everyone():
-    from src.chat import imagegen
-
-    config = {"chat": {"imagegen": {"enabled": False, "allow_groups": True}}}
-
-    assert imagegen.allowed_here(config, "shared", chat_id="x@g.us", is_group=True) is False
-
-
 # ── naming a group that was never registered as shared memory ────────────────
 def _write_chat_log(directory, name, chat_ids):
     directory.mkdir(parents=True, exist_ok=True)

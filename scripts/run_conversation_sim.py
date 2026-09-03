@@ -19,8 +19,8 @@ Exits non-zero if any assertion failed, so it can gate a deploy the way
 `preflight_e2e.py` does. Reports land in reports/sim/<stamp>/.
 
 Cost: personas run on grok-4.20-0309-non-reasoning ($1.25/$2.50 per M). A smoke
-run is a few cents; long_haul is around a euro. Wall time is dominated by image
-rendering (~90s each), not by tokens.
+run is a few cents; long_haul is around a euro. Wall time is dominated by
+generation and by the ingest beats, not by tokens.
 """
 
 import argparse
@@ -120,7 +120,6 @@ def summarise(result, elapsed: float) -> Dict[str, Any]:
             round(sum(b["dropped"] for b in bursts) / max(sum(b["senders"] for b in bursts), 1), 3)
             if bursts else None
         ),
-        "images": result.images,
         "wall_seconds": round(elapsed, 1),
     }
     metrics.update(result.metrics)
@@ -148,7 +147,7 @@ def write_report(run_dir: Path, result, config_note: str) -> None:
             f'<td>{turn.speaker}</td><td>{turn.chat}</td>'
             f'<td class="msg">{(turn.text or "")[:200]} {media}</td>'
             f'<td class="msg">{(turn.reply or "")[:400]}</td>'
-            f'<td>{turn.command or ""}{("/" + turn.image) if turn.image else ""}</td>'
+            f'<td>{turn.command or ""}</td>'
             f'<td>{turn.seconds}s</td><td class="why">{detail}{"<i>" + turn.note + "</i>" if turn.note else ""}</td></tr>'
         )
 

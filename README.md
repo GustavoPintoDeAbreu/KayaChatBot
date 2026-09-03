@@ -25,7 +25,7 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Dual knowledge system**: JSON member profiles injected into the system prompt + curated ChromaDB knowledge base
 - **Remembers the thread**: 60 lines verbatim — about thirty exchanges — plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
 - **Voice in and out**: voice notes are transcribed with faster-whisper; replies can be spoken with Piper, per-language and sticky per chat
-- **Sees and makes pictures**: inbound photos are described into text (and so become searchable later); the editor is picked per request by subject — FLUX.1 Kontext for a person, FLUX.2 Klein for an object or a scene — and Z-Image Turbo invents one from text
+- **Sees pictures**: inbound photos are described into text by the serving model's own vision projector, and so become searchable memory later. It does not make or edit them — that was removed on 2026-09-04, after two weeks of logs recorded a single request that misfired
 - **Does not tell the same joke twice**: an open-ended answer (banter, a roast, an
   opinion) is built from a random handful of each member's facts and is shown what
   it already said about that person, so "roast me" stops returning the same four
@@ -148,7 +148,7 @@ KayaChatBot/
 │   │   ├── face_utils.py             # Face detection, framing and identity scoring for edits
 │   │   ├── scope.py                  # What is group-wide memory vs private to one chat
 │   │   ├── stt.py / tts.py           # faster-whisper transcription, Piper speech
-│   │   ├── vision.py / imagegen.py   # Describing photos; making and editing them
+│   │   ├── vision.py                 # Describing inbound photos
 │   │   ├── web_search.py             # Grok web results, synthesized locally into the reply
 │   │   ├── suggestions.py            # The follow-up question chips in the web UI
 │   │   ├── inference_backend.py      # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
@@ -384,8 +384,8 @@ inference:
 
 The bot cannot change its own code, so a technical complaint has to be pointed at
 a person — and that person is in the group, which the rule naming him did not
-allow for. Asked by its own maintainer why image generation was bad, the bot
-answered that the maintainer had to deal with it.
+allow for. Asked by its own maintainer why a feature was bad, the bot answered
+that the maintainer had to deal with it.
 
 ```yaml
 chat:
@@ -458,14 +458,14 @@ The unit suite proves the wiring; this reproduces several people talking over
 each other, a photo arriving mid-argument, and a thread long enough to overflow
 the retrieval budget. It POSTs synthetic WAHA events at a `kaya-sim` container
 running the **real** webhook path in mock mode — only the outbound WhatsApp
-client is faked — so routing, the GPU lock, scoping and the async image path are
-the production ones.
+client is faked — so routing, the GPU lock, scoping and media handling are the
+production ones.
 
 ```bash
 kaya_chatbot_env/bin/python scripts/seed_sim_data.py     # once — builds ./data_sim
 docker compose --profile sim up -d kaya-sim
 
-kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset smoke      # ~40s, no images
+kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset smoke      # ~40s
 kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset standard   # ~10min, full surface
 kaya_chatbot_env/bin/python scripts/run_conversation_sim.py --preset long_haul  # ~28min, overflows the budget
 ```
@@ -497,7 +497,7 @@ and the run exits non-zero on a failed assertion, so it can gate a deploy.
 
 ### Inference
 - On the `gguf` backend the app process holds only the tokenizer and the retriever (~2 GB); the weights live in the `llama` container
-- Typical latencies: banter ~5 s, a question that searches memory 7–13 s, describing a photo ~4 s, generating an image 56–75 s, editing a photo ~180 s
+- Typical latencies: banter ~5 s, a question that searches memory 7–13 s, describing a photo ~4 s
 - Generation is serialized by a GPU lock, so four people asking at once queue (8–35 s) rather than drop
 - Adjust `inference.temperature` in `config.yaml` for response creativity
 
