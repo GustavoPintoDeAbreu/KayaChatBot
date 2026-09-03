@@ -311,6 +311,32 @@ traffic stages through system RAM.
 | `hf` | Unsloth `FastModel` / PEFT model **in-process** on the GPU (default). |
 | `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/gemma-4-12b-it-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model. This is the only backend that can serve a model larger than one card, and the only one that works with the live profile at all (it has no adapter). |
 
+**`cache_prompt` is ON (2026-09-04), and was off for no reason.** It arrived
+`False` with the original GGUF backend commit carrying no rationale — a copied
+default — so llama.cpp re-prefilled the whole prompt on every call, twice per
+turn. A turn is two calls: `router.classify` and the reply. The router's system
+prompt is **~2,350 tokens and byte-identical on every message**, including "😂",
+to produce a one-word label.
+
+Measured against the live server, medians over 10 turns:
+
+| | ideal (one repeated 3,015-token prefix) | realistic (router/reply interleaved) |
+|---|---|---|
+| `cache_prompt: False` | 3.01 s/call | 11.49 s/turn |
+| `cache_prompt: True` | **1.45 s/call** | **9.26 s/turn** |
+
+The interleaved number is the one that matters and is smaller for a structural
+reason: `--parallel 1` means **one slot and therefore one cached prefix**, so the
+router and reply prompts partly evict each other. Giving each its own slot would
+need `--parallel 2`, which splits the KV budget — 32768/2 = 16384 per slot would
+halve the context the needle-recall work depends on, so it would also need
+`-c 65536` and about 3.4 GB more KV (17.2 → ~20.6 GB of 24.6). That fits, but it
+has not been measured; do not change `--parallel` without checking recall first.
+
+Note also that the reply call's prefix is *designed* to vary on an open-ended
+turn — `sample_facts=True` reshuffles the member profiles every time, which is
+the anti-repetition fix and is worth more than a cache hit.
+
 `KAYA_LLAMA_URL` overrides `inference.gguf.server_url` (env wins), which is how a
 benchmark run targets the `llama-bench` candidate server on `127.0.0.1:8081`
 while leaving what prod resolves untouched.

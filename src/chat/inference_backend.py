@@ -141,7 +141,24 @@ class LlamaCppBackend(InferenceBackend):
             "top_k": sampling.get("top_k", 64),
             # llama.cpp calls it repeat_penalty; it has no no_repeat_ngram_size.
             "repeat_penalty": sampling.get("repetition_penalty", 1.0),
-            "cache_prompt": False,
+            # Reuse the longest common prefix with the previous request on this
+            # slot. It arrived as False with the backend and carried no reason —
+            # a copied default, not a decision — and it was costing a full
+            # re-prefill on every call, twice per turn.
+            #
+            # The router's system prompt is ~2,350 tokens and byte-identical on
+            # EVERY message, including "😂", to produce a one-word label. Measured
+            # against the live server with a shared 3,015-token prefix:
+            # 3.01s -> 1.45s per call.
+            #
+            # --parallel 1 means one slot, so there is exactly one cached prefix
+            # at a time and the two calls of a turn alternate. The router still
+            # wins every time (its prefix is constant); the reply call wins only
+            # when its own prefix happens to match, which for an open-ended turn
+            # it deliberately does not — sample_facts reshuffles the profiles by
+            # design. That is the anti-repetition fix and it is worth more than
+            # the cache hit.
+            "cache_prompt": True,
             "stream": stream,
         }
 

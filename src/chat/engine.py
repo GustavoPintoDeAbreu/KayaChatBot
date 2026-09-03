@@ -503,13 +503,18 @@ class KayaEngine:
             # reached for the same two. A factual answer keeps the full set:
             # "o que faz o Gil?" cannot depend on whether his job survived a draw.
             open_ended = variety.is_open_ended(route.mode, route.command)
-            if open_ended and self.system_prompt_factory is not None:
+            mode_prompt = mcfg.get("system_prompt")
+            if open_ended and mode_prompt is None and self.system_prompt_factory is not None:
+                # `mode_prompt is None` is the point: a mode that brings its own
+                # prompt overwrites this two lines below, so banter and mixed were
+                # paying for a full 15-profile rebuild every turn and throwing it
+                # away. Roast and the null-prompt modes are the ones that actually
+                # read it.
                 try:
                     system_prompt = self.system_prompt_factory(sample_facts=True)
                 except Exception as exc:  # noqa: BLE001 — fall back to the fixed prompt
                     print(f"⚠️  could not rebuild the system prompt: {exc}")
 
-            mode_prompt = mcfg.get("system_prompt")
             if mode_prompt:
                 system_prompt = build_mode_system_prompt(self.config, mode_prompt)
             # Whoever ends up holding the prompt, the clauses that depend on who
