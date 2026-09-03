@@ -26,9 +26,9 @@ services:
       - ./data/rag_db:/app/data/rag_db
       - ./models:/app/models
       - ./src:/app/src:ro
-      # scripts/ is not in the image but src/chat/imagegen.py spawns
-      # scripts/imagegen_worker.py, so without this the bot accepts an image
-      # request and the worker is simply not there.
+      # scripts/ is not baked into the image. Nothing in src/ imports from it
+      # any more (that was the image worker), but the ops scripts — preflight,
+      # ingest, the probes — are run inside the container, so it stays mounted.
       - ./scripts:/app/scripts:ro
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
@@ -182,14 +182,19 @@ services:
     ports:
       - "7860:7860"
     environment:
-      # Both cards are visible, but the app itself is pinned to the PROD one by
-      # CUDA_VISIBLE_DEVICES — `extends` merges kaya-base's environment, which
-      # points at the DEV card, so this line is what keeps the live model off
-      # dev/training. The second card is exposed solely so the image worker
-      # (src/chat/imagegen.py, chat.imagegen.device) has somewhere to run that is
-      # not on top of the LLM; a 20GB pipeline on the serving card would OOM it.
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-0}
+      # ONE card, and it is the prod one. The second used to be exposed solely
+      # so the image worker had somewhere to run that was not on top of the LLM;
+      # generation was removed on 2026-09-04 and nothing else has ever touched
+      # it, so the app no longer sees it at all.
+      #
+      # Both lines are needed and they are not redundant: NVIDIA_VISIBLE_DEVICES
+      # picks which physical card is handed to the container, CUDA_VISIBLE_DEVICES
+      # picks among what the container can see — and with one card exposed that
+      # is index 0, NOT KAYA_GPU_PROD. `extends` merges kaya-base's environment,
+      # which points at the DEV card, so this pair is also what keeps the live
+      # model off dev/training. Same shape as the `llama` service below.
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-all}
+      - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
@@ -203,19 +208,6 @@ services:
       - KAYA_WAHA_URL=http://waha:3000
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
-      # Where the image models live. HF_HOME above points at models/.cache for the
-      # LLM tokenizer; the diffusion weights (~120GB) stay in the host cache and
-      # are mounted read-only rather than copied.
-      - KAYA_IMAGE_HF_HOME=/app/hf-cache
-    volumes:
-      # NOT ${HOME}: docker is installed as a snap here and resolves HOME to its
-      # own sandbox (…/snap/docker/<rev>/), which contains no models. The real
-      # path is set in .env.
-      - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
-      # InsightFace keeps its own model pack outside the HF cache. The image
-      # worker uses it to frame edits around faces and to score candidate
-      # takes; without it that degrades to a no-op rather than failing.
-      - ${KAYA_INSIGHTFACE_HOME:-/home/gustavo/.insightface}:/root/.insightface:ro
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
 
@@ -291,16 +283,14 @@ services:
     env_file:
       - .env
     environment:
-      # Mirrors prod's arrangement, and for the same reason. The app (Whisper +
-      # the embedder, ~4.6GB) sits on the card the LLM is on; the image worker
-      # gets the OTHER card to itself. Putting the app on the worker's card left
-      # FLUX ~19GB instead of 23.5GB and every EDIT died of OOM while the smaller
-      # generation model still fitted — which reads as "edits are broken" when it
-      # is really "the test rig was arranged differently from production".
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-1}
+      # Mirrors prod's arrangement, and for the same reason: a sim run that is
+      # arranged differently from production tests a rig nobody ships. One card,
+      # the prod one, exposed as index 0 inside — see kaya-prod for why both
+      # lines are needed. (This used to expose both so the image worker had the
+      # other card; generation was removed on 2026-09-04.)
+      - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_PROD:-all}
+      - CUDA_VISIBLE_DEVICES=0
       - HF_HOME=/app/models/.cache
-      - KAYA_IMAGE_HF_HOME=/app/hf-cache
       - PYTHONUNBUFFERED=1
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - GRADIO_SERVER_NAME=0.0.0.0
@@ -328,11 +318,6 @@ services:
       - ./scripts:/app/scripts:ro
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
-      - ${KAYA_HF_CACHE:-/home/gustavo/.cache/huggingface}:/app/hf-cache:ro
-      # InsightFace keeps its own model pack outside the HF cache. The image
-      # worker uses it to frame edits around faces and to score candidate
-      # takes; without it that degrades to a no-op rather than failing.
-      - ${KAYA_INSIGHTFACE_HOME:-/home/gustavo/.insightface}:/root/.insightface:ro
     ports:
       - "127.0.0.1:7862:7862"
     command: python -m src.chat.whatsapp_server
@@ -368,9 +353,15 @@ services:
     environment:
       # Dev card by default so a bench run cannot disturb the live model. Set
       # KAYA_GPU_BENCH= (empty -> `all`) when an arm genuinely needs both cards,
-      # and stop prod first.
+      # and stop prod first — and then set KAYA_BENCH_CVD=0,1 as well.
+      #
+      # CUDA_VISIBLE_DEVICES indexes what the CONTAINER sees, not the host. It
+      # was hardcoded to `0,1` while NVIDIA_VISIBLE_DEVICES exposed a single
+      # card, so it named a device index that did not exist. This is the one
+      # service that may legitimately want both — it exists to score models
+      # bigger than 24GB — so it stays configurable rather than pinned.
       - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_BENCH:-${KAYA_GPU_DEV:-all}}
-      - CUDA_VISIBLE_DEVICES=0,1
+      - CUDA_VISIBLE_DEVICES=${KAYA_BENCH_CVD:-0}
     volumes:
       - ./models/gguf:/models:ro
     entrypoint: /app/llama-server

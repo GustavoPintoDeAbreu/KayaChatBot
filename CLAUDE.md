@@ -186,19 +186,46 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 
 ### GPU topology (2× RTX 3090, no NVLink)
 
-The box has **two 24 GB RTX 3090s and no NVLink bridge**. They are two separate
+**The whole bot runs on ONE card (since 2026-09-04).** Prod is `NVIDIA_VISIBLE_DEVICES=1` +
+`CUDA_VISIBLE_DEVICES=0` — llama-server ~12.9 GB (weights 9.1 + mmproj 0.17 + KV)
+and the app process ~4.3 GB (Whisper large-v3 + the bge-m3 embedder + CUDA
+context), **17.2 GB of 24.6 GB, with ~7 GB spare** at the configured 32768
+context. GPU0 holds the desktop and nothing of Kaya's.
+
+This is not a downgrade — it is what was already happening. The prod llama
+command has been `-sm none` since the 12B landed, and the *only* thing that ever
+used the second card was the image worker, which is gone. What changed is that
+prod no longer *reserves* GPU0: `NVIDIA_VISIBLE_DEVICES` was `all` purely so a
+20 GB diffusion pipeline had somewhere to run that was not on top of the LLM.
+
+`NVIDIA_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` are **not redundant**: the
+first picks which physical card the container is handed, the second indexes what
+the container can already see. Expose one card and it is index **0** inside,
+whatever its host index. Getting that pair wrong is how a service silently lands
+on the desktop card.
+
+The box still has **two 24 GB RTX 3090s and no NVLink bridge**, and everything
+below still applies to anything that tries to use both. They are two separate
 devices, not a 48 GB pool: `can_device_access_peer(0,1)` is False and `nvidia-smi
 topo -p2p` reports `CNS`, so there is **no GPU-to-GPU P2P** and all inter-GPU
 traffic stages through system RAM.
 
-| | Serving (llama.cpp) | Python (training, hf backend, CI) |
-|---|---|---|
-| `NVIDIA_VISIBLE_DEVICES` | `all` | `all` |
-| `CUDA_VISIBLE_DEVICES` | `0,1` | **`0`** |
-| Ceiling | ~45 GB weights+KV, layer-split | 24 GB |
+| | Serving today | Serving, two-card (available, unused) | Python (training, hf backend, CI) |
+|---|---|---|---|
+| `NVIDIA_VISIBLE_DEVICES` | `1` | `all` | `0` |
+| `CUDA_VISIBLE_DEVICES` | `0` | `0,1` | **`0`** |
+| `-sm` | `none` | `layer` | — |
+| Ceiling | 24 GB | ~45 GB weights+KV | 24 GB |
 
-- **Serving can exceed 24 GB** by layer-splitting one model across both cards
-  (`-sm layer`). Only the hidden state crosses PCIe at the layer boundary.
+- **kaya-dev still owns GPU0 and can run alongside prod.** That got *cleaner*,
+  not worse: prod used to reserve the dev card for renders, so "starting
+  alongside it" meant sharing after all the moment somebody asked for a picture.
+- **Serving can still exceed 24 GB** by layer-splitting across both cards — set
+  `KAYA_GPU_PROD=` (empty → `all`) and `KAYA_PROD_SM=layer`. `llama-bench`
+  (profile `bench`) is the one service that routinely does this, since it exists
+  to score models bigger than one card; it takes `KAYA_BENCH_CVD=0,1` alongside
+  an empty `KAYA_GPU_BENCH`.
+  Only the hidden state crosses PCIe at the layer boundary.
   **Never use `-sm row`** here — without P2P it round-trips through host RAM every
   step. There must be **no `deploy.resources.reservations.devices` block** on the
   llama services: a `count:` reservation overrides `NVIDIA_VISIBLE_DEVICES` and
@@ -213,11 +240,15 @@ traffic stages through system RAM.
   `device_map="auto"`.
 - GPU0 drives the desktop and is capped at 300 W. Burn-in once measured its
   sustained clocks ~15% below GPU1's (1238 vs 1448 MHz), which is why two-card
-  serving uses `-ts 0.45,0.55` to give it fewer layers. That gap was measured at
-  the old 250 W cap; at 300 W it sustains ~1620 MHz. Worth re-measuring before
-  trusting the 0.45/0.55 bias, but note the gap is partly real — see below.
+  serving used `-ts 0.45,0.55` to give it fewer layers. That gap was measured at
+  the old 250 W cap; at 300 W it sustains ~1620 MHz. **Nothing sets `-ts` today**
+  — prod is single-card — so re-measure before trusting 0.45/0.55 if you ever go
+  back to a split. The gap is partly real; see below.
 - **GPU0 is cooling-limited, not power-limited. The "intake-starved" note in
-  `gpu-power-limit.sh` is correct — 300 W is its ceiling.** Measured 2026-08-16 with
+  `gpu-power-limit.sh` is correct — 300 W is its ceiling.** This was measured
+  against FLUX renders, which no longer happen, so GPU0 now sits idle unless
+  kaya-dev is up. The finding stands and is why the cap must not be raised.
+  Measured 2026-08-16 with
   240 s sustained fp16 burns (harsher than a real render), all from a 61 °C start:
 
   | GPU0 cap | Sustained | Temp | Fan | Throughput | Thermal slowdown |
@@ -264,9 +295,11 @@ traffic stages through system RAM.
   mode with its fans parked at zero, strictly worse than not touching it. **Always
   read the attribute back and compare.** Note also that no attribute exposes which
   fan belongs to which GPU, and an unverified probe write "succeeds" on all four.
-  `gpu0-fan-curve.service` is therefore a **user** unit: it takes over above
-  60 °C and hands back to the driver's automatic curve below 55 °C, so idle stays
-  in the zero-RPM band and the machine is no louder than before. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
+  `gpu0-fan-curve.service` is a **user** unit: it takes over above 60 °C and hands
+  back to the driver's automatic curve below 55 °C, so idle stays in the zero-RPM
+  band. It exists for FLUX renders heating GPU0 and is **disabled and inactive**;
+  with generation gone there is nothing left to cool. `/usr/local/bin/gpu0-fan-curve.sh`
+  and `/etc/X11/xorg.conf.d/20-nvidia-coolbits.conf` are both inert; safe to delete. GDDR6X memory-junction temp is **not readable** on Linux for GeForce —
   do not write monitoring that expects it.
 
 ### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
@@ -555,10 +588,11 @@ Three things are load-bearing:
   `./data`, and the simulator invents conversations that would then be logged as
   group memory and ingested into the real vector store. It gets `./data_sim`,
   seeded by `scripts/seed_sim_data.py`.
-- **Its GPU split mirrors prod** — app on the LLM's card, image worker on the
-  other. Arranging it the other way left FLUX ~19GB instead of 23.5GB and every
-  *edit* OOMed while generation still worked, which reads as "edits are broken"
-  when it is really "the rig was arranged differently from production".
+- **Its GPU pinning mirrors prod** — one card, the prod one, exposed as index 0.
+  The lesson outlived the two-card era: a rig arranged differently from
+  production tests something nobody ships. Arranging it the other way once left
+  FLUX ~19GB instead of 23.5GB and every *edit* OOMed while generation still
+  worked, which reads as "edits are broken" when it is really "the rig is wrong".
 - **Message ids are unique per run** (`uuid4` prefix, not a counter). The sim
   container outlives a run, so a restarting counter made the adapter's replay
   guard — which is correct — treat the second run as the first run's backlog and

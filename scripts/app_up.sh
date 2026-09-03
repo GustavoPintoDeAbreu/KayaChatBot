@@ -35,6 +35,9 @@ OTHER_ENV=$([[ "$ENV_NAME" == "dev" ]] && echo "prod" || echo "dev")
 
 # dev and prod own different cards (KAYA_GPU_DEV / KAYA_GPU_PROD), so they can run
 # at the same time. Only refuse when they would actually land on the same GPU.
+# This got cleaner on 2026-09-04: prod used to ALSO reserve the dev card for the
+# image worker, so "starting alongside it" meant sharing after all whenever
+# somebody asked for a picture. Prod now sees one card and never leaves it.
 GPU_DEV="$(grep -E '^KAYA_GPU_DEV=' .env | tail -1 | cut -d= -f2-)"
 GPU_PROD="$(grep -E '^KAYA_GPU_PROD=' .env | tail -1 | cut -d= -f2-)"
 

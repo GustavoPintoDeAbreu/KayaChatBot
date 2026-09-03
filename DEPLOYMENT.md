@@ -4,8 +4,8 @@ How the Kaya web app is served to other computers, and how the CI/CD pipeline
 deploys it. The box is **serving-only**: `kaya-prod` is the **always-on**
 production app (auto-recovers after reboot). "Push to prod" rebuilds and restarts
 the live container from a dedicated `~/kaya-prod` checkout. `kaya-dev` exists for
-occasional manual testing; only one env runs at a time, since a served model may
-claim both GPUs.
+occasional manual testing and owns the other card, so it can run alongside prod
+— `app_up.sh` only refuses when both envs resolve to the same GPU.
 
 ---
 
@@ -45,11 +45,14 @@ so the landing page stays public.
 - **dev**: `dev.kaya.example.com` → `kaya-dev:7861`
 - **prod**: `kaya.example.com` → `kaya-prod:7860`
 - The box has **2× RTX 3090 (24 GB each), no NVLink** — two separate devices, not a
-  48 GB pool. llama.cpp can layer-split one model across both for a ~45 GB
-  weights+KV ceiling (`-sm layer`; never `-sm row` — there is no P2P). Because a
-  model may claim both cards, **only run one env at a time** (`app_up.sh` enforces
-  this). Python services stay pinned to one card via `CUDA_VISIBLE_DEVICES=0` — see
-  the GPU topology section in `CLAUDE.md` for why that is load-bearing.
+  48 GB pool. **Prod uses ONE of them** (since 2026-09-04): 17.2 GB of 24.6 GB for
+  llama-server, Whisper and the embedder together. `kaya-dev` owns the other, so
+  the two coexist; `app_up.sh` refuses only when both resolve to the same card.
+  llama.cpp can still layer-split one model across both for a ~45 GB weights+KV
+  ceiling (`-sm layer`; never `-sm row` — there is no P2P), but that means giving
+  up the dev card. Python services stay pinned to one card via
+  `CUDA_VISIBLE_DEVICES=0` — see the GPU topology section in `CLAUDE.md` for why
+  that is load-bearing.
 - Serving a model larger than 24 GB takes **three** variables, not one: the
   `llama` service is pinned to one card by default (`NVIDIA_VISIBLE_DEVICES=
   ${KAYA_GPU_PROD:-all}`, `-sm ${KAYA_PROD_SM:-none}`), so `KAYA_PROD_GGUF`
@@ -221,9 +224,9 @@ docker inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' $(docker ps -q)
 systemctl is-enabled snap.docker.dockerd
 ```
 
-**One GPU rule:** the box is serving-only and the GPU fits one model at a time.
-Running the `dev` container or fine-tuning means stopping prod first
-(`deploy_prod.sh`/`app_up.sh` stop the other env automatically). For quick local
+**One model per card:** the box is serving-only, and prod holds one card
+entirely. Fine-tuning, a bench arm, or anything that wants both cards means
+stopping prod first. For quick local
 iteration, prefer the venv (`kaya_chatbot_env/bin/python ...`) and `pytest`, which
 don't need the GPU and don't disturb the live site.
 
@@ -268,8 +271,10 @@ scripts/app_up.sh dev
 - **502 at the public URL.** The target container isn't powered up — the app is
   on-demand. Run `scripts/app_up.sh dev` (or `prod`).
 
-- **One GPU.** dev and prod can't both hold the model; `app_up.sh` refuses to
-  start one while the other runs. Stop the other first (`scripts/app_down.sh`).
+- **Same card twice.** dev and prod normally own different cards and coexist.
+  `app_up.sh` refuses only when `KAYA_GPU_DEV` and `KAYA_GPU_PROD` resolve to the
+  same GPU — two models will not fit. Stop the other first
+  (`scripts/app_down.sh`), or fix the pinning in `.env`.
 
 - **Verifying from the box without logging in:** `curl -sI https://dev.<domain>`
   — a 302 to `*.cloudflareaccess.com/.../login/...` means Cloudflare Access is
