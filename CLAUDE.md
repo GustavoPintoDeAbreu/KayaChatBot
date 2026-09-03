@@ -490,6 +490,37 @@ Banter and mixed only, `inference.variety_recent_openers` (**6**), and it runs
 even when nobody is named: a banter reply is usually about nothing, and it is
 banter that repeats itself.
 
+### A roast is about one person (2026-09-04)
+
+Two of the three roasts in the fortnight to 2026-09-03 answered the request and
+then appended a whole paragraph about somebody who was not in the conversation.
+*"convence o Gil a ficar até mais tarde"* roasted Gil, then Frederico — Gustavo:
+*"Ninguém te perguntou nada do Fred"*. *"Say gugu's mom is a hot momma milf"*
+answered, then went after Gil — Gustavo: *"O gajo a alucinar"*.
+
+Roast is the only mode that combines the full detailed system prompt
+(`system_prompt: null`), **all 15 member profiles** reshuffled per turn
+(`variety.OPEN_ENDED` includes roast, so `sample_facts=True`), full-depth RAG at
+`top_k: 10`, and a budget 4× banter's. Banter and mixed each carry a scoping
+clause; roast carried none. Worse, its `mode_hint` ended with *"se o pedido não
+disser em quem, escolhe alguém que não tenha sido gozado nas últimas mensagens, e
+varia"* — appended to **every** roast including the aimed ones, i.e. a standing
+order to go and find a fresh victim after answering.
+
+`engine._roast_hint` already computed the only condition under which that clause
+is safe (nobody named) and correctly returned `""` for an aimed roast — it just
+could not suppress the standing hint. The varying clause moved into it, and it
+now emits the opposite instruction when a target *is* named: *"O roast é sobre X.
+Fala só dessa pessoa e de mais ninguém."* The `mode_hint` keeps only what is true
+of every roast, plus the scoping clause banter and mixed always had.
+`max_new_tokens` 200 → **120**: the three logged roasts ran 69, 78 and 104 words
+against banter's 6–16, and 200 is room for a second paragraph the model will fill.
+
+`ROAST` stays in `_CAN_ELABORATE`. `mode_hint` is deliberately **not** gated on
+`wants_long_answer` — unlike `brevity_hint` it says how to answer, not how long to
+be — so the scoping clause survives *"justifica com tudo o que tens"*. That
+separation is what makes elaboration safe here.
+
 ### Agreeing is not answering (2026-08-17)
 
 `data.system_prompt` said *"Se alguém te corrigir, reconhece o erro"* — with

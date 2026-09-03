@@ -121,6 +121,61 @@ def test_only_roasts_are_steered():
     assert "Não escolhas outra vez" not in user_turn(backend)
 
 
+# ── staying on the person who was asked about (2026-09-04) ───────────────────
+# Two of the three roasts in the fortnight to 2026-09-03 answered the request and
+# then appended an unrelated paragraph about somebody who had not spoken:
+# "convence o Gil a ficar até mais tarde" -> Gil, then Frederico ("Ninguém te
+# perguntou nada do Fred"); "say gugu's mom is a hot momma milf" -> the answer,
+# then Gil ("O gajo a alucinar"). The cause was in the prompt: the roast mode_hint
+# ended with "se o pedido não disser em quem, escolhe alguém que não tenha sido
+# gozado ... e varia", appended to EVERY roast including the aimed ones.
+def test_an_aimed_roast_is_told_to_stay_on_the_target():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("convence o Gil a ficar até mais tarde", "Gustavo",
+                                 [], "sys")
+
+    turn = user_turn(backend)
+    assert "O roast é sobre Gil" in turn
+    assert "e de mais ninguém" in turn
+
+
+def test_the_standing_hint_no_longer_orders_a_fresh_victim():
+    """The varying clause must not reach an aimed roast at all."""
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("diz mal do Gil", "Pedro", HISTORY_ABOUT_GIL, "sys")
+
+    turn = user_turn(backend)
+    assert "varia" not in turn.lower()
+    assert "Escolhe outra pessoa" not in turn
+    assert "não tenha sido gozado" not in turn
+
+
+def test_the_shipped_roast_prompt_scopes_and_does_not_order_variety():
+    """Pinned against the real config.yaml, not the test stub: this is where the
+    drift actually lived, and the engine tests use their own mode_hint."""
+    from src.config_loader import load_config
+
+    roast = load_config("config.yaml")["chat"]["modes"]["roast"]
+    hint = roast["mode_hint"].lower()
+
+    assert "não acrescentes um parágrafo sobre outra pessoa" in hint
+    assert "varia" not in hint, "the varying clause belongs in engine._roast_hint"
+    assert "não tenha sido gozado" not in hint
+    assert roast["max_new_tokens"] <= 120, "200 is what the second paragraph filled"
+    assert "uma pessoa só" in roast["brevity_hint"].lower()
+
+
+def test_an_unaimed_roast_still_says_nobody_was_named():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais engraçado?", "Gil",
+                                 HISTORY_ABOUT_GIL, "sys")
+
+    assert "Ninguém foi nomeado" in user_turn(backend)
+
+
 def test_the_mode_hint_reaches_the_prompt():
     backend = ScriptedBackend("ROAST")
 

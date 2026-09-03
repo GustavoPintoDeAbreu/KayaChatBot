@@ -740,17 +740,29 @@ class KayaEngine:
         an even split of 8%, and 37.5% of turns named somebody nobody had asked
         about. The group's reading was that the bot had it in for him personally.
 
-        When the message names a target, that is the target and nothing is added
-        — "roast the Gil" must roast the Gil. Only an *unaimed* request gets
-        steered, and only away from the members the last few replies already
-        went after, which are read back out of the history rather than tracked in
-        new state.
+        When the message names a target, that is the target — "roast the Gil"
+        must roast the Gil — and what gets added instead is an instruction to
+        stay on them. Only an *unaimed* request gets steered towards someone
+        fresh, and only away from the members the last few replies already went
+        after, which are read back out of the history rather than tracked in new
+        state.
+
+        That split is the fix for the drift (2026-09-04). "Escolhe alguém que não
+        tenha sido gozado ... e varia" used to live in the roast `mode_hint`, so
+        it was appended to EVERY roast, aimed or not — a standing order to find a
+        fresh victim even when the message had already named one. Two of the
+        three roasts in the fortnight to 2026-09-03 answered the question and
+        then appended an unrelated paragraph about somebody who was not in the
+        conversation, and the group called both out.
         """
         if not self.retriever:
             return ""
         try:
-            if self.retriever.named_members(message):
-                return ""
+            named = self.retriever.named_members(message)
+            if named:
+                who = ", ".join(named)
+                return (f"\n\n(O roast é sobre {who}. Fala só dess"
+                        f"{'es' if len(named) > 1 else 'a pessoa'} e de mais ninguém.)")
             recent = []
             for reply in previous_bot_replies(recent_lines, limit=self._repeat_window):
                 for name in self.retriever.named_members(reply):
@@ -758,8 +770,9 @@ class KayaEngine:
                         recent.append(name)
             if not recent:
                 return ""
-            return ("\n\n(Não escolhas outra vez " + ", ".join(recent) +
-                    ": já falaste deles agora mesmo. Escolhe outra pessoa do grupo.)")
+            return ("\n\n(Ninguém foi nomeado. Não escolhas outra vez " +
+                    ", ".join(recent) + ": já falaste deles agora mesmo. Escolhe "
+                    "UMA outra pessoa do grupo e fala só dela.)")
         except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
             print(f"⚠️  could not build the roast hint: {exc}")
             return ""
