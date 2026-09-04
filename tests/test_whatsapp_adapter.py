@@ -1193,6 +1193,93 @@ def test_feedback_command_records_a_note(tmp_path):
     assert rows[0]["text"] == "devias ser mais curto"
 
 
+# ── an unknown /command (2026-09-04) ─────────────────────────────────────────
+# "/feature have better update of facts, give more importance or update facts
+# with new information" was not in the 7-token command table, so it fell through
+# to the model. It routed GENERAL and answered "Understood. I will prioritize and
+# integrate new information more aggressively... Expect more relevant updates in
+# our future interactions" — a promise it has no state to keep — and the whole
+# line went into the memory log, and from there into ChromaDB as a searchable
+# thing "the group said".
+def test_an_unknown_command_is_not_answered_by_the_model(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/feature have better update of facts"))
+
+    assert result["command"] == "unknown"
+    # the stub responder echoes "reply["; the model must never have run
+    assert not result["reply"].startswith("reply[")
+    assert "/bug" in result["reply"] and "/feedback" in result["reply"]
+
+
+def test_an_unknown_command_never_promises_anything(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    reply = adapter.handle_event(
+        dm_event("/feature keep a counter of swear words"))["reply"].lower()
+
+    for promise in ("vou ", "understood", "expect", "prometo", "a partir de agora"):
+        assert promise not in reply, promise
+
+
+def test_an_unknown_command_is_kept_out_of_the_memory_log(tmp_path):
+    """The half that matters: it is embedded into ChromaDB by the ingester."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("/feature have better update of facts"))
+
+    written = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "msglog").rglob("*.jsonl"))
+    assert "/feature" not in written
+
+
+def test_an_unknown_command_stores_nothing_and_captures_nothing(tmp_path):
+    """No pending-capture state: the NEXT message must not be swallowed."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("/feature"))
+    after = adapter.handle_event(dm_event("boa tarde"))
+
+    assert not after.get("command")
+    assert not _rows(tmp_path / "bugs.jsonl")
+    assert not _rows(tmp_path / "feedback.jsonl")
+
+
+def test_a_known_command_is_still_matched_mid_message(tmp_path):
+    """The unknown-command branch must not shadow the mid-message scan."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(
+        dm_event("Andas a repetir-te. /feedback varia mais as respostas"))
+
+    assert result["command"] == "feedback"
+    assert _rows(tmp_path / "feedback.jsonl")[0]["text"] == "varia mais as respostas"
+
+
+def test_ordinary_prose_containing_a_slash(tmp_path):
+    """Only a LEADING /word counts. A date or a "sim/não" is not a command."""
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    for text in ("vamos dia 12/09 ao jantar", "sim/não, decide lá",
+                 "olha isto https://x.com/algo"):
+        result = adapter.handle_event(dm_event(text))
+        assert result.get("command") != "unknown", text
+
+
+def test_the_general_mode_prompt_carries_the_no_promises_clause():
+    """general was the ONLY mode prompt without {maintainer_clause} — which is
+    why the promise got through, since /feature routed GENERAL."""
+    from src.config_loader import load_config
+
+    modes = load_config("config.yaml")["chat"]["modes"]
+    for name, mode in modes.items():
+        prompt = mode.get("system_prompt")
+        if prompt is None:
+            continue  # inherits data.system_prompt, which has it
+        assert "{maintainer_clause}" in prompt, name
+
+
 def test_confirmations_carry_no_emoji(tmp_path):
     """Explicitly asked for: these replies are plain text."""
     adapter, client, _ = make_report_adapter(tmp_path)

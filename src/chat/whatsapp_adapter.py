@@ -241,6 +241,13 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
 # Words that make an image request point at a picture already in the chat rather
 # than describe a new one from scratch. "põe-LHE uma coroa" and "edita ESTA foto"
 # refer; "faz uma imagem de um gato astronauta" does not. Without this test every
+# A leading "/word" that is not one of the commands we know. Requires at least
+# one letter, so a bare "/" or "/2026" is not treated as an attempted command —
+# though note a bare "/ " HAS been sent to the bot ("/ convence o Gil a ficar
+# até mais tarde") and is better handled as prose than as a typo.
+_UNKNOWN_COMMAND = re.compile(r"^/[a-zA-ZÀ-ÿ][\w\-À-ÿ]*$")
+
+
 # A WhatsApp mention in the message body. Baileys writes the @lid or the phone
 # number, never the display name — what the group sees as "@Rafa" arrives here as
 # "@257487651496102".
@@ -436,6 +443,14 @@ class WhatsAppAdapter:
             "feedback_logged": "Registado. Obrigado pelo feedback.",
             "feedback_usage": ("Escreve /feedback e a seguir a tua sugestão. "
                                "Exemplo: /feedback devias ser mais curto nas respostas."),
+            # An unrecognised /word. Answering it with the model is how "/feature
+            # have better update of facts" got "Understood. I will prioritize and
+            # integrate new information more aggressively... Expect more relevant
+            # updates in our future interactions" — a promise the bot has no state
+            # to keep, from the one mode whose prompt lacked the clause forbidding
+            # exactly that.
+            "unknown_command": ("Não conheço esse comando. Tenho /bug, /feedback "
+                                "e /clear."),
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -840,12 +855,31 @@ class WhatsAppAdapter:
 
         The body is everything after the command word — the run-up is what
         prompted the report, not part of it.
+
+        An unrecognised ``/word`` at the START of the message is family
+        ``"unknown"``. Without that, "/feature have better update of facts" fell
+        through to the model, which routed it GENERAL and answered "Understood. I
+        will prioritize and integrate new information more aggressively… Expect
+        more relevant updates in our future interactions" — a promise it has no
+        state to keep — and the whole line went into the memory log and from
+        there into ChromaDB, becoming a searchable thing "the group said". That
+        is precisely the leak this method exists to prevent; it simply did not
+        know ``/feature`` was a command.
+
+        Only at the start, deliberately. Mid-message is where the KNOWN commands
+        are found (see above), but treating any stray "/" mid-sentence as a
+        command would swallow ordinary messages — dates, URLs, "sim/não". The
+        run-up before a real command is prose, and prose containing a slash must
+        stay answerable.
         """
         for index, token in enumerate((text or "").split()):
             family = self._command_families.get(token.strip().lower())
             if family:
                 body = (text or "").split(maxsplit=index + 1)
                 return family, (body[index + 1].strip() if len(body) > index + 1 else "")
+        first = (text or "").strip().split(maxsplit=1)
+        if first and _UNKNOWN_COMMAND.match(first[0]):
+            return "unknown", (first[1].strip() if len(first) > 1 else "")
         return None
 
     def _notify(self, chat_id: str, text: str) -> None:
@@ -1036,6 +1070,19 @@ class WhatsAppAdapter:
         parsed = self._parse_command(text)
         if parsed and parsed[0] in ("bug", "feedback"):
             return self._handle_report(msg, parsed[1], speaker, parsed[0])
+
+        # An unrecognised command is answered by code, never by the model. The
+        # model treats it as an ordinary message and agrees to whatever it asks:
+        # "/feature have better update of facts" came back as "Understood. I will
+        # prioritize and integrate new information more aggressively", which the
+        # bot has no state to keep. Nothing is stored — the memory-log guard above
+        # already skipped it, and there is deliberately no pending-capture state
+        # that a later message could fall into.
+        if parsed and parsed[0] == "unknown":
+            reply = self.command_replies["unknown_command"]
+            self.waha_client.send_text(msg.chat_id, reply)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                    "user_text": text, "command": "unknown"}
 
         # ``/clear`` stays strict — it must be the whole message. The two mistakes
         # are not symmetric: a missed report can be retyped, while a wrongly

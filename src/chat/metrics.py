@@ -25,7 +25,7 @@ _DEFAULT_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "feedbac
 # fixed "não faço imagens" (2026-09-04), and how often the group keeps asking
 # anyway is the only evidence there will be about whether removing it hurt.
 BOOKKEEPING_COMMANDS = frozenset(
-    {"audio", "audio_once", "text", "clear", "bug", "feedback"})
+    {"audio", "audio_once", "text", "clear", "bug", "feedback", "unknown"})
 
 
 def should_log(result: Optional[Dict[str, Any]]) -> bool:

@@ -567,6 +567,28 @@ group said", and a week of bug reports would come back out of retrieval.
 the text arrives as `@Kaya /bug ...`. This fixed `/clear` at the same time; it
 had been leaking since it was written, unnoticed only because nobody had used it.
 
+**An unknown `/command` used to be answered by the model (2026-09-04).**
+`_parse_command` was an exact-token lookup over seven tokens with no
+`startswith("/")` branch and no `/help`, so `/feature have better update of
+facts` fell through, routed GENERAL, and came back *"Understood. I will
+prioritize and integrate new information more aggressively… Expect more relevant
+updates in our future interactions"* — a promise the bot has no state to keep.
+And because `seen` is `(… and not _command)`, the whole line went into
+`message_log` and from there into ChromaDB: a feature request, permanently
+retrievable as something the group said. Exactly the leak `_is_command` exists to
+stop; it simply did not know `/feature` was a command.
+
+A **leading** `/word` now returns family `"unknown"` and gets a fixed usage line
+from code. Leading only: mid-message is where the *known* commands are found, but
+treating any stray slash as a command would swallow "vamos dia 12/09" and
+"sim/não". Nothing is stored, and there is deliberately still no pending-capture
+state, so the next message cannot be swallowed.
+
+The promise itself had a second cause: **`general` was the only mode prompt
+without `{maintainer_clause}`**, the clause that says the bot has no state and
+must not promise to keep counters or lists updated. All four prompts that carry
+one now do, pinned by a test.
+
 New reports are announced by DM to `KAYA_REPORT_JID` (env, not `config.yaml` — a
 real number), and a report filed *in the group* also DMs its author a private
 copy; from a DM that would be the same message twice, so it is not sent. Sending
