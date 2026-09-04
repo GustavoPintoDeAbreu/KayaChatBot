@@ -55,12 +55,34 @@ def check_llama(config: Dict[str, Any]) -> bool:
                   f"health={health.status_code} vision={vision} at {url}")
 
 
+def _a_photo_to_describe():
+    """Any real image on this box, or None.
+
+    ``data/bench_photos/`` is gitignored and was selected by a face detector that
+    no longer exists, so it is present in the dev checkout and absent from
+    ~/kaya-prod — where this check reported "no bench photos to describe" and
+    FAILED, while vision itself was working perfectly. A preflight that cannot
+    run where production runs is not a preflight.
+    """
+    for directory, pattern in ((PHOTOS, "*.jpg"),
+                               (PHOTOS, "*.png"),
+                               (BASE_DIR / "data" / "imagegen_log", "*.png"),
+                               (BASE_DIR / "data" / "wpp", "**/*.jpg")):
+        if not directory.exists():
+            continue
+        found = sorted(directory.glob(pattern))
+        if found:
+            return found[0]
+    return None
+
+
 def check_vision(config: Dict[str, Any]) -> bool:
     from src.chat import vision
 
-    photos = sorted(PHOTOS.glob("*.jpg"))
-    if not photos:
-        return record("vision", False, "no bench photos to describe")
+    photo = _a_photo_to_describe()
+    if photo is None:
+        return record("vision", False, "no image on this box to describe")
+    photos = [photo]
     started = time.time()
     description = vision.describe_bytes(photos[0].read_bytes(), config)
     if not description:
