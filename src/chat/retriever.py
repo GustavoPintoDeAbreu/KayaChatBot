@@ -7,9 +7,9 @@ import os
 import re
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import chromadb
 from sentence_transformers import SentenceTransformer
 from src.chat.scope import SHARED, is_readable, parse_iso, scope_filter
@@ -28,6 +28,15 @@ _TEMPORAL_INTENT_PATTERNS = [
     r"\bwhen\b", r"\bhow long ago\b", r"\brecent", r"\blast time\b",
     r"\bhow recent", r"\bwhat year\b", r"\bwhat day\b", r"\bsince when\b",
     r"\bhow old\b", r"\blatest\b", r"\bup to date\b", r"\bnowadays\b",
+    # Plain recency words. These were missing, and they are the ones people
+    # actually use: "o que é que o grupo fez ontem?" matched NOTHING here, so the
+    # answer came back "Não tenho registos claros" after retrieving 6,109 chars
+    # of topically-near but months-old chunks. See _recency_window.
+    r"\bontem\b", r"\bhoje\b", r"\besta semana\b", r"\bsemana passada\b",
+    r"\beste fim de semana\b", r"\bno fim de semana\b", r"\bna sexta\b",
+    r"\bontem [àa] noite\b", r"\bnestes [úu]ltimos\b",
+    r"\byesterday\b", r"\btoday\b", r"\blast night\b", r"\bthis week\b",
+    r"\blast week\b", r"\bthis weekend\b", r"\blast weekend\b",
 ]
 _TEMPORAL_INTENT_RE = re.compile("|".join(_TEMPORAL_INTENT_PATTERNS), re.IGNORECASE)
 
@@ -37,6 +46,54 @@ def _has_temporal_intent(query: str) -> bool:
     if not query:
         return False
     return bool(_TEMPORAL_INTENT_RE.search(query))
+
+
+# A query that names a period, mapped to how many days back it starts and ends.
+# Ordered longest-first so "semana passada" is not shadowed by "semana".
+_RECENCY_WINDOWS = [
+    (r"\bontem [àa] noite\b|\blast night\b", 1, 1, "ontem à noite"),
+    (r"\bantes de ontem\b|\bday before yesterday\b", 2, 2, "anteontem"),
+    (r"\bsemana passada\b|\blast week\b", 14, 7, "a semana passada"),
+    (r"\beste fim de semana\b|\bno fim de semana\b|\bthis weekend\b|\blast weekend\b",
+     4, 0, "o fim de semana"),
+    (r"\besta semana\b|\bthis week\b|\bnestes [úu]ltimos dias\b", 7, 0, "esta semana"),
+    (r"\bontem\b|\byesterday\b", 1, 1, "ontem"),
+    (r"\bhoje\b|\btoday\b", 0, 0, "hoje"),
+]
+_RECENCY_WINDOWS = [(re.compile(pattern, re.IGNORECASE), start, end, label)
+                    for pattern, start, end, label in _RECENCY_WINDOWS]
+
+
+def _recency_window(query: str, now: Optional[datetime] = None
+                    ) -> Optional[Tuple[str, str, str]]:
+    """The calendar window a query is asking about, as ``(start, end, label)``.
+
+    Semantic search cannot answer "o que é que o grupo fez ontem?". The question
+    shares almost no vocabulary with the answer — an evening of chatter about a
+    restaurant — so nearest-neighbour returns whatever is topically closest from
+    any point in six years of history. Live example, 2026-08-29: the bot answered
+    "Não tenho registos claros sobre o que aconteceu ontem" after retrieving
+    6,109 characters, while the dinner it was asked about sat in ChromaDB,
+    correctly chunked and embedded, from the previous evening.
+
+    So when the query names a period, that period is fetched by DATE and shown
+    alongside the semantic hits rather than instead of them. Returned bounds are
+    inclusive ISO dates; timestamps are stored as ISO-8601 strings, which sort
+    lexicographically, so a plain string comparison is a correct date comparison.
+
+    Returns None when the query names no period, which is the common case and
+    leaves retrieval exactly as it was.
+    """
+    if not query:
+        return None
+    now = now or datetime.now()
+    for pattern, days_back_start, days_back_end, label in _RECENCY_WINDOWS:
+        if pattern.search(query):
+            start = (now - timedelta(days=days_back_start)).date().isoformat()
+            end = (now - timedelta(days=days_back_end)).date().isoformat()
+            # End of day, so a chunk at 23:41 on the last day is inside.
+            return start + "T00:00:00", end + "T23:59:59", label
+    return None
 
 
 def _relative_age(iso_date: Optional[str], today: Optional[datetime] = None) -> str:
@@ -312,7 +369,116 @@ class ConversationRetriever:
             if len(retrieved_chunks) >= top_k:
                 break
 
-        return retrieved_chunks
+        return self._prepend_recency_window(
+            query, retrieved_chunks, top_k, scope, exclude_from)
+
+    def _date_index(self):
+        """``[(timestamp_start, id)]`` for every chunk, sorted, cached.
+
+        ChromaDB's ``$gte``/``$lte`` are numeric-only — it rejects an ISO string
+        outright ("Expected operand value to be an int or a float") — and the
+        timestamps are stored as ISO strings. Rather than migrate the store to
+        epoch metadata, the date filter happens here.
+
+        A full metadata scan of 3,611 chunks measures 158 ms, which is fine
+        against a ~9 s turn but not fine on every one, so it is cached and
+        invalidated on ``count()``. Ingestion only ever appends, in this same
+        process, so a changed count is a sufficient signal.
+        """
+        count = self.collection.count()
+        cached = getattr(self, "_date_index_cache", None)
+        if cached is not None and cached[0] == count:
+            return cached[1]
+        rows = self.collection.get(include=['metadatas'])
+        index = sorted(
+            (str(metadata.get('timestamp_start') or ''), chunk_id)
+            for chunk_id, metadata in zip(rows.get('ids') or [],
+                                          rows.get('metadatas') or [])
+            if metadata.get('timestamp_start')
+        )
+        self._date_index_cache = (count, index)
+        return index
+
+    def _prepend_recency_window(self, query, chunks, top_k, scope, exclude_from):
+        """Put the period the question named at the front, fetched by date.
+
+        Nearest-neighbour cannot find "ontem": the question shares no vocabulary
+        with an evening of restaurant chatter, so it returns whatever is
+        topically closest from any point in six years. Live, 2026-08-29, "o que é
+        que o grupo fez ontem? Fomos jantar fora" came back "Não tenho registos
+        claros" after retrieving 6,109 characters — while the dinner sat in
+        ChromaDB, correctly chunked, from the previous evening. The top hits were
+        from November 2025, December 2025 and July 2026.
+
+        The named window is fetched by date and put first; the semantic hits stay
+        behind it. The window is what was asked for, the semantic hits are what
+        the words matched, and both are worth having.
+
+        Best-effort throughout: any failure returns the semantic results
+        unchanged, which is exactly the previous behaviour.
+        """
+        window = _recency_window(query)
+        if not window or not self.collection:
+            return chunks
+        start, end, _label = window
+        try:
+            ids = [chunk_id for timestamp, chunk_id in self._date_index()
+                   if start <= timestamp <= end]
+            if not ids:
+                return chunks
+            found = self.collection.get(ids=ids[-max(top_k, 1):],
+                                        include=['documents', 'metadatas'])
+        except Exception as exc:  # noqa: BLE001 — never lose an answer to this
+            print(f"⚠️  recency window fetch failed ({exc}); using semantic results only")
+            return chunks
+
+        seen = {chunk['text'] for chunk in chunks}
+        dated = []
+        for doc, metadata in zip(found.get('documents') or [],
+                                 found.get('metadatas') or []):
+            if not doc or doc in seen:
+                continue
+            # The same two guards the semantic path applies. Scope is defence in
+            # depth — a chunk written before scoping existed has no scope field,
+            # and this path has no `where` clause in front of it at all, so the
+            # check is load-bearing here rather than merely belt-and-braces.
+            if scope and not is_readable(metadata.get('scope'), scope):
+                continue
+            if exclude_from:
+                chunk_end = parse_iso(metadata.get('timestamp_end'))
+                if chunk_end and chunk_end >= exclude_from:
+                    continue
+            dated.append({
+                'rank': 0,
+                'text': doc,
+                'metadata': metadata,
+                # Not a cosine score: this chunk was matched by date, not by
+                # similarity. Kept high so nothing downstream drops it on the
+                # relevance floor, and below 1.0 so it never displaces a real
+                # match in anything that sorts by score.
+                'similarity_score': 0.99,
+                'distance': 0.01,
+                'participants': (metadata.get('participants', '').split(',')
+                                 if metadata.get('participants') else []),
+                'mentioned': (metadata.get('mentioned', '').split(',')
+                              if metadata.get('mentioned') else []),
+                'message_count': metadata.get('message_count', 0),
+                'token_count': metadata.get('token_count', 0),
+                'timestamp_start': metadata.get('timestamp_start'),
+                'timestamp_end': metadata.get('timestamp_end'),
+            })
+            seen.add(doc)
+
+        if not dated:
+            return chunks
+        dated.sort(key=lambda chunk: str(chunk.get('timestamp_start') or ''))
+        merged = dated + chunks
+        for index, chunk in enumerate(merged, start=1):
+            chunk['rank'] = index
+        # The window may legitimately be larger than top_k — a whole evening of
+        # chatter is several chunks, and truncating it to top_k would answer
+        # "what did we do yesterday" with the first ten minutes of it.
+        return merged[:max(top_k, len(dated))]
 
     def format_context(self, retrieved_chunks: List[Dict[str, Any]],
                        show_dates: bool = False) -> str:

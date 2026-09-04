@@ -182,6 +182,31 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 
 **Date-aware facts (mixed rule).** Knowledge facts carry optional date metadata: `event_date_hint` (an explicit temporal phrase pulled from the source text), `source_date_start`/`source_date_end` (the timestamp range of the source messages), and `last_updated`. These are populated by `generate_knowledge_base.py` and embedded into ChromaDB metadata by `build_vector_db.py`. The retriever only surfaces dates when `_has_temporal_intent(query)` matches a timing question (PT/EN keywords); otherwise normal answers stay date-free. When surfacing, an explicit `event_date_hint` wins over the message timestamps (relative age rendered by `_relative_age`). `chat.py`/`web_app.py` also append `Hoje é <date>.` to the runtime system prompt so the model can reason about recency.
 
+**Recency is not similarity (2026-09-04).** Asked *"o que é que o grupo fez
+ontem? Fomos jantar fora"* on 2026-08-29, the bot answered *"Não tenho registos
+claros"* after retrieving 6,109 chars. The dinner was in ChromaDB, correctly
+chunked, from the previous evening; the top hits were from November 2025,
+December 2025 and July 2026. Nearest-neighbour cannot find "ontem" — the question
+shares almost no vocabulary with an evening of restaurant chatter, so it returns
+whatever is topically closest out of six years.
+
+Two gaps. `_TEMPORAL_INTENT_PATTERNS` had `quando`, `última vez` and `when`, but
+**not `ontem`, `hoje`, `esta semana`, `yesterday` or `last night`** — the words
+people actually use — so the query did not even count as temporal.
+`_recency_window(query)` now maps a named period to an inclusive ISO date range,
+and `_prepend_recency_window` fetches that range **by date** and puts it in front
+of the semantic hits (which stay: the window is what was asked for, the semantic
+hits are what the words matched). Verified against the live store — the 2026-08-28
+evening, *"@all vao entrando! Tá em meu nome"* included, now leads.
+
+The date filter runs in Python because **ChromaDB's `$gte`/`$lte` are numeric
+only** and reject an ISO string outright ("Expected operand value to be an int or
+a float"). Rather than migrate the store to epoch metadata, `_date_index()`
+caches a sorted `(timestamp, id)` list invalidated on `count()`: 132 ms to build
+over 3,611 chunks, 24 ms after. The in-Python **scope check is load-bearing on
+this path**, not defence in depth — there is no `where` clause in front of it.
+Every failure returns the semantic results unchanged.
+
 **Follow-up suggestions (web UI only).** After each answer, `src/chat/suggestions.py` prompts the already-loaded local model a second time for 2-3 follow-up questions, shown as clickable chips in the Gradio UI (`web_app.py`). Controlled by `chat.suggestions` in `config.yaml`; degrades to no chips on any failure.
 
 ### GPU topology (2× RTX 3090, no NVLink)
