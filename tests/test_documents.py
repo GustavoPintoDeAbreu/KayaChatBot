@@ -273,3 +273,50 @@ def test_the_same_bytes_under_a_new_name_are_recognised(tmp_path):
 
     assert again["cached"] is True
     assert encoder.calls == 1
+
+
+# ── an empty store must not take the whole context down ──────────────────────
+class _EmptyCollection:
+    def count(self):
+        return 0
+
+    def query(self, **kwargs):
+        raise ValueError("Number of requested results 0, cannot be negative, "
+                         "or zero. in query.")
+
+
+def test_an_empty_conversation_store_returns_nothing_rather_than_raising():
+    """Chroma rejects n_results=0, and that exception took the WHOLE context.
+
+    `retrieve` is called first in `retrieve_all`, so on a fresh deployment — or
+    for a moment mid-rebuild — the raise propagated out and the caller's
+    try/except swallowed knowledge and documents along with it. The bot then
+    answered with no retrieval at all and nothing said so.
+    """
+    from src.chat.retriever import ConversationRetriever
+
+    retriever = ConversationRetriever({"rag": {}, "data": {}})
+    retriever.collection = _EmptyCollection()
+
+    class Enc:
+        def encode(self, texts, **kwargs):
+            import numpy as np
+            return np.zeros((len(texts), 8), dtype="float32")
+
+    retriever.encoder = Enc()
+    assert retriever.retrieve("qualquer coisa", scope="shared") == []
+
+
+def test_an_empty_knowledge_base_returns_nothing_rather_than_raising():
+    from src.chat.retriever import ConversationRetriever
+
+    retriever = ConversationRetriever({"rag": {}, "data": {}})
+    retriever.knowledge_collection = _EmptyCollection()
+
+    class Enc:
+        def encode(self, texts, **kwargs):
+            import numpy as np
+            return np.zeros((len(texts), 8), dtype="float32")
+
+    retriever.encoder = Enc()
+    assert retriever.retrieve_knowledge("qualquer coisa") == []

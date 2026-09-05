@@ -314,6 +314,7 @@ class KayaEngine:
         exclude_from: Optional[str] = None,
         extra_context: str = "",
         include_documents: bool = True,
+        collect: Optional[Dict[str, Any]] = None,
         summary: str = "",
         retrieval_query: str = "",
     ) -> tuple:
@@ -346,6 +347,7 @@ class KayaEngine:
                     scope=scope,
                     exclude_from=exclude_from,
                     include_documents=include_documents,
+                    collect=collect,
                 )
             except Exception as exc:  # noqa: BLE001 — never let RAG failure drop a reply
                 print(f"⚠️  RAG retrieval failed: {exc}")
@@ -555,6 +557,7 @@ class KayaEngine:
             system_prompt = apply_speaker_rules(self.config, system_prompt, speaker)
 
             # 4. Mode picks retrieval: off for banter, reduced for mixed.
+            retrieved: Dict[str, Any] = {}
             user_turn, context = self.build_user_turn(
                 message,
                 recent_lines,
@@ -565,6 +568,7 @@ class KayaEngine:
                 # cited and the citations checked. Leaving them in here too would
                 # send the same pages twice.
                 include_documents=route.mode != router.DEBATE,
+                collect=retrieved,
                 scope=scope,
                 exclude_from=exclude_from,
                 extra_context="\n\n".join(
@@ -690,7 +694,26 @@ class KayaEngine:
             # a member apart for AI-generated references that did not say what he
             # claimed, and a bot caught doing the same once is finished.
             stripped: List[str] = []
-            if route.mode == router.DEBATE:
+            if route.mode != router.DEBATE:
+                # A debate is not the only turn that names a page. "da me uma
+                # pagina sff" routes FACTUAL, which gets the documents as prose
+                # with their page labels and no source block — so the model can
+                # write "na página 3 ou 6" with nothing checking it. Observed in
+                # a group rehearsal, and it is the single claim this group will
+                # actually go and verify.
+                #
+                # No markers are offered on these turns, so only the page half
+                # applies: allowed_markers stays empty and any [D1] the model
+                # invents unprompted is removed too.
+                doc_pages: set = set()
+                for chunk in (retrieved.get("documents") or []):
+                    start = int(chunk.get("page_start") or 0)
+                    end = int(chunk.get("page_end") or start)
+                    if start:
+                        doc_pages.update(range(start, max(start, end) + 1))
+                if doc_pages:
+                    text, stripped = sources.verify_citations(text, set(), doc_pages)
+            else:
                 text, stripped = sources.verify_citations(
                     text, allowed_markers, allowed_pages)
                 if stripped:
@@ -701,6 +724,8 @@ class KayaEngine:
 
         telemetry = self._telemetry(route, context, subject_text, text,
                                     reasoning=reasoning)
+        if stripped:
+            telemetry["citations_stripped"] = stripped
         if route.mode == router.DEBATE:
             telemetry["debate_doc_chunks"] = len(debate_docs)
             telemetry["debate_web_lookups"] = len(debate_web)
