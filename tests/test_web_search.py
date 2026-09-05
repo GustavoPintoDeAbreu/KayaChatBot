@@ -175,3 +175,79 @@ def test_citation_line_empty():
 def test_websearchresult_default_unused():
     res = web_search.WebSearchResult()
     assert res.used is False and res.citation_line() == "" and res.answer == ""
+
+
+# ── search_for: the planner decides, but privacy still does not ──────────────
+class RecordingClient:
+    def __init__(self):
+        self.queries = []
+
+    def search(self, query):
+        self.queries.append(query)
+        return "uma resposta", ["https://oecd.org/x"]
+
+
+def test_search_for_skips_the_heuristics(monkeypatch):
+    """A debate's lookup is already a considered decision; do not re-guess it.
+
+    "real wage growth in Europe since 1970" is not an explicit search request and
+    is not a current-events cue, so `should_search` would refuse it.
+    """
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    client = RecordingClient()
+    monkeypatch.setattr(web_search, "_get_client", lambda cfg: client)
+
+    query = "real wage growth in Europe since 1970"
+    assert web_search.should_search(query, StubRetriever(score=0.9), CFG) is False
+
+    result = web_search.search_for(query, StubRetriever(score=0.9), CFG)
+    assert result.used is True
+    assert client.queries == [query]
+
+
+def test_search_for_never_sends_a_member_name(monkeypatch):
+    """The plan is written by a model that just read the group's own thread."""
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    client = RecordingClient()
+    monkeypatch.setattr(web_search, "_get_client", lambda cfg: client)
+
+    result = web_search.search_for(
+        "quanto ganha o Pedro", StubRetriever(persons=["pedro"]), CFG)
+
+    assert result.used is False
+    assert client.queries == [], "a member's name must never leave the box"
+
+
+def test_search_for_fails_closed_when_the_guard_raises(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    client = RecordingClient()
+    monkeypatch.setattr(web_search, "_get_client", lambda cfg: client)
+
+    class Boom:
+        def extract_query_persons(self, query):
+            raise RuntimeError("members file gone")
+
+    assert web_search.search_for("inflação 1970", Boom(), CFG).used is False
+    assert client.queries == []
+
+
+def test_search_for_is_silent_without_a_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert web_search.search_for("inflação", StubRetriever(), CFG).used is False
+
+
+def test_search_for_respects_the_enabled_flag(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    off = {"web_search": {"enabled": False}}
+    assert web_search.search_for("inflação", StubRetriever(), off).used is False
+
+
+def test_search_for_never_raises(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+
+    class Exploding:
+        def search(self, query):
+            raise RuntimeError("xai down")
+
+    monkeypatch.setattr(web_search, "_get_client", lambda cfg: Exploding())
+    assert web_search.search_for("inflação", StubRetriever(), CFG).used is False

@@ -43,8 +43,14 @@ def mode_prompts(config):
 
 def test_the_modes_with_their_own_prompt_are_the_expected_ones(mode_prompts):
     """`factual` and `roast` leave system_prompt null on purpose — roasting needs
-    the member profiles the trimmed prompt drops."""
-    assert set(mode_prompts) == {"banter", "mixed", "general"}
+    the member profiles the trimmed prompt drops.
+
+    `debate` carries its own for the opposite reason: on 2026-09-05 a request to
+    fact-check an argument routed `roast`, got the detailed prompt with all 15
+    profiles attached, and answered by mocking the two men instead of checking
+    anything. An argument is about claims, not about who the arguers are.
+    """
+    assert set(mode_prompts) == {"banter", "mixed", "general", "debate"}
 
 
 class TestConversationalModes:
@@ -85,7 +91,7 @@ class TestRulesEveryModeKeeps:
 
     def test_the_maintainer_clause_is_templated_not_hardcoded(self, mode_prompts, config):
         """A hardcoded name told Gustavo that Gustavo had to fix it."""
-        for name in ("banter", "mixed"):
+        for name in ("banter", "mixed", "general", "debate"):
             assert "{maintainer_clause}" in mode_prompts[name]
         assert config["chat"]["maintainer"]
 
@@ -143,3 +149,34 @@ class TestCorrectionsAreChecked:
         assert "aceita a correção de forma simples e directa" not in prompt, (
             "unconditional capitulation is the bug, not the rule")
         assert "estiver certa" in prompt
+
+
+class TestDebateCitesOrConcedes:
+    """The group is currently taking a member apart for invented references.
+
+    Pedro, to Bernardo, on 2026-09-05: "diz-me nas tuas referências onde é que o
+    custo de comida face à inflação subiu 100%", "Porque me mandaste ai slop a
+    pensar que era factos". A bot caught doing the same thing once is finished in
+    this group, so the rule is in the prompt as well as in `src/chat/sources.py`.
+    """
+
+    def test_it_may_only_cite_what_it_was_given(self, mode_prompts):
+        prompt = mode_prompts["debate"]
+        assert "Fontes disponíveis" in prompt
+        assert "NUNCA" in prompt and "inventes" in prompt
+
+    def test_it_is_told_what_to_do_with_no_source(self, mode_prompts):
+        assert "não sabes" in mode_prompts["debate"]
+
+    def test_it_must_not_hide_a_source_that_contradicts_it(self, mode_prompts):
+        assert "contradizem" in mode_prompts["debate"]
+
+    def test_it_stays_off_the_people(self, config):
+        """A debate is not a roast; that confusion is what caused this mode."""
+        assert "não é um roast" in config["chat"]["modes"]["debate"]["mode_hint"]
+
+    def test_the_evidence_gate_is_bounded(self, config):
+        """An unbounded debate holds the GPU lock while others wait on it."""
+        debate = config["chat"]["debate"]
+        assert debate["enabled"] is True
+        assert 1 <= debate["max_lookups"] <= 5

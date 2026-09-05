@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 
 # Modes whose answers are opinions rather than facts. `factual` is deliberately
 # absent, and so is the CMD_COUNT path that borrows it.
+#
+# `debate` is absent for the same reason as `factual`, and it matters more there:
+# being open-ended draws a RANDOM handful of each member's facts per turn, which
+# would make an argument's evidence depend on the draw. Asked twice whether the
+# cost of food really rose, the bot has to give the same answer both times, and
+# an argument that varies its facts to stay fresh is the exact failure it was
+# brought in to arbitrate.
 OPEN_ENDED = ("banter", "mixed", "roast")
 
 

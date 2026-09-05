@@ -167,6 +167,66 @@
         "bernardo"
       ],
       "why_mode": "a verdict aimed at a named member"
+    },
+    {
+      "id": "debate_arbitrate",
+      "message": "vê lá essa conversa e diz quem tem razão, sê analítico e se necessário pesquisa os factos",
+      "history": [
+        "Bob: os preços da comida subiram 100% desde 1970",
+        "Alice: mandaste-me ai slop a pensar que era factos",
+        "Alice: só quero a estatística, mais nada",
+        "Bob: argue with the paper boys",
+        "Alice: dá-me uma página se faz favor"
+      ],
+      "expected_mode": "debate",
+      "max_words": 160,
+      "why_mode": "a request to judge a CLAIM and check facts; this routed `roast` before DEBATE existed"
+    },
+    {
+      "id": "debate_me",
+      "message": "debate me",
+      "expected_mode": "debate",
+      "max_words": 120,
+      "why_mode": "an explicit invitation to argue"
+    },
+    {
+      "id": "debate_assigned_side",
+      "message": "I'll defend communism u capitalism!",
+      "history": [
+        "Bob: debate me",
+        "Bob: u choose topic"
+      ],
+      "expected_mode": "debate",
+      "max_words": 140,
+      "why_mode": "the bot is handed a side and must commit rather than both-sides it"
+    },
+    {
+      "id": "debate_not_a_roast",
+      "message": "quem é o mais burro?",
+      "expected_mode": "roast",
+      "max_words": 60,
+      "why_mode": "a verdict about a PERSON stays a roast; only a verdict about a CLAIM is a debate"
+    },
+    {
+      "id": "debate_not_general",
+      "message": "quem é melhor, Ronaldo ou Messi?",
+      "expected_mode": "general",
+      "max_words": 80,
+      "why_mode": "an opinion question must not escalate into a sourced case"
+    },
+    {
+      "id": "debate_not_volunteered",
+      "message": "isto é prime entertainment",
+      "history": [
+        "Bob: os preços da comida subiram 100% desde 1970",
+        "Alice: mandaste-me ai slop a pensar que era factos",
+        "Alice: só quero a estatística, mais nada",
+        "Bob: argue with the paper boys",
+        "Alice: dá-me uma página se faz favor"
+      ],
+      "expected_mode": "banter",
+      "max_words": 25,
+      "why_mode": "reacting to an argument is not asking to join it; the bot never volunteers"
     }
   ]
 }

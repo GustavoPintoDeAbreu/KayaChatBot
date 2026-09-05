@@ -18,7 +18,10 @@ is deliberate, not a missing call. Factual answers are unchanged (verified: gold
 excluding greetings moved −0.053, inside the ±0.07 noise band). Any router failure
 falls back to `factual`, i.e. the old behaviour.
 
-**The modes are `banter`, `mixed`, `general`, `factual`** (`router.MODES`).
+**The modes are `banter`, `mixed`, `general`, `factual`, `roast`, `debate`**
+(`router.MODES`). This list was stale for a while — `roast` shipped undocumented,
+and it is worth keeping accurate, because which mode a turn gets decides its
+prompt, its retrieval and its length together.
 `mixed` is chat that names a person or an event without asking to be informed
 ("o Rafa outra vez a fazer disso") — it retrieves, but answers short; it is the
 reason a reminiscence does not come back as a report.
@@ -94,6 +97,8 @@ kaya_chatbot_env/bin/python run_full_pipeline.py
 kaya_chatbot_env/bin/python src/data/extract_all_messages.py
 kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py  # --test / --resume-from N / --backend local|cloud — local teacher needs the GPU (stop prod first)
 kaya_chatbot_env/bin/python src/data/build_vector_db.py
+kaya_chatbot_env/bin/python scripts/ingest_documents.py --dir ~/papers --stats   # size a corpus, writing nothing
+kaya_chatbot_env/bin/python scripts/ingest_documents.py --export chat.txt --media ./chat  # backfill shared PDFs
 kaya_chatbot_env/bin/python src/data/format_direct_training.py
 kaya_chatbot_env/bin/python src/data/merge_datasets.py
 kaya_chatbot_env/bin/python src/finetuning/train.py
@@ -156,6 +161,8 @@ Raw chat data (data/wpp/)
     → data/all_messages_cleaned.jsonl + data/finetune_chunks.jsonl
     → [optional] generate_knowledge_base.py (local teacher) → data/group_members.json, data/group_knowledge.json
     → build_vector_db.py → data/rag_db/ (ChromaDB: kaya_conversations + kaya_knowledge_base)
+    → [live] documents.py / ingest_documents.py → data/rag_db/ (kaya_documents, page-numbered)
+                                                 + data/documents/<scope>/<sha256>.pdf
     → format_direct_training.py and/or generate_local_synthetic.py (local teacher) → data/synthetic_local.jsonl
     → merge_datasets.py → data/train_synthetic.jsonl, data/val_synthetic.jsonl
     → train.py → models/kaya_<version>/  (LoRA adapter)
@@ -178,7 +185,7 @@ Two knowledge sources are injected at inference time, controlled by `rag.knowled
 | `both` | Both of the above |
 | `none` | Baseline — conversation history only |
 
-`ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` (**14000** since 2026-08-08, up from 2500) by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.60`, tuned for Portuguese subword inflation).
+`ConversationRetriever` uses BAAI/bge-m3 embeddings against the `kaya_conversations` ChromaDB collection. It also searches `kaya_documents` (`retrieve_documents`) for **every mode that retrieves at all**, not only debates — "que docs mandou o Bana?" is an ordinary question, and an index nothing reads is not worth building. Document chunks are dropped after conversation chunks in the truncation ladder and before the knowledge facts: a document chunk is the only context that can be cited by page. `extract_query_persons()` detects named group members in the query and post-filters retrieval by `participants`/`mentioned` metadata. `retrieve_all()` enforces `rag.max_context_tokens` (**14000** since 2026-08-08, up from 2500) by truncating lowest-priority context (conversation chunks first, then knowledge, then recent summaries). Token estimation is whitespace-based (`words / 0.60`, tuned for Portuguese subword inflation).
 
 **Date-aware facts (mixed rule).** Knowledge facts carry optional date metadata: `event_date_hint` (an explicit temporal phrase pulled from the source text), `source_date_start`/`source_date_end` (the timestamp range of the source messages), and `last_updated`. These are populated by `generate_knowledge_base.py` and embedded into ChromaDB metadata by `build_vector_db.py`. The retriever only surfaces dates when `_has_temporal_intent(query)` matches a timing question (PT/EN keywords); otherwise normal answers stay date-free. When surfacing, an explicit `event_date_hint` wins over the message timestamps (relative age rendered by `_relative_age`). `chat.py`/`web_app.py` also append `Hoje é <date>.` to the runtime system prompt so the model can reason about recency.
 
@@ -514,6 +521,133 @@ four lines) structurally cannot be — and tells it not to open that way again.
 Banter and mixed only, `inference.variety_recent_openers` (**6**), and it runs
 even when nobody is named: a banter reply is usually about nothing, and it is
 banter that repeats itself.
+
+### Arguing, when asked (2026-09-05)
+
+On 2026-09-05 Frederico pulled the bot into a long Pedro-vs-Bernardo argument
+about the cost of living since 1970: *"Vê lá essa conversa infinita entre o Pedro
+e o Bana e dá a tua opinião para saber quem tem razão, sê analítico e se
+necessário faz a tua própria pesquisa de factos"*. The interaction log records
+that turn as `route_mode: roast`, `retrieved_chars: 9962`,
+`web_search_used: false`. It pulled every member profile, mocked both men,
+researched nothing, and invented a startup for Pedro (*"Qual startup?"*, *"Ele
+está a alucinar"*). `factual` fired **0 times in two days**.
+
+Nothing was broken — reasoning, web search and retrieval all existed. The turn
+never reached them, because the mode was wrong. **`DEBATE` is the fix**, and most
+of the value is in the router rubric: a ROAST is a verdict about a *person*, a
+DEBATE is a verdict about a *claim*. Verified against the live model on the real
+messages, 13/13, with roast/banter/general/factual unchanged.
+
+`debate` carries **its own `system_prompt`, not `null`** — the opposite of
+`roast`. `null` means the detailed prompt with all 15 profiles attached, which is
+exactly what turned a fact-check into a roast. An argument is about claims; who
+said what arrives through the retrieved conversation and the recent lines. It is
+also deliberately **not** in `variety.OPEN_ENDED`: sampling a random handful of
+each member's facts would make an argument's evidence depend on the draw.
+
+**The bot never volunteers.** The router is told so explicitly, because Gustavo's
+view of the tactic is on record: *"Also deixa de discutir por AI @Bernardo /
+Wack ass tactic"*. A reaction to an argument is BANTER, whatever the thread is
+about.
+
+**The model decides when it needs facts, not a keyword.** `engine._debate_plan`
+extends the existing private-notes pass (`_plan`): it writes the argument outline
+and ends with either `NEED: none` or up to `chat.debate.max_lookups` (**3**)
+search queries. What decides this is not the words in the message but whether the
+case rests on a number, which is not something a regex can see. Measured against
+the live model:
+
+| turn | lookups | latency |
+|---|---|---|
+| *"quem tem razão sobre o custo da comida"*, document in hand | 0 | 13.0 s |
+| *"defende que a habitação pública é a solução... só pela lógica"* | 0 | 15.2 s |
+| *"o salário mínimo subiu mais que a inflação? procura os números"* | 2 | 34.7 s |
+
+Documents are searched on **every** debate including for the question itself, so
+an argument about a shared paper works with no web lookup at all. The web is only
+touched for an explicit `NEED`. `web_search.search_for` skips the `should_search`
+heuristics — that guess has already been made, better, with the whole thread in
+view — but **keeps the privacy guard**, and that is why it is a separate function
+rather than a flag: the plan is written by a model that has just read the group's
+own conversation, which is the input most likely to produce "quanto ganha o Pedro"
+as a search query. It also fails closed if the guard itself raises.
+
+**Cite or concede** (`src/chat/sources.py`). The argument the bot was asked to
+judge was *itself* about fabricated sources — Pedro had gone through Bernardo's
+AI-generated references and found they did not say what his numbers claimed
+(*"Porque me mandaste ai slop a pensar que era factos"*, *"da me uma pagina
+sff"*). A bot that invents one page number gets treated exactly the same way,
+permanently, so the rule is enforced twice: the prompt says cite only what you
+were handed, and `verify_citations` deletes what was not. It strips a `[D3]` when
+only two documents were retrieved, and redacts a page number no retrieved chunk
+covers (with the article it was attached to, or *"a página 400"* becomes *"a essa
+parte do documento"*). The **claim is left standing** — dropping the marker makes
+it the bot's own assertion, which is honest; deleting the sentence would change
+what it said. Pages are only policed when documents were actually retrieved,
+since *"a página 51 do relatório que mandaste"* is ordinary speech.
+`citation_line` lists only what was actually cited: advertising four documents it
+merely received is what Carnall called out (*"leste 4 documentos que no seu total
+perfazem mais de 300 páginas last night?"*).
+
+Telemetry gains `debate_doc_chunks`, `debate_web_lookups`, `citations_used` and
+`citations_stripped`, so the invention rate is measurable rather than argued
+about.
+
+### Documents shared in the chat (2026-09-05)
+
+**A PDF used to be handed to Whisper.** The transcribe branch in
+`whatsapp_adapter.handle_event` was gated on *"empty text AND not an image"*, so
+`application/pdf` went to faster-whisper, which raised (`_EXT` had defaulted the
+temp file's suffix to `.ogg`), and the caught failure left `msg.text` empty — so
+the message was never logged and never answered. `payload.media.filename` was
+discarded at parse time. Confirmed against disk: the four papers Bernardo shared
+during the argument left **no trace anywhere**, no `media`/`mimetype`/`filename`
+field in `shared.jsonl`, no `documentMessage` in the WAHA WAL.
+
+The gate is now `audio/`, and documents are claimed **before** it, so that if
+document reading is disabled or fails the file is still refused rather than
+transcribed.
+
+A document becomes text the same way a photo does — `"[Documento: nome, N
+páginas — sinopse]"` beside `"[Imagem: …]"` — and that reuse is the whole design:
+the message log, the ingester, the router and retrieval need no changes, and
+*"aquele doc que o Bana mandou"* is findable later. **Nothing is announced in the
+chat.** A document that could not be read is not announced at all, rather than
+claimed as one the bot has read.
+
+What is different from a photo is that the full text is worth keeping, so pages
+are chunked into their own collection with `page_start`/`page_end` on every
+chunk. **The page number is the feature**: the group's bar for a source is
+*"Pagina X capítulo x"*, and a citation that cannot name a page is worth nothing
+to them.
+
+**`kaya_documents` is a separate collection, not `kaya_conversations`**, for a
+concrete reason: `build_vector_db.initialize()` drops and recreates that one on
+every full pipeline run, with a warning in the code about the `image`/`live`
+chunks it destroys. Documents stored there would not survive the next run.
+Retrieval is scope-filtered by the same `scope_filter` + in-Python `is_readable`
+pair as conversations, which is load-bearing rather than defence in depth — a
+document shared in a DM must never surface in the group.
+
+Extraction is **pypdf** (pure Python, no system deps; PyMuPDF is AGPL and heavy).
+Its font warnings are silenced at import — a 93-page manual produced 287 KB of
+them. The synopsis is written by the **local** model over the same llama server
+the vision describer uses; a document shared in the group is group data and does
+not leave the box.
+
+**Sizing, measured** rather than estimated. 99 pages across 3 real PDFs → 105
+chunks → **3.3 MB** (~32 KB/chunk on a fresh store, against ~26 KB/chunk
+amortised on the live 3,669-chunk 95 MB store), 18.4 s including synopses. A
+300-page paper is roughly 7-10 MB; the archived PDFs outweigh their embeddings.
+bge-m3 is borrowed from the retriever singleton via `peek_retriever()`, so there
+is **no extra VRAM**. `scripts/ingest_documents.py --stats` reports this for any
+corpus without writing anything.
+
+**Backfill needs an export.** WAHA cannot replay the papers already shared: the
+NOWEB store is disabled here, so `GET /api/{session}/chats/{id}/messages` answers
+*"Enable NOWEB store"*. `scripts/ingest_documents.py --export ... --media ...`
+is the route in, mirroring `scripts/ingest_media.py`.
 
 ### A roast is about one person (2026-09-04)
 

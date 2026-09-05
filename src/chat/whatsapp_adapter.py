@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from src.chat import feedback
+from src.chat import documents, feedback
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
 from src.chat.response_utils import truncate_history_line
 from src.chat.scope import scope_for_chat
@@ -75,6 +75,10 @@ class InboundMessage:
     # transcribed before the message means anything.
     media_url: str = ""
     media_mimetype: str = ""
+    # A document's name is not decoration: it is how the group refers to the
+    # thing ("aquele paper do Bana"), and for an attachment with no declared
+    # mimetype the extension is the only evidence of what it is.
+    media_filename: str = ""
     # Filled in once a photo has been read by the vision model.
     image_description: str = ""
 
@@ -104,6 +108,29 @@ def _context_info(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, dict) and isinstance(value.get("contextInfo"), dict):
             return value["contextInfo"]
     return {}
+
+
+def _media_filename(payload: Dict[str, Any]) -> str:
+    """The attachment's original name, from wherever WAHA put it.
+
+    ``media.filename`` is the documented field, but NOWEB does not always fill
+    it, and for a document the name is the only thing that survives into the
+    chat as something a person can refer to. Baileys carries it on the
+    ``documentMessage`` node, so that is the fallback.
+
+    Returns the bare name: a path separator here would let a crafted filename
+    escape the archive directory when the bytes are stored.
+    """
+    media = payload.get("media") or {}
+    name = media.get("filename") or media.get("fileName") or ""
+    if not name:
+        message = ((payload.get("_data") or {}).get("message") or {})
+        if isinstance(message, dict):
+            for value in message.values():
+                if isinstance(value, dict) and value.get("fileName"):
+                    name = value["fileName"]
+                    break
+    return os.path.basename(str(name or "").strip().replace("\\", "/"))
 
 
 def _baileys_text(message: Any) -> str:
@@ -235,6 +262,7 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         # has to be fetched and transcribed before the message means anything.
         media_url=str((payload.get("media") or {}).get("url") or ""),
         media_mimetype=str((payload.get("media") or {}).get("mimetype") or ""),
+        media_filename=_media_filename(payload),
     )
 
 
@@ -326,6 +354,7 @@ class WhatsAppAdapter:
         speech_text: Optional[Callable[[str], str]] = None,
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
+        ingest_document: Optional[Callable[["InboundMessage"], Optional[str]]] = None,
         summary_writer: Any = None,
         sender_resolver: Any = None,
     ):
@@ -386,6 +415,10 @@ class WhatsAppAdapter:
         # Real numbers stay out of git, so this comes from KAYA_REPORT_JID.
         self.report_jid = _normalize_jid(str(wcfg.get("report_to") or ""))
         self.describe_image = describe_image
+        # Reads a shared PDF and files it into the document store, returning a
+        # one-line synopsis. Injected like describe_image so the adapter keeps
+        # no pypdf import and stays testable without one.
+        self.ingest_document = ingest_document
         self.config = config
         # Chat ids whose content is group-wide memory (the Kaya group). Everything
         # else is private to its own chat — see src/chat/scope.py.
@@ -969,11 +1002,42 @@ class WhatsAppAdapter:
         if msg is None:
             return None
 
+        # A shared document is read BEFORE the audio branch, because the two used
+        # to be the same branch: transcription was gated on "not an image", so a
+        # PDF went to Whisper and was lost. Reading documents first also means
+        # that if this step is disabled or fails, the strict `audio/` gate below
+        # still refuses the file rather than transcribing it.
+        #
+        # The result is written into the message text the same way a photo's
+        # description is. Once it is "[Documento: nome — sinopse]" the message
+        # log, the ingester, the router and retrieval need no changes, and the
+        # group can ask about it a month later. Nothing is announced in the chat.
+        if msg.media_url and self.ingest_document is not None \
+                and documents.is_document(msg.media_mimetype, msg.media_filename,
+                                          self.config):
+            try:
+                described = self.ingest_document(msg)
+            except Exception as exc:  # noqa: BLE001 — a failed read is not a lost message
+                logger.warning("document ingestion failed: %s", exc)
+                described = ""
+            if described:
+                caption = msg.text.strip()
+                msg.text = (f"{caption}\n[Documento: {described}]" if caption
+                            else f"[Documento: {described}]")
+                print(f"📄 read document ({len(described)} chars)")
+
         # A voice note arrives with empty text. Transcribe it first so it becomes
         # an ordinary message — logged as memory, routed, and answered like any
         # other. Without this it is silently dropped by the empty-text gate.
+        #
+        # The gate is on `audio/`, not on "anything that is not an image". It used
+        # to be the latter, which meant a PDF was handed to Whisper: the download
+        # succeeded, `_EXT` defaulted the suffix to `.ogg`, faster-whisper raised,
+        # and the caught failure left `msg.text` empty — so the message was never
+        # logged and never answered. Four papers shared in the group on
+        # 2026-09-05 left no trace on disk at all because of this line.
         if not msg.text.strip() and msg.media_url and self.transcribe is not None \
-                and not (msg.media_mimetype or "").startswith("image/"):
+                and (msg.media_mimetype or "").startswith("audio/"):
             transcript = self.transcribe(msg.media_url, msg.media_mimetype)
             if transcript:
                 msg.text = transcript

@@ -52,7 +52,8 @@ MIXED = "mixed"
 GENERAL = "general"
 FACTUAL = "factual"
 ROAST = "roast"
-MODES = (BANTER, MIXED, GENERAL, FACTUAL, ROAST)
+DEBATE = "debate"
+MODES = (BANTER, MIXED, GENERAL, FACTUAL, ROAST, DEBATE)
 
 CMD_AUDIO = "audio"
 CMD_AUDIO_ONCE = "audio_once"
@@ -68,6 +69,7 @@ _LABELS = {
     "GENERAL": (GENERAL, None),
     "FACTUAL": (FACTUAL, None),
     "ROAST": (ROAST, None),
+    "DEBATE": (DEBATE, None),
     "CMD_AUDIO": (None, CMD_AUDIO),
     "CMD_AUDIO_ONCE": (None, CMD_AUDIO_ONCE),
     "CMD_TEXT": (None, CMD_TEXT),
@@ -83,6 +85,7 @@ MIXED — chat that references a person or event but is not really asking to be 
 FACTUAL — a request for information, memory or detail about THE GROUP: its members, its history, what was said or shared in it. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?", "quem mandou aquela foto do barco?".
 ROAST — asking the bot to judge, rank, mock or pick on someone in the group. The answer is aimed AT a member rather than being information about one. Examples: "quem é o mais burro?", "roast the Gil", "quem tem o search history mais sus?", "diz mal do Pedro", "quem é que ganha uma luta aqui?", "who's the biggest loser here?".
 GENERAL — a question, task or opinion about anything OUTSIDE the group: world knowledge, current events, football, advice, cooking, writing, code, maths. Nobody from the group needs to be looked up to answer it. Examples: "quem é melhor, Ronaldo ou Messi?", "explica-me a inflação", "escreve-me um poema sobre o Porto", "o que faço para o jantar?", "who won the Champions League?", "como é que se muda um pneu?".
+DEBATE — asking the bot to ARGUE a position, to judge who is right in a running argument, or to fact-check a claim. The answer is a case backed by evidence, not a quick opinion and not a jab at somebody. Only when it is actually asked for. Examples: "debate me", "u choose topic", "I'll defend communism u capitalism", "defende o contrário", "argumenta contra isto", "quem tem razão nisto?", "vê lá essa conversa e diz quem tem razão, sê analítico", "fact-check isso", "isso é mesmo verdade? mostra fontes", "prova lá".
 CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
 CMD_TEXT — a STANDING instruction to go back to replying in text. Examples: "volta a responder por texto", "chega de áudios, escreve".
 CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing the default. Examples: "explica isso num áudio", "manda um áudio a explicar", "responde a esta por voz".
@@ -110,6 +113,28 @@ FACTUAL and ROAST differ in what the answer is FOR. Information about a member i
   "porque é que o Gil é tão paneleiro?" -> ROAST (asking for a verdict)
   "quem é o mais engraçado?" -> ROAST (ranking the members against each other)
   "quantos membros tem o grupo?" -> FACTUAL
+
+DEBATE and ROAST are both verdicts, and this is the distinction that matters most.
+A ROAST is aimed at a PERSON: the subject is what someone is like. A DEBATE is aimed
+at a CLAIM: the subject is whether something is true. Somebody being named in the
+argument does not make it a roast:
+  "quem é o mais burro?" -> ROAST (a verdict about people)
+  "quem tem razão sobre a inflação?" -> DEBATE (a verdict about a claim)
+  "vê lá a conversa entre o Pedro e o Bana e diz quem tem razão, sê analítico" -> DEBATE
+  "diz mal do Pedro" -> ROAST
+  "o Pedro está errado sobre isso? prova" -> DEBATE
+A request to be ANALYTICAL, to check facts, or to research is never a roast.
+
+DEBATE and GENERAL differ in what is being asked for. GENERAL answers a question;
+DEBATE takes or judges a POSITION and has to back it up. Only an explicit request to
+argue, to judge an argument or to fact-check is DEBATE:
+  "quem é melhor, Ronaldo ou Messi?" -> GENERAL (asking for an opinion)
+  "defende que o Messi é melhor, eu defendo o Ronaldo" -> DEBATE (asking for a case)
+  "explica-me a inflação" -> GENERAL
+  "o Bernardo diz que a comida subiu 100%, isso bate certo?" -> DEBATE (fact-checking a claim)
+The bot never puts itself into an argument that nobody invited it into. If the
+message is somebody arguing with somebody else and not asking the bot for anything,
+it is BANTER or MIXED, never DEBATE.
 
 A command must be an instruction about how the bot should reply FROM NOW ON. Merely mentioning audio, voice or text is NOT a command — classify those as BANTER, MIXED or FACTUAL:
   "o áudio estava mau" -> BANTER (an opinion about a recording)

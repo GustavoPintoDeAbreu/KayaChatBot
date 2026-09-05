@@ -19,9 +19,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from src.chat import router, variety
+from src.chat import router, sources, variety
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -39,7 +40,36 @@ from src.chat.response_utils import (
 # detail. `roast` is here because "justifica with everything you've got" is a
 # request for detail whatever it is aimed at; banter and mixed are not, since
 # being asked to go on at length is exactly what they exist to refuse.
-_CAN_ELABORATE = (router.FACTUAL, router.GENERAL, router.ROAST)
+_CAN_ELABORATE = (router.FACTUAL, router.GENERAL, router.ROAST, router.DEBATE)
+
+# A message that hands the bot a position to defend, rather than asking it to
+# judge one. Drawn from how the group actually phrases it: "I'll defend communism
+# u capitalism!", "defende o contrário", "tu ficas com o outro lado".
+_ADVOCATE_CUES = (
+    "defende", "defende-te", "argumenta a favor", "faz de advogado",
+    "advogado do diabo", "fica com o lado", "ficas com", "tu ficas",
+    "u defend", "you defend", "defend the", "argue for", "argue in favour",
+    "argue in favor", "take the side", "you take", "i'll defend", "ill defend",
+    "eu defendo", "convence-me", "convence me", "persuade me",
+)
+
+# The planner's request for a lookup, on its own line.
+_NEED_RE = re.compile(r"^\s*(?:[-*]\s*)?NEED\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_NEED_NONE = {"none", "nenhuma", "nenhum", "nada", "no", "n/a", "-", "nenhumas"}
+
+_DEBATE_PLAN_INSTRUCTION = (
+    "Antes de responderes, planeia o argumento. Escreve 2 a 4 tópicos curtos com "
+    "os pontos que vais defender ou avaliar.\n\n"
+    "Depois decide se precisas mesmo de factos externos para sustentar isto. "
+    "Precisas quando o argumento depende de um número, de uma data, de uma "
+    "estatística ou de um facto verificável que não tens. NÃO precisas quando o "
+    "argumento é de lógica, de princípio, de definição ou de opinião, nem quando "
+    "já tens a informação no contexto acima.\n\n"
+    "Na última linha escreve 'NEED: none' se não precisas de procurar nada. "
+    "Se precisares, escreve até três linhas 'NEED: <pergunta de pesquisa>', uma "
+    "por facto, cada uma como uma pergunta que se pesquisa sozinha e sem nomes de "
+    "pessoas do grupo. Não escrevas a resposta final."
+)
 
 
 @dataclass
@@ -283,6 +313,7 @@ class KayaEngine:
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
         extra_context: str = "",
+        include_documents: bool = True,
         summary: str = "",
         retrieval_query: str = "",
     ) -> tuple:
@@ -314,6 +345,7 @@ class KayaEngine:
                     top_k=top_k,
                     scope=scope,
                     exclude_from=exclude_from,
+                    include_documents=include_documents,
                 )
             except Exception as exc:  # noqa: BLE001 — never let RAG failure drop a reply
                 print(f"⚠️  RAG retrieval failed: {exc}")
@@ -529,6 +561,10 @@ class KayaEngine:
                 speaker_label=speaker,
                 retrieval=mcfg.get("retrieval", True),
                 top_k=mcfg.get("top_k"),
+                # A debate retrieves documents itself, numbered so they can be
+                # cited and the citations checked. Leaving them in here too would
+                # send the same pages twice.
+                include_documents=route.mode != router.DEBATE,
                 scope=scope,
                 exclude_from=exclude_from,
                 extra_context="\n\n".join(
@@ -549,6 +585,8 @@ class KayaEngine:
                 user_turn += f"\n\n({mcfg['mode_hint']})"
             if route.mode == router.ROAST:
                 user_turn += self._roast_hint(subject_text, recent_lines)
+            if route.mode == router.DEBATE:
+                user_turn += self._debate_hint(message)
             # `_roast_hint` keeps the bot off the same PERSON; this keeps it off
             # the same material about them. Peter asked to be roasted four times
             # over three days and got Rotterdam, editing other people's videos
@@ -556,9 +594,46 @@ class KayaEngine:
             # see it, being per-chat and per-session.
             if open_ended:
                 user_turn += self._variety_hint(subject_text, speaker, route.mode)
+            # A debate plans its own argument and decides, in that same pass,
+            # whether it needs facts it does not have. This replaces the generic
+            # reasoning pass rather than adding to it: two planning generations
+            # in one turn would double the latency for the same answer.
+            debate_docs: List[Dict[str, Any]] = []
+            debate_web: List[Dict[str, Any]] = []
+            web_urls: List[str] = []
+            allowed_markers: set = set()
+            allowed_pages: set = set()
+            if route.mode == router.DEBATE and self._debate_config().get("enabled", True):
+                reasoning = True   # a debate always thinks first; logged as such
+                plan, needs = self._debate_plan(system_prompt, user_turn)
+                debate_docs, debate_web, web_urls = self._gather_evidence(
+                    [route.query or message, *needs], scope, needs)
+                lookups = len(debate_web)
+                print(f"⚖️  debate: {len(needs)} lookup(s) requested, "
+                      f"{lookups} answered, {len(debate_docs)} document chunk(s)")
+                if plan:
+                    user_turn += (
+                        "\n\nNotas que tiraste antes de responder (usa-as, não as "
+                        f"cites nem as mostres):\n{plan}"
+                    )
+                block, allowed_markers, allowed_pages = sources.build_source_block(
+                    debate_docs, debate_web)
+                if block:
+                    user_turn += f"\n\n{block}"
+                else:
+                    # Nothing was retrieved. Saying so beats letting the model
+                    # infer that it may cite from memory.
+                    user_turn += ("\n\n(Não tens nenhuma fonte para isto. Argumenta "
+                                  "pela lógica e diz claramente quando uma "
+                                  "afirmação é tua e não vem de uma fonte. Não "
+                                  "inventes números, estudos, páginas nem links.)")
+                if not explicit_cap:
+                    max_new_tokens = max(int(max_new_tokens or 0),
+                                         int(mcfg.get("max_new_tokens", 400)))
+
             # Asked to think it through, the bot plans first and then answers
             # from the plan. Explicit request only — see wants_reasoning.
-            if reasoning:
+            if reasoning and route.mode != router.DEBATE:
                 plan = self._plan(system_prompt, user_turn)
                 if plan:
                     user_turn += (
@@ -610,12 +685,33 @@ class KayaEngine:
                 if retry_text and not is_near_duplicate(retry_text, said_before):
                     text = retry_text
 
+            # Cite or concede. The prompt asks the model to cite only what it was
+            # handed; this is what makes that true. The group is currently taking
+            # a member apart for AI-generated references that did not say what he
+            # claimed, and a bot caught doing the same once is finished.
+            stripped: List[str] = []
+            if route.mode == router.DEBATE:
+                text, stripped = sources.verify_citations(
+                    text, allowed_markers, allowed_pages)
+                if stripped:
+                    print(f"✂️  removed {len(stripped)} invented citation(s): "
+                          f"{', '.join(stripped[:5])}")
+                citation = sources.citation_line(
+                    debate_docs, web_urls, sources.cited_markers(text))
+
+        telemetry = self._telemetry(route, context, subject_text, text,
+                                    reasoning=reasoning)
+        if route.mode == router.DEBATE:
+            telemetry["debate_doc_chunks"] = len(debate_docs)
+            telemetry["debate_web_lookups"] = len(debate_web)
+            telemetry["citations_used"] = sorted(sources.cited_markers(text))
+            telemetry["citations_stripped"] = stripped
+
         return Reply(
             text=text,
             route=route,
             citation=citation,
-            telemetry=self._telemetry(route, context, subject_text, text,
-                                      reasoning=reasoning),
+            telemetry=telemetry,
         )
 
     def _reconcile(self, route: "router.Route", message: str,
@@ -730,6 +826,130 @@ class KayaEngine:
             print(f"⚠️  reasoning pass failed ({type(exc).__name__}); answering directly")
             return ""
         return (raw or "").strip()
+
+    def _debate_config(self) -> Dict[str, Any]:
+        return (self.config.get("chat", {}) or {}).get("debate", {}) or {}
+
+    def _debate_hint(self, message: str) -> str:
+        """Whether this turn takes a side or judges one, and the rule for each.
+
+        Both shapes appear in the live log within minutes of each other: Rafa's
+        "I'll defend communism u capitalism!" assigns the bot a side, and
+        Frederico's "dá a tua opinião para saber quem tem razão, sê analítico"
+        asks it to referee. They need opposite instructions — an advocate that
+        both-sides its own position is useless, and a referee that picks a team
+        before weighing the claims is worse than useless.
+
+        Deterministic, like ``_roast_hint``: which of the two this is depends on
+        whether the message hands the bot a position, and that is visible in the
+        words. Never raises.
+        """
+        lowered = (message or "").lower()
+        assigned = any(cue in lowered for cue in _ADVOCATE_CUES)
+        if assigned:
+            return ("\n\n(Foste posto de um lado da discussão. Defende essa posição "
+                    "e comprometete-te com ela: dá os melhores argumentos que existem "
+                    "a favor dela, não faças o 'por um lado, por outro lado' e não "
+                    "mudes de lado a meio. Podes reconhecer o ponto mais forte do "
+                    "outro lado, mas só para lhe responderes.)")
+        return ("\n\n(Estás a arbitrar, não estás a escolher uma equipa. Vai "
+                "afirmação a afirmação e diz quem tem razão em cada uma, com a "
+                "fonte quando tens uma. Podes dar razão a pessoas diferentes em "
+                "pontos diferentes, e se ninguém tiver razão, diz isso. Não digas "
+                "que ambos têm razão para não chatear ninguém.)")
+
+    def _debate_plan(self, system_prompt: str, user_turn: str) -> Tuple[str, List[str]]:
+        """Notes for the argument, and what it needs looked up. ``(plan, needs)``.
+
+        This is the "knows when it needs facts" decision, and it is made by the
+        model rather than by keywords, because the question is not what words the
+        message contains but whether the case being made rests on a number. "Quem
+        tem razão sobre o custo da comida desde 1970" needs a statistic; "defende
+        que a habitação pública é a solução" is an argument from principle and a
+        web lookup would add latency and nothing else.
+
+        The plan itself is never sent — same contract as ``_plan``. Only the
+        ``NEED:`` lines have an effect the user can see.
+
+        Returns ``("", [])`` on any failure, which answers without evidence
+        rather than not answering.
+        """
+        dcfg = self._debate_config()
+        instruction = dcfg.get("plan_instruction", _DEBATE_PLAN_INSTRUCTION)
+        try:
+            raw = self.backend.generate(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{user_turn}\n\n{instruction}"},
+                ],
+                max_new_tokens=int(dcfg.get("plan_max_new_tokens", 300)),
+                sampling={**self._inf, "temperature": float(dcfg.get("temperature", 0.3))},
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed plan argues without one
+            print(f"⚠️  debate plan failed ({type(exc).__name__}); arguing directly")
+            return "", []
+
+        text = (raw or "").strip()
+        needs: List[str] = []
+        notes: List[str] = []
+        for line in text.splitlines():
+            match = _NEED_RE.match(line.strip())
+            if not match:
+                if line.strip():
+                    notes.append(line.rstrip())
+                continue
+            want = match.group(1).strip().strip('"').strip()
+            if not want or want.lower().rstrip(".") in _NEED_NONE:
+                continue
+            if want.lower() not in {n.lower() for n in needs}:
+                needs.append(want)
+        limit = max(0, int(dcfg.get("max_lookups", 3)))
+        return "\n".join(notes).strip(), needs[:limit]
+
+    def _gather_evidence(self, queries: Sequence[str], scope: Optional[str],
+                         web_queries: Sequence[str]) -> Tuple[List[Dict[str, Any]],
+                                                              List[Dict[str, Any]],
+                                                              List[str]]:
+        """Documents and web results for a debate. ``(docs, web, source_urls)``.
+
+        Documents are searched for every query including the question itself, so
+        a debate about a paper somebody shared works even when the planner asks
+        for no lookups. The web is only searched for what the planner explicitly
+        asked for — that is the whole point of the gate.
+        """
+        docs: List[Dict[str, Any]] = []
+        seen_docs: set = set()
+        if self.retriever is not None:
+            per_query = int(self._debate_config().get("doc_chunks_per_query", 3))
+            for query in queries:
+                if not query:
+                    continue
+                try:
+                    hits = self.retriever.retrieve_documents(
+                        query, top_k=per_query, scope=scope)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"⚠️  document retrieval failed: {exc}")
+                    continue
+                for hit in hits:
+                    key = (hit.get("doc_id"), hit.get("page_start"), hit.get("page_end"))
+                    if key in seen_docs:
+                        continue
+                    seen_docs.add(key)
+                    docs.append(hit)
+
+        web: List[Dict[str, Any]] = []
+        urls: List[str] = []
+        if web_queries:
+            from src.chat.web_search import search_for
+
+            for query in web_queries:
+                result = search_for(query, self.retriever, self.config)
+                if not result.used or not result.answer:
+                    continue
+                web.append({"answer": result.answer, "sources": result.sources,
+                            "query": query})
+                urls.extend(result.sources or [])
+        return docs, web, urls
 
     def _roast_hint(self, message: str, recent_lines: Optional[List[str]]) -> str:
         """Keep an unaimed roast off the member it just hit.

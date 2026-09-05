@@ -160,8 +160,9 @@ def main() -> None:
             "volunteered_members": volunteered,
             # The informational and aimed modes are expected to name members;
             # that is the point of them. `general` and `banter` must not — the
-            # question is not about anybody.
-            "restraint_ok": bool(accepted & {"factual", "roast", "mixed"})
+            # question is not about anybody. `debate` may name them because
+            # arbitrating an argument means saying who was right in it.
+            "restraint_ok": bool(accepted & {"factual", "roast", "mixed", "debate"})
                             or not volunteered,
             "substance_ok": words > 0,
             "robotic_match": robotic.group(0) if robotic else "",

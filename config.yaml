@@ -389,6 +389,51 @@ chat:
       # already computes the only condition under which it is safe: nobody named.
       mode_hint: "Isto é um roast. Escolhe UMA pessoa e compromete-te, com humor negro e factos concretos do que sabes sobre ela. Fala só de quem foi pedido: não acrescentes um parágrafo sobre outra pessoa, nem sequer no fim. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
 
+    debate:
+      # Arguing a position, or judging a running argument, WHEN ASKED. Added
+      # 2026-09-05 after Frederico asked the bot to referee the Pedro/Bernardo
+      # argument ("dá a tua opinião para saber quem tem razão, sê analítico e se
+      # necessário faz a tua própria pesquisa de factos") and the router sent it
+      # to `roast`: it pulled 9,962 chars of member profiles, mocked both men,
+      # searched nothing, and invented a startup for Pedro.
+      retrieval: true
+      top_k: 10
+      # Four times banter's budget: an argument that names the claims it is
+      # answering cannot be done in three sentences. Still well under the
+      # elaboration ceiling, which "justifica com tudo o que tens" unlocks.
+      max_new_tokens: 400
+      # NOT null. `null` means the detailed prompt, which carries all 15 member
+      # profiles — exactly what turned a request to fact-check into a roast. A
+      # debate is about claims; who said what arrives through the retrieved
+      # conversation and the recent lines.
+      system_prompt: "És o bot do grupo de amigos 'Kaya' e foste chamado para argumentar ou para dizer quem tem razão. Escreves como alguém que leu mesmo o assunto: directo, concreto e sem rodeios. Vais aos pontos concretos que foram feitos e respondes a esses, em vez de dares um discurso geral sobre o tema. REGRA DAS FONTES, a mais importante: só podes citar fontes que te foram dadas nesta mensagem, na secção 'Fontes disponíveis', usando a marca delas ([D1], [W1]). NUNCA inventes um estudo, um número, uma percentagem, uma data, uma página ou um link. Se não tens fonte para uma afirmação, ou dizes que é a tua leitura e não tens fonte, ou dizes que não sabes. Uma afirmação tua sem fonte é honesta; uma fonte inventada não é, e neste grupo é apanhada. Se as fontes que tens contradizem o teu lado, dizes isso. Não confundas o que uma fonte diz com o que gostavas que dissesse. Distingue sempre o que é facto do que é interpretação. Se um número depende de como se mede uma coisa (valores reais ou nominais, médias ou medianas, que cabaz, que país), diz isso, porque é quase sempre aí que está a discussão. Não faças preâmbulos, não anuncies o que vais fazer, não peças desculpa e não termines a pedir desculpa por teres opinião. Não menciones membros do grupo que não estão nesta discussão. {maintainer_clause} Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve em português europeu, ou em inglês se te falarem em inglês."
+      brevity_hint: "Responde em 2 a 5 frases curtas, ou até 3 pontos se estiveres a ir afirmação a afirmação. Vai directo ao argumento."
+      mode_hint: "Argumenta a sério. Ataca o ponto, não a pessoa: isto não é um roast e não é sobre como alguém é. Uma afirmação com fonte cita a marca da fonte ([D1], [W1]); uma afirmação sem fonte diz que é tua. Não inventes números nem referências."
+  # ── Debating, when asked ────────────────────────────────────────────────────
+  # The bot decides FOR ITSELF whether an argument needs facts it does not have.
+  # The plan pass writes the argument outline and ends with either "NEED: none"
+  # or up to `max_lookups` search queries; only those are searched.
+  #
+  # A keyword trigger was the obvious alternative and is the wrong one: what
+  # decides this is not the words in the message but whether the case rests on a
+  # number. "Quem tem razão sobre o custo da comida desde 1970" needs a
+  # statistic; "defende que a habitação pública é a solução" is an argument from
+  # principle, and a lookup there buys latency and nothing else.
+  #
+  # Documents are searched for every debate regardless, including for the
+  # question itself, so an argument about a paper somebody shared works even when
+  # no web lookup is requested. The web is only touched for an explicit NEED.
+  #
+  # A NEED naming a group member is never sent to Grok — web_search.search_for
+  # keeps the privacy guard that `should_search` has, precisely because the plan
+  # is written by a model that has just read the group's own conversation.
+  debate:
+    enabled: true
+    max_lookups: 3
+    doc_chunks_per_query: 3
+    plan_max_new_tokens: 300
+    temperature: 0.3
+
   # ── Thinking it through, when asked ─────────────────────────────────────────
   # "before you go, try one last time. Really hard and detailed" got a single
   # throwaway line back. On an explicit request (see response_utils.
@@ -673,6 +718,43 @@ web_search:
   #         disclaims the rest, in a register this group does not want.
   # false = previous behaviour, Grok's text is sent as-is.
   synthesize_locally: true
+
+# ── Documents shared in the chat ────────────────────────────────────────────
+# A PDF used to be handed to Whisper (the transcribe branch was gated on "not an
+# image"), fail, and leave the message with empty text — which the empty-text
+# gate then dropped. On 2026-09-05 four papers were shared in the middle of an
+# argument and left no trace on disk at all.
+#
+# Now they are extracted, chunked WITH PAGE NUMBERS and embedded into their own
+# ChromaDB collection. The page number is the whole point: the group's bar for a
+# source is "da me uma pagina sff" / "Pagina X capitulo x", and a citation that
+# cannot name a page is worth nothing to them.
+#
+# Nothing is announced in the chat. The message quietly becomes
+# "[Documento: nome, N paginas — sinopse]", exactly the way a photo becomes
+# "[Imagem: ...]", so the message log, the ingester, the router and retrieval
+# need no changes and the document is findable a month later.
+#
+# A separate collection, NOT kaya_conversations: build_vector_db.initialize()
+# drops and recreates that one on every full pipeline run.
+documents:
+  enabled: true
+  collection_name: "kaya_documents"
+  store_dir: "./data/documents"
+  # The bytes are kept so a document can be re-indexed when chunking improves,
+  # without asking anybody to re-send a 300-page paper.
+  max_file_mb: 50
+  max_pages: 600
+  # Larger than the conversation chunk (300) because prose argues in paragraphs
+  # while chat argues in lines. Measured: a 93-page manual -> 101 chunks.
+  chunk_size_tokens: 400
+  chunk_overlap_tokens: 60
+  synopsis_max_new_tokens: 160
+  timeout: 180
+  mimetypes:
+    - application/pdf
+    - text/plain
+    - text/markdown
 
 # RAG Settings
 rag:
