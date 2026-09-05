@@ -131,3 +131,33 @@ def test_www_is_stripped_without_eating_the_host():
 def test_cited_markers_reads_what_the_reply_used():
     assert sources.cited_markers("a [D1] b [W2] c [D1]") == {"D1", "W2"}
     assert sources.cited_markers("") == set()
+
+
+# ── a redaction must not read like a typo ────────────────────────────────────
+def test_removing_a_marker_takes_its_dangling_conjunction():
+    """Seen live: "os documentos [D1] e [W1] confirmam" -> "[D1] e confirmam",
+    where that [W1] had been invented (no web lookup ran on that turn).
+
+    The redaction was correct and the sentence looked broken, which in this group
+    is its own kind of failure.
+    """
+    markers, pages = _allowed()
+    for given, expected in (
+        # W5 is not among the sources granted by `_allowed()` (D1, D2, W1).
+        ("Os documentos [D1] e [W5] confirmam o aumento.",
+         "Os documentos [D1] confirmam o aumento."),
+        ("Como dizem [W4] e [D1], subiu.", "Como dizem [D1], subiu."),
+        ("Vê [D1], [W7] e [W8] para isso.", "Vê [D1] para isso."),
+        ("Isso está errado [W9].", "Isso está errado."),
+    ):
+        text, removed = sources.verify_citations(given, markers, pages)
+        assert text == expected, given
+        assert removed
+
+
+def test_a_kept_citation_keeps_its_conjunction():
+    markers, pages = _allowed()
+    text, removed = sources.verify_citations(
+        "Os documentos [D1] e [D2] confirmam.", markers, pages)
+    assert text == "Os documentos [D1] e [D2] confirmam."
+    assert removed == []

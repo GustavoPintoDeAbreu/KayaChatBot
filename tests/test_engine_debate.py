@@ -278,3 +278,54 @@ def test_disabling_debate_skips_the_plan_entirely():
         "debate me", "Rafa", [], "sys")
 
     assert backend.plan_calls == []
+
+
+# ── a page is checked whatever mode names it ─────────────────────────────────
+def test_a_factual_answer_cannot_invent_a_page():
+    """"da me uma pagina sff" routes FACTUAL, not DEBATE.
+
+    Factual turns get the documents as prose with their page labels and no
+    source block, so nothing was checking a page number the model wrote. Caught
+    in a group rehearsal: "como podes ver na página 3 ou 6", unverified.
+    """
+    class Retriever(StubRetriever):
+        def retrieve_all(self, *a, **kw):
+            collect = kw.get("collect")
+            if collect is not None:
+                collect["documents"] = [dict(DOC)]      # covers page 51 only
+            return "=== Documentos ===\n--- labour.pdf, p. 51 ---\ntexto"
+
+    backend = ScriptedBackend(label="FACTUAL",
+                              answer="Está escrito na página 288 do documento.")
+    reply = make_engine(backend, Retriever()).respond(
+        "da me uma pagina sff", "Pedro", [], "sys")
+
+    assert reply.route.mode == router.FACTUAL
+    assert "288" not in reply.text
+    assert reply.telemetry["citations_stripped"]
+
+
+def test_a_factual_answer_keeps_a_real_page():
+    class Retriever(StubRetriever):
+        def retrieve_all(self, *a, **kw):
+            collect = kw.get("collect")
+            if collect is not None:
+                collect["documents"] = [dict(DOC)]
+            return "=== Documentos ===\n--- labour.pdf, p. 51 ---\ntexto"
+
+    backend = ScriptedBackend(label="FACTUAL",
+                              answer="Está na página 51, como pediste.")
+    reply = make_engine(backend, Retriever()).respond(
+        "da me uma pagina sff", "Pedro", [], "sys")
+
+    assert "página 51" in reply.text
+    assert not reply.telemetry.get("citations_stripped")
+
+
+def test_a_turn_that_retrieved_no_document_leaves_numbers_alone():
+    """Without documents in hand a page number is ordinary speech."""
+    backend = ScriptedBackend(label="FACTUAL",
+                              answer="Vê a página 51 do relatório que mandaste.")
+    reply = make_engine(backend).respond("e aquilo?", "Pedro", [], "sys")
+
+    assert "página 51" in reply.text

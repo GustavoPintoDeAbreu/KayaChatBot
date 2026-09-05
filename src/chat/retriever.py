@@ -327,9 +327,19 @@ class ConversationRetriever:
         # Done as a `where` clause so filtered chunks don't eat the top-k budget.
         where = scope_filter(scope) if scope else None
 
+        # An EMPTY collection is not an error, but asking Chroma for zero results
+        # is: it rejects `n_results=0` with "Number of requested results 0, cannot
+        # be negative, or zero", and that exception propagates out of retrieve_all
+        # and takes the WHOLE context with it — knowledge and documents included,
+        # because they are assembled in the same call. A fresh deployment, or a
+        # moment mid-rebuild, would silently answer with no retrieval at all.
+        available = self.collection.count()
+        if not available:
+            return []
+
         query_kwargs = dict(
             query_embeddings=[query_embedding],
-            n_results=min(n_results_to_fetch, self.collection.count()),  # Don't exceed collection size
+            n_results=min(n_results_to_fetch, available),  # Don't exceed collection size
             include=['documents', 'metadatas', 'distances'],
         )
         if where:
@@ -559,9 +569,14 @@ class ConversationRetriever:
         if query_embedding is None:
             query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
 
+        # Same trap as `retrieve`: n_results=0 raises rather than returning nothing.
+        available = self.knowledge_collection.count()
+        if not available:
+            return []
+
         results = self.knowledge_collection.query(
             query_embeddings=[query_embedding],
-            n_results=min(top_k, self.knowledge_collection.count()),
+            n_results=min(top_k, available),
             include=['documents', 'metadatas', 'distances']
         )
 
@@ -759,6 +774,7 @@ class ConversationRetriever:
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
         include_documents: bool = True,
+        collect: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
@@ -767,6 +783,11 @@ class ConversationRetriever:
         itself so it can hand them to the model as a NUMBERED source list that
         can be cited and verified. Leaving them here as well would send the same
         pages twice.
+
+        ``collect`` is filled with what was actually used — currently
+        ``documents`` — so the caller can check the reply against it. Passed in by
+        the caller rather than stashed on the instance, because two surfaces can
+        retrieve at once and shared mutable state would cross them over.
 
         knowledge_approach:
           "both"         — JSON members (injected via system prompt externally) + KB retrieval + conversation RAG
@@ -860,6 +881,8 @@ class ConversationRetriever:
         # Last, so the pages sit closest to the question being answered.
         if doc_chunks:
             context_parts.append(self.format_documents_context(doc_chunks))
+        if collect is not None:
+            collect["documents"] = doc_chunks
 
         return "\n\n".join(context_parts)
 

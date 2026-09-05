@@ -31,6 +31,10 @@ from typing import Any, Dict, List, Sequence, Set, Tuple
 # in the allowed set was invented.
 _MARKER_RE = re.compile(r"\[(?P<kind>[DW])(?P<index>\d{1,2})\]")
 
+# Stands in for a removed marker while the sentence around it is tidied.
+# A control character, so it cannot collide with anything the model wrote.
+_HOLE = "\x00"
+
 # "página 51", "pag. 51", "pp. 51-52", "page 51", "p.51". Matched so a page the
 # model names in prose can be checked against the pages actually retrieved.
 # The optional leading article is swallowed on purpose: replacing only "página
@@ -119,7 +123,14 @@ def verify_citations(reply: str, allowed: Set[str],
         removed.append(match.group(0))
         return ""
 
-    cleaned = _MARKER_RE.sub(_marker, reply)
+    # Removed markers become a sentinel first, so a conjunction left dangling by
+    # the removal can be cleaned up knowing WHERE the hole is. Deleting "[W1]"
+    # from "os documentos [D1] e [W1] confirmam" otherwise leaves "[D1] e
+    # confirmam", which is how a correct redaction ends up looking like a typo.
+    cleaned = _MARKER_RE.sub(lambda m: _HOLE if _marker(m) == "" else m.group(0), reply)
+    cleaned = re.sub(rf"\s*(?:,|\be\b|\band\b)\s*{_HOLE}", "", cleaned)
+    cleaned = re.sub(rf"{_HOLE}\s*(?:,|\be\b|\band\b)\s*", "", cleaned)
+    cleaned = cleaned.replace(_HOLE, "")
 
     if allowed_pages:
         cleaned_so_far = cleaned
