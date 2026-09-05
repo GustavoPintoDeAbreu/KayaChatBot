@@ -34,6 +34,16 @@ jobs:
           CLOUDFLARE_TUNNEL_TOKEN=test
           EOF
 
+      - name: Pre-create bind-mount sources
+        # Docker creates a missing bind-mount source directory as ROOT. models/
+        # and configs/ are gitignored, so a clean checkout does not have them and
+        # the daemon would make them root-owned in the runner's workspace. They
+        # come out empty today, which `checkout` can still rmdir — but the moment
+        # anything lands inside one, cleaning needs sudo on the host and CI is
+        # wedged again. That is the failure this whole change is about; creating
+        # them here as the runner user costs nothing and removes the last of it.
+        run: mkdir -p models configs
+
       - name: Build test image (cached)
         run: docker compose --profile test build kaya-test
 
