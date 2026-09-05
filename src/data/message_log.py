@@ -18,6 +18,7 @@ produces the same id and the ingester upserts rather than duplicates.
 from __future__ import annotations
 
 import hashlib
+import threading
 import json
 import logging
 import os
@@ -26,6 +27,22 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Serialises `append`. Module level, not per instance: two MessageLog objects can
+# be built over the same directory (the adapter makes one, anything else that
+# logs makes another), and a per-instance lock would not stop them interleaving.
+#
+# It covers the dedupe check as well as the write, because `uid in _seen`
+# followed by `_seen.add(uid)` is a check-then-act that two threads can both
+# pass — and since WAHA delivers every message twice, two threads handling one
+# message id is the normal case here rather than a rare one.
+#
+# Being straight about what this does NOT fix: neither a torn write nor a double
+# insert could be reproduced without it (300 threads, 40KB records). `O_APPEND`
+# writes are atomic on Linux, and the GIL makes the check-then-act window very
+# hard to hit. This is cheap atomicity for a function that should obviously have
+# it, not a repair for the corruption found below — see `_ensure_newline`.
+_append_lock = threading.Lock()
 
 
 def message_uid(chat_id: str, message_id: str) -> str:
@@ -36,6 +53,40 @@ def message_uid(chat_id: str, message_id: str) -> str:
 
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)[:80] or "unknown"
+
+
+def _ensure_newline(path: Path) -> None:
+    """Terminate a truncated last line before appending after it.
+
+    One line of the live group log was found holding 159 characters of one record
+    followed by the whole of the next:
+
+        ..."timestamp": 1787737868, "{"id": "2c914ed2e7...", "chat_id": ...
+
+    The first record was cut off mid-write with no trailing newline — a process
+    killed during a flush is the likeliest cause — and the next append then
+    continued that same line. `read` skips anything it cannot parse, so BOTH
+    messages were lost: the truncated one, and the perfectly good one that landed
+    behind it.
+
+    That second loss is the avoidable one. Starting a fresh line costs one byte
+    read per append and means a partial write can only ever damage its own
+    record.
+
+    Never raises: this is a guard, and it must not be the reason a message goes
+    unlogged.
+    """
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return
+        with open(path, "rb+") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                fh.write(b"\n")
+                logger.warning("%s did not end in a newline — a previous write was "
+                               "cut short; starting a fresh line", path.name)
+    except OSError as exc:  # noqa: BLE001
+        logger.debug("could not check the tail of %s: %s", path, exc)
 
 
 class MessageLog:
@@ -114,9 +165,16 @@ class MessageLog:
         if not text or not text.strip():
             return False
         uid = message_uid(chat_id, message_id or text[:64])
-        if uid in self._seen:
-            return False
-        self._seen.add(uid)
+        with _append_lock:
+            if uid in self._seen:
+                return False
+            self._seen.add(uid)
+            return self._write(uid, chat_id, sender, text, timestamp, scope,
+                               reply_to_id, reply_to_text, sender_id, sender_phone)
+
+    def _write(self, uid, chat_id, sender, text, timestamp, scope,
+               reply_to_id, reply_to_text, sender_id, sender_phone) -> bool:
+        """Serialise and append one record. Callers must hold ``_append_lock``."""
 
         record = {
             "id": uid,
@@ -136,6 +194,7 @@ class MessageLog:
         try:
             path = self.path_for(scope)
             path.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_newline(path)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             return True
