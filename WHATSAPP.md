@@ -89,9 +89,10 @@ reads it out of ordinary language (`src/chat/router.py`):
 |---|---|
 | "responde-me só em áudio" / "volta a escrever" | switches this chat to voice or text, until changed |
 | "explica isso num áudio" | answers *this one* by voice, without changing the default |
-| "põe o Rafa vestido de rei" / "faz uma imagem de um gato astronauta" | edits the attached (or last) photo, or invents one |
+| "põe o Rafa vestido de rei" / "faz uma imagem de um gato astronauta" | says it cannot make pictures — a fixed line, no model call. Generation was removed on 2026-09-04; the intent stays in the router so the request does not fall through to a conversational answer promising a picture that never arrives |
 | "esquece o que falámos" | same as `/clear` |
 | "quantas vezes é que o Rafa disse isso?" | **counts** it |
+| "debate me" / "quem tem razão nisto?" / "fact-check isso" | **argues** — see below |
 
 That last one does not go through retrieval. Semantic search returns the chunks
 nearest a question and cannot answer "how many times", so `CMD_COUNT` scans the
@@ -111,6 +112,32 @@ next message can never be swallowed into someone's report). `/bug` lands in
 `data/feedback/bug_reports.jsonl`, `/feedback` writes a `type: note` record into
 `message_feedback.jsonl`; both show in the web UI's **Feedback** tab. Set
 `KAYA_REPORT_JID` in `.env` to have each new report announced by DM.
+
+### Arguing, and documents
+
+Two things the group can do that need no command at all.
+
+**Send a PDF.** It is read, summarised by the local model and indexed page by
+page. **Nothing is said in the chat** — the message just becomes
+`[Documento: nome, N páginas — sinopse]` internally, the same way a photo becomes
+`[Imagem: …]`, and is searchable from then on. Expect no acknowledgement; ask
+about it instead ("que documentos partilhou o Bana?"). A document sent in a DM is
+**never** visible from the group, which is deliberate and is the most common
+"why can't it see my file" report.
+
+**Ask it to argue.** "debate me", "defende o contrário", "quem tem razão nisto?",
+"vê lá a conversa e diz quem tem razão, sê analítico". It will take a side it is
+given, or referee an argument claim by claim. It decides for itself whether the
+answer needs facts it does not have, so some turns answer in ~15s and a turn that
+needs to look things up takes ~35–70s.
+
+It never volunteers. Reacting to an argument is not asking it to join one.
+
+**It can only cite what it actually retrieved.** An invented `[D3]`, or a page
+number no retrieved chunk covers, is removed from the reply by
+`src/chat/sources.py` before it is sent — not merely discouraged in the prompt.
+If it has no source, it says so. Worth knowing before somebody reports "it
+refused to give a page" as a bug: that is the feature.
 
 **Commands are never stored as memory.** The message log — the thing that gets
 embedded into ChromaDB — is written *before* the reply gate, so
@@ -173,11 +200,21 @@ shared-memory` and confirm the count matches what you expect.
   UI. If the GPU is busy past the timeout the message is dropped (logged), not queued.
 - **Offline:** if the bridge is down, WAHA can't deliver webhooks and messages go
   unanswered (the bridge ignores backlog on restart to avoid replying to stale msgs).
+- **Duplicate delivery:** WAHA sends every event to the webhook **twice** — the
+  same `event.id` dispatched by two `WebhookPlugin` instances, because the hook is
+  registered both globally (`WHATSAPP_HOOK_URL`) and in the session config. The
+  adapter drops the second copy at the top of `handle_event`; before that guard,
+  every photo was described twice, every voice note transcribed twice and every
+  PDF fully reprocessed twice. Replies were never doubled, which is why it went
+  unnoticed. Removing one registration needs a WAHA restart, which risks a QR
+  re-scan, so it is left for a moment when somebody is at the machine.
 - **Privacy:** in a group, every member's messages pass through the bot and are
   written to `data/live_messages/<scope>.jsonl` (the memory the vector store is
   built from), with per-chat history in `data/whatsapp_sessions/`. Answered turns
   also land in `data/feedback/live_interactions.jsonl`, alongside `/bug` and
-  `/feedback` reports. Tell the group.
+  `/feedback` reports. **Shared documents are stored too** — the PDF itself under
+  `data/documents/<scope>/`, its text page by page in the vector store. Tell the
+  group.
 ```
 
 

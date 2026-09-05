@@ -251,8 +251,8 @@ a computer in a living room. They are never sent to OpenAI, Google or anyone els
 thing that ever goes out is a plain question with no names in it, when you ask about something it
 cannot know on its own, like a football score.</p>
 <p>It does keep things, on that machine: every message it sees, so it can remember them later;
-what it answered, so a bad reply can be looked into; and the last twenty pictures it made, with a
-note of what was asked for. None of that is backed up anywhere else, and none of it leaves.</p>
+what it answered, so a bad reply can be looked into; and any document sent to it, kept whole so it
+can be re-read properly later. None of that is backed up anywhere else, and none of it leaves.</p>
 </div>
 
 <h2>How to talk to it</h2>
@@ -266,6 +266,9 @@ note of what was asked for. None of that is backed up anywhere else, and none of
   <tr><td>Just this one by voice</td><td>“manda um áudio a explicar isso”</td></tr>
   <tr><td>Back to text</td><td>“volta a responder por texto”</td></tr>
   <tr><td>It to look at a photo</td><td>Send the picture — it describes it and remembers it</td></tr>
+  <tr><td>It to read a document</td><td>Send the PDF. It says nothing back — just ask about it afterwards</td></tr>
+  <tr><td>It to argue with you</td><td>“debate me”, or give it a side: “defende o contrário”</td></tr>
+  <tr><td>It to settle an argument</td><td>“quem tem razão nisto?” — it will go point by point</td></tr>
   <tr><td>It to forget the last bit</td><td>“esquece o que falámos”, or <code>/clear</code></td></tr>
   <tr><td>To report something broken</td><td><code>/bug</code> then what happened</td></tr>
   <tr><td>To suggest an improvement</td><td><code>/feedback</code> then your idea</td></tr>
@@ -273,8 +276,30 @@ note of what was asked for. None of that is backed up anywhere else, and none of
 </div>
 
 <p>You can send it a <strong>voice note</strong> and it will listen. You can send it a
-<strong>photo</strong> and it will look. Both become part of what it remembers, so “aquela foto do
-barco” will find it months later.</p>
+<strong>photo</strong> and it will look. You can send it a <strong>PDF</strong> and it will read the
+whole thing. All three become part of what it remembers, so “aquela foto do barco” — or “aquele
+paper que o Bana mandou” — will find it months later.</p>
+
+<h2>Arguing with it</h2>
+
+<p>Ask it to argue and it will. Give it a side and it takes that side properly, instead of listing
+both. Ask it who is right in an argument already happening and it goes claim by claim, which means it
+can tell you that one person is right about one thing and wrong about the next.</p>
+
+<p><strong>It will not join in on its own.</strong> Reacting to an argument is not the same as asking
+it to settle one, and nobody wants a bot that wades into every disagreement.</p>
+
+<p>When a question turns on an actual number, it goes and looks it up before answering — which is why
+some replies take a few seconds and others closer to a minute. When the question is about principle
+rather than fact, it does not bother.</p>
+
+<div class="note">
+<p><b>It can only cite what it actually read.</b> If it quotes a page, that page came from a document
+somebody sent this chat. If it has no source, it says so instead of producing one that sounds right.</p>
+<p>This is enforced in code, not just asked for politely: a reference the bot did not actually
+retrieve is deleted from the reply before you see it. “I don't have a source for that” is a real
+answer, and a better one than a convincing invention.</p>
+</div>
 
 <div class="note">
 <p><b>Tell it when it gets things wrong.</b> <code>/bug</code> is for something broken — it did not
@@ -313,6 +338,10 @@ never repeat it in the group, or in anybody else's DM.</p>
 <p>It works one way only, deliberately: the <strong>group's</strong> history is shared, so from your
 DM you can ask about anything said in the group. The reverse never happens.</p>
 
+<p><strong>Documents follow the same rule.</strong> A PDF you send in a private chat can only be read
+back in that chat — the group cannot see it, and neither can anyone else. If you want the group to be
+able to argue with a document, send it to the group.</p>
+
 <h2>Pictures</h2>
 
 <p>It looks at photos, it does not make them. Send it a picture and it describes what it sees, in
@@ -323,6 +352,18 @@ the boat” still finds it months later. It will not identify anyone by their fa
 use it was asked for exactly one, and it got that one wrong. Ask now and it will simply say it does
 not do that, rather than promising a picture that never arrives.</p>
 
+<h2>Documents</h2>
+
+<p>Send it a PDF and it reads the whole thing — every page, not just the first one. It says nothing
+back, on purpose: a bot that announces every file would be exhausting. Just ask about it afterwards.</p>
+
+<p>It keeps track of <strong>which page</strong> everything came from, so it can tell you where
+something is rather than only that it exists. That is the whole reason this was built: a source you
+cannot check is not a source.</p>
+
+<p>It reads PDFs, plain text and Markdown. A scanned document — a photograph of a page, with no real
+text in it — it cannot read, and it will not pretend it did.</p>
+
 <h2>Where it falls short</h2>
 
 <p><strong>It is not one of you.</strong> It talks about the group in the third person and does not
@@ -331,6 +372,10 @@ instead of guessing, and mostly it does.</p>
 
 <p><strong>It answers one message at a time.</strong> If four people ask at once, some replies take
 longer. Nothing is lost, it just queues.</p>
+
+<p><strong>It will not invent a source to win.</strong> Push it on where something came from and it
+either shows you, or admits it does not have one. That is deliberate, and it means it sometimes gives
+you less than you wanted — but what it does give you, you can go and check.</p>
 </div>
 <div class="doc" data-level="simple" data-lang="pt" lang="pt">
 <header>
@@ -359,8 +404,8 @@ num computador numa sala de estar. Nunca são enviados para a OpenAI, para a Goo
 A única coisa que alguma vez sai é uma pergunta simples, sem nomes de ninguém, quando perguntam algo
 que ele não pode saber sozinho, como o resultado de um jogo.</p>
 <p>Guarda coisas, sim, nessa máquina: todas as mensagens que vê, para se lembrar delas mais tarde;
-o que respondeu, para se poder perceber uma resposta má; e as últimas vinte imagens que fez, com o
-registo do que lhe foi pedido. Nada disso tem cópia noutro sítio, e nada disso sai.</p>
+o que respondeu, para se poder perceber uma resposta má; e qualquer documento que lhe mandem, guardado
+inteiro para poder ser relido como deve ser. Nada disso tem cópia noutro sítio, e nada disso sai.</p>
 </div>
 
 <h2>Como falar com ele</h2>
@@ -374,6 +419,9 @@ registo do que lhe foi pedido. Nada disso tem cópia noutro sítio, e nada disso
   <tr><td>Só esta por voz</td><td>“manda um áudio a explicar isso”</td></tr>
   <tr><td>Voltar ao texto</td><td>“volta a responder por texto”</td></tr>
   <tr><td>Que veja uma foto</td><td>Manda a fotografia — ele descreve-a e guarda-a</td></tr>
+  <tr><td>Que leia um documento</td><td>Manda o PDF. Ele não diz nada de volta — pergunta-lhe a seguir</td></tr>
+  <tr><td>Que discuta contigo</td><td>“debate me”, ou dá-lhe um lado: “defende o contrário”</td></tr>
+  <tr><td>Que resolva uma discussão</td><td>“quem tem razão nisto?” — vai ponto por ponto</td></tr>
   <tr><td>Que esqueça o que se disse</td><td>“esquece o que falámos”, ou <code>/clear</code></td></tr>
   <tr><td>Reportar algo partido</td><td><code>/bug</code> e a seguir o que aconteceu</td></tr>
   <tr><td>Sugerir uma melhoria</td><td><code>/feedback</code> e a seguir a tua ideia</td></tr>
@@ -381,8 +429,31 @@ registo do que lhe foi pedido. Nada disso tem cópia noutro sítio, e nada disso
 </div>
 
 <p>Podes mandar-lhe um <strong>áudio</strong> e ele ouve. Podes mandar-lhe uma <strong>foto</strong>
-e ele vê. Ambos passam a fazer parte do que ele se lembra, por isso “aquela foto do barco” aparece
+e ele vê. Podes mandar-lhe um <strong>PDF</strong> e ele lê aquilo todo. Os três passam a fazer parte
+do que ele se lembra, por isso “aquela foto do barco” — ou “aquele paper que o Bana mandou” — aparece
 meses depois.</p>
+
+<h2>Discutir com ele</h2>
+
+<p>Pede-lhe para discutir e ele discute. Dá-lhe um lado e ele defende esse lado a sério, em vez de
+ficar a listar os dois. Pergunta-lhe quem tem razão numa discussão que já está a acontecer e ele vai
+afirmação a afirmação, o que quer dizer que te pode dizer que uma pessoa tem razão numa coisa e está
+errada na seguinte.</p>
+
+<p><strong>Não se mete sozinho.</strong> Reagir a uma discussão não é o mesmo que pedir-lhe para a
+resolver, e ninguém quer um bot que se enfia em todas as picardias.</p>
+
+<p>Quando a pergunta depende mesmo de um número, ele vai procurá-lo antes de responder — é por isso
+que umas respostas demoram segundos e outras quase um minuto. Quando a pergunta é de princípio e não
+de facto, não se dá ao trabalho.</p>
+
+<div class="note">
+<p><b>Só cita o que leu mesmo.</b> Se te dá uma página, essa página veio de um documento que alguém
+mandou para esta conversa. Se não tem fonte, diz que não tem, em vez de inventar uma que soa bem.</p>
+<p>Isto está garantido em código, não é só um pedido simpático: uma referência que o bot não foi
+mesmo buscar é apagada da resposta antes de a veres. “Não tenho fonte para isso” é uma resposta a
+sério, e melhor do que uma invenção convincente.</p>
+</div>
 
 <div class="note">
 <p><b>Diz-lhe quando ele se engana.</b> <code>/bug</code> é para alguma coisa partida: não respondeu,
@@ -421,6 +492,10 @@ direta, ele nunca a repete no grupo, nem na conversa privada de mais ninguém.</
 da tua conversa privada podes perguntar sobre qualquer coisa dita no grupo. O contrário nunca
 acontece.</p>
 
+<p><strong>Os documentos seguem a mesma regra.</strong> Um PDF que mandes numa conversa privada só
+pode ser lido nessa conversa — o grupo não o vê, e mais ninguém o vê. Se queres que o grupo possa
+discutir um documento, manda-o para o grupo.</p>
+
 <h2>Imagens</h2>
 
 <p>Ele olha para as fotos, não as faz. Manda-lhe uma fotografia e ele descreve o que vê, por palavras
@@ -431,6 +506,18 @@ ainda aparece meses depois. Não identifica ninguém pela cara.</p>
 de uso real pediram-lhe exactamente uma, e essa saiu mal. Agora, se pedires, ele diz simplesmente que
 não faz, em vez de prometer uma imagem que nunca chega.</p>
 
+<h2>Documentos</h2>
+
+<p>Manda-lhe um PDF e ele lê aquilo todo — todas as páginas, não só a primeira. Não responde nada, de
+propósito: um bot que anuncia cada ficheiro seria cansativo. Pergunta-lhe a seguir.</p>
+
+<p>Ele guarda <strong>de que página</strong> veio cada coisa, por isso consegue dizer-te onde está
+alguma coisa e não só que existe. Foi por isto que isto foi feito: uma fonte que não se pode
+verificar não é uma fonte.</p>
+
+<p>Lê PDFs, texto simples e Markdown. Um documento digitalizado — uma fotografia de uma página, sem
+texto real lá dentro — não consegue ler, e não vai fingir que leu.</p>
+
 <h2>Onde ele falha</h2>
 
 <p><strong>Ele não é um de vocês.</strong> Fala do grupo na terceira pessoa e não inventa memórias
@@ -439,6 +526,10 @@ na maior parte das vezes diz.</p>
 
 <p><strong>Responde a uma mensagem de cada vez.</strong> Se quatro pessoas perguntarem ao mesmo tempo,
 algumas respostas demoram mais. Não se perde nada, apenas fica em fila.</p>
+
+<p><strong>Não inventa uma fonte para ganhar.</strong> Se lhe apertares para dizer de onde veio uma
+coisa, ou te mostra, ou admite que não tem. É de propósito, e quer dizer que às vezes te dá menos do
+que querias — mas aquilo que te dá, podes ir verificar.</p>
 </div>
 <div class="doc" data-level="advanced" data-lang="en" lang="en">
 <header>
@@ -525,10 +616,13 @@ questions about a discussion it never took part in.</p>
     <p>A voice note arrives with <strong>no text at all</strong> — the words are in an audio file.
     It is transcribed with Whisper. A photo is described by the vision model. Either way the message
     turns into ordinary text before anything else happens.</p>
-    <p>That reuse is the whole trick: once a photo is text, the memory log, the search index, the
-    intent router and the reply path all work on it unchanged. Nothing downstream knows it was a
-    picture.</p>
-    <span class="where">src/chat/stt.py · src/chat/vision.py</span>
+    <p>A shared PDF goes the same way: extracted, summarised by the local model, and folded into the
+    message as <code>[Documento: nome, N páginas — sinopse]</code>. Unlike a photo, its full text is
+    also indexed page by page, because a paper is prose that answers questions nobody has asked yet.</p>
+    <p>That reuse is the whole trick: once a photo or a document is text, the memory log, the search
+    index, the intent router and the reply path all work on it unchanged. Nothing downstream knows it
+    was a picture.</p>
+    <span class="where">src/chat/stt.py · src/chat/vision.py · src/chat/documents.py</span>
   </div>
 </div>
 
@@ -739,16 +833,28 @@ profiles and told to elaborate, a model finds someone to talk about.</p>
     <td><b>roast</b></td>
     <td>“quem é o mais burro?”, “diz mal do Rui”</td>
     <td>Full, and steered off whoever it just hit</td>
-    <td class="num">200 tokens</td>
+    <td class="num">120 tokens</td>
+  </tr>
+  <tr>
+    <td><b>debate</b></td>
+    <td>“debate me”, “quem tem razão nisto?”, “fact-check isso”</td>
+    <td>Full, plus shared documents and — if it decides it needs them — web lookups</td>
+    <td class="num">400 tokens</td>
   </tr>
   <tr>
     <td><b>command</b></td>
-    <td>“responde só em áudio”, “faz uma imagem de…”</td>
+    <td>“responde só em áudio”, “esquece o que falámos”</td>
     <td>None — executed in code</td>
     <td>—</td>
   </tr>
 </table>
 </div>
+
+<p><code>debate</code> is the newest, added in September 2026 after the bot was asked to referee a
+long argument and instead <em>roasted both people in it</em>. The distinction the router now makes is
+the whole fix: a <b>roast</b> is a verdict about a <em>person</em>, a <b>debate</b> is a verdict about
+a <em>claim</em>. It is also the only mode that may cite a source, and the only one that will go and
+look something up mid-answer — and it never fires unless somebody actually asks for it.</p>
 
 <p><code>general</code> is newer than the rest, and it exists for the same reason the router does.
 Every question that was not banter used to be <code>factual</code>, including the ones with nothing
@@ -1226,16 +1332,29 @@ modelo uma pilha de perfis e diz-se-lhe para desenvolver, e ele arranja alguém 
     <td><b>roast</b></td>
     <td>“quem é o mais burro?”, “diz mal do Rui”</td>
     <td>Completa, e desviada de quem acabou de apanhar</td>
-    <td class="num">200 tokens</td>
+    <td class="num">120 tokens</td>
+  </tr>
+  <tr>
+    <td><b>debate</b></td>
+    <td>“debate me”, “quem tem razão nisto?”, “fact-check isso”</td>
+    <td>Completa, mais os documentos partilhados e — se decidir que precisa — pesquisa na web</td>
+    <td class="num">400 tokens</td>
   </tr>
   <tr>
     <td><b>comando</b></td>
-    <td>“responde só em áudio”, “faz uma imagem de…”</td>
+    <td>“responde só em áudio”, “esquece o que falámos”</td>
     <td>Nenhuma — executado em código</td>
     <td>—</td>
   </tr>
 </table>
 </div>
+
+<p>O modo <code>debate</code> é o mais recente, acrescentado em setembro de 2026 depois de lhe pedirem
+para arbitrar uma discussão longa e ele ter, em vez disso, <em>gozado com as duas pessoas nela</em>. A
+distinção que o router faz agora é a correção toda: um <b>roast</b> é um veredicto sobre uma
+<em>pessoa</em>, um <b>debate</b> é um veredicto sobre uma <em>afirmação</em>. É também o único modo
+que pode citar uma fonte, e o único que vai procurar alguma coisa a meio da resposta — e nunca
+dispara sem alguém o pedir.</p>
 
 <p>O modo <code>geral</code> é mais recente do que os outros, e existe pela mesma razão que o router.
 Todas as perguntas que não fossem conversa eram <code>factual</code>, incluindo as que nada tinham a

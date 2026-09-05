@@ -26,6 +26,8 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Remembers the thread**: 60 lines verbatim — about thirty exchanges — plus a per-chat rolling summary, so a long exchange survives what semantic search alone cannot return
 - **Voice in and out**: voice notes are transcribed with faster-whisper; replies can be spoken with Piper, per-language and sticky per chat
 - **Sees pictures**: inbound photos are described into text by the serving model's own vision projector, and so become searchable memory later. It does not make or edit them — that was removed on 2026-09-04, after two weeks of logs recorded a single request that misfired
+- **Reads documents**: a shared PDF is extracted, summarised by the local model and indexed **page by page**, so it can be quoted with a page number later. Nothing is announced in the chat
+- **Argues, when asked**: it will take a side or judge who is right in a running argument, decides for itself whether the case needs facts it does not have, and may only cite sources it actually retrieved — an invented page number is stripped by code, not merely discouraged by a prompt
 - **Does not tell the same joke twice**: an open-ended answer (banter, a roast, an
   opinion) is built from a random handful of each member's facts and is shown what
   it already said about that person, so "roast me" stops returning the same four
@@ -55,6 +57,13 @@ retrieval, prompt and reply length together:
 | `factual` | A question about the group, its members or its history | Yes, full context |
 | `roast` | Asking for a verdict *aimed at* a member — "quem é o mais burro?" | Yes, and steered off whoever it just hit |
 | `general` | A question about the world — football, cooking, code, advice | **None**, and no member profiles |
+| `debate` | Asked to argue a position, judge who is right, or fact-check a claim | Yes, plus shared documents and — when it decides it needs them — web lookups |
+
+`debate` is the newest and the only one that goes looking for evidence. A `roast`
+is a verdict about a **person**; a `debate` is a verdict about a **claim**. It
+fires only when somebody asks for it — the bot never volunteers itself into an
+argument — and it is the one mode that may cite. See
+[Arguing, with sources](#-arguing-with-sources) below.
 
 One request is not a mode at all: a **counting** question ("quantas vezes é que
 o Rafa disse isso?") bypasses retrieval entirely. Top-k search returns the
@@ -108,6 +117,91 @@ User: quem é melhor, Ronaldo ou Messi?        → general
 Kaya Bot: <answers the question, not a report about the group>
 ```
 
+## ⚖️ Arguing, with sources
+
+Asked to, the bot will argue a position or judge a running argument. Asked to do
+neither, it stays out of it — this fires on an explicit request only, because a
+bot that volunteers itself into every disagreement is a bot people mute.
+
+Two shapes, picked automatically from how the request is phrased:
+
+* **arbitrate** — "quem tem razão nisto?", "vê lá a conversa e diz quem tem razão,
+  sê analítico". It goes claim by claim and may side with different people on
+  different points, or with nobody.
+* **advocate** — "defende o contrário", "I'll defend communism u capitalism". It
+  takes the side it is given and commits to it, instead of both-sidesing.
+
+### It decides for itself whether it needs facts
+
+Before answering, a debate turn writes a private plan and ends it with either
+`NEED: none` or up to three search queries. What decides this is not a keyword but
+whether the case rests on a number — "defende que a habitação pública é a solução"
+is an argument from principle, while "o salário mínimo subiu mais que a inflação?"
+is not. Measured against the live model:
+
+| turn | lookups | latency |
+|---|---|---|
+| cost of food, with a shared document in hand | 0 | ~13 s |
+| an argument from principle | 0 | ~15 s |
+| "procura os números" | 2 | ~35 s |
+
+Documents are searched on every debate regardless; the web is only touched for an
+explicit `NEED`, and **a query naming a group member never leaves the box**.
+
+### Cite or concede
+
+The bot may only cite sources it was actually handed this turn, and that is
+enforced twice — in the prompt, and by `src/chat/sources.py`, which deletes any
+citation that was not. A `[D3]` when two documents were retrieved is removed; a
+page number no retrieved chunk covers is redacted to "essa parte do documento".
+
+The claim itself is left standing. Dropping the marker turns it into the bot's own
+assertion, which is honest; deleting the sentence would change what it said. And
+the check runs on **every** mode that retrieved a document, not only debates,
+because "dá-me uma página" is an ordinary question.
+
+If it has nothing, it says so. "Não tenho fonte para isso" is a better answer than
+a plausible one, and this group will check.
+
+## 📄 Documents shared in the chat
+
+A PDF sent to the bot is read, summarised by the **local** model, and indexed page
+by page. Nothing is announced — the message quietly becomes
+`[Documento: nome, N páginas — sinopse]`, exactly the way a photo becomes
+`[Imagem: …]`, so it is searchable from then on:
+
+```
+Rafa:  @Kaya que documentos é que o Bernardo partilhou aqui?
+Kaya:  O Bernardo partilhou dois documentos: um sobre a desregulação do mercado
+       de trabalho e o declínio sindical desde 1980, e outro do FMI sobre a
+       acessibilidade à habitação.
+```
+
+**Page numbers are the point.** A citation that cannot name a page is worth
+nothing to a group that asks "página X capítulo X", so every chunk carries the
+pages it came from and answers cite them.
+
+| | |
+|---|---|
+| Formats | PDF, plain text, Markdown |
+| Extraction | `pypdf` — pure Python, no system dependencies |
+| Synopsis | The local serving model. Group data does not leave the box. |
+| Storage | `data/documents/<scope>/<sha256>.pdf` plus a JSON sidecar |
+| Index | ChromaDB `kaya_documents`, separate from `kaya_conversations` because a full pipeline rebuild drops that one |
+| Scope | A document shared in a DM is **never** visible from the group |
+| Size | ~26–32 KB per chunk. 99 pages across 3 real PDFs → 105 chunks → 3.3 MB |
+
+Re-sharing a document the group already has costs nothing: it is recognised by
+content hash, so it is not re-extracted, re-summarised or re-embedded.
+
+Documents already shared before the bot could read them need a WhatsApp export —
+WAHA cannot replay them:
+
+```bash
+kaya_chatbot_env/bin/python scripts/ingest_documents.py --export chat.txt --media ./chat
+kaya_chatbot_env/bin/python scripts/ingest_documents.py --dir ~/papers --stats   # size a corpus, writing nothing
+```
+
 ## 📁 Project Structure
 
 ```
@@ -135,8 +229,10 @@ KayaChatBot/
 │   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
 │   │   ├── whatsapp_adapter.py       # Event parsing, mention/whitelist gating, speaker identity
 │   │   ├── engine.py                 # Shared generation engine (web + WhatsApp)
-│   │   ├── router.py                 # Intent classification: banter/mixed/factual/general/roast + commands
-│   │   ├── retriever.py              # RAG retrieval (conversations + KB)
+│   │   ├── router.py                 # Intent classification: banter/mixed/factual/general/roast/debate + commands
+│   │   ├── retriever.py              # RAG retrieval (conversations + KB + documents)
+│   │   ├── documents.py              # Shared PDFs → page-numbered searchable memory
+│   │   ├── sources.py                # What may be cited, and stripping what may not
 │   │   ├── summary.py                # Per-chat rolling summary, written off the reply path
 │   │   ├── tally.py                  # Counting questions, answered by scanning the log not by search
 │   │   ├── variety.py                # Keeps an open-ended answer off what it already said
