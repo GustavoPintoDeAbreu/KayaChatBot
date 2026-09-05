@@ -475,9 +475,59 @@ services:
   # Usage: docker-compose --profile test run --rm kaya-test
   # ──────────────────────────────────────────────────────────────
   kaya-test:
-    extends:
-      service: kaya-base
+    image: kaya-chatbot:2.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: kaya-test
     profiles: [test]
-    command: python -m pytest tests/ -v
+    # Deliberately does NOT `extends: kaya-base`, for the same reason kaya-sim
+    # does not. The base hard-mounts ./data read-write and the image runs as
+    # root, so anything a test writes lands in the REAL data directory owned by
+    # root. On the self-hosted CI runner that is unrecoverable without sudo:
+    # seven root-owned files under data/live_messages/ made `actions/checkout`
+    # fail to clean the workspace on EVERY run from 2026-08-09 to 2026-09-05.
+    # A month of red CI, none of it about the code being tested.
+    #
+    # Two independent guards, because either alone still leaves a trap:
+    #   - a tmpfs at /app/data, so a stray write cannot reach the group's real
+    #     memory AND leaves nothing in the workspace at all;
+    #   - `user:`, so whatever is written is owned by the invoking user and the
+    #     workspace stays cleanable even if a path escapes the scratch dir.
+    # Override the ids when the runner is not uid 1000 (see .env.example).
+    user: "${KAYA_TEST_UID:-1000}:${KAYA_TEST_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      # Not under ./models: that is mounted read-only below, and a cache write
+      # is the one thing an offline test suite might still try to do.
+      - HF_HOME=/tmp/hf
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    # /app/data is a tmpfs: writable, empty every run, and — the point —
+    # nowhere on the host. A bind mount was tried first and reintroduced the
+    # original bug from the other end: Docker CREATES a missing bind-mount
+    # source as root, so `./data_test` itself landed root-owned in the
+    # workspace and would have broken actions/checkout exactly as before.
+    tmpfs:
+      - /app/data
+    volumes:
+      # Read-only: the Piper voices and any local weights are inputs, never
+      # outputs. Mounted rather than skipped so the voice-availability test
+      # actually runs locally instead of skipping the way it does in CI.
+      - ./models:/app/models:ro
+      - ./src:/app/src:ro
+      # Mounted for the same reason ./src is. Without it the tests come from the
+      # image and a stale build silently runs yesterday's suite against today's
+      # source, which is a genuinely confusing way to lose an afternoon.
+      - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
+      - ./configs:/app/configs:ro
+      - ./config.yaml:/app/config.yaml:ro
+      # Kept for parity with kaya-base: `env_file` already puts these in the
+      # environment, but load_dotenv() in the LLM providers looks for the file.
+      - ./.env:/app/.env:ro
+    # -p no:cacheprovider: /app is root-owned in the image, and a non-root
+    # pytest cannot write .pytest_cache there.
+    command: python -m pytest tests/ -v -p no:cacheprovider
 

@@ -662,8 +662,17 @@ def test_voice_paths_fall_back_to_the_portuguese_voice(tmp_path):
 
     config = {"chat": {"audio": {"reply_enabled": True,
                                  "voices": {"en": str(tmp_path / "missing.onnx")}}}}
-    assert tts.is_available(config) is True
+    # The fallback itself is pure path logic and is always checked — it is what
+    # this test is named for.
     assert tts._voice_paths(config)["pt"] == tts.DEFAULT_VOICES["pt"]
+
+    # `is_available` additionally stats the Portuguese model on disk. The Piper
+    # voices are gitignored, so a clean checkout (CI) does not have them; that is
+    # a missing fixture, not a defect, and it must not read as one.
+    if not tts._resolve(tts.DEFAULT_VOICES["pt"]).exists():
+        pytest.skip("Piper PT voice model not present (gitignored); "
+                    "fetch it to exercise the availability check")
+    assert tts.is_available(config) is True
 
 
 def image_group_event(text, media_url="", mimetype=""):

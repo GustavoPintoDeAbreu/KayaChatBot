@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -120,6 +122,19 @@ def run_rag_logic():
 
     return True
 
+# The corpus these exercise is gitignored, so a clean checkout — CI's, and any
+# fresh clone — does not have it. That is a missing fixture, not a defect: the
+# suite must say "skipped" rather than "failed", or a red CI stops meaning
+# anything. `run_*` returns False for genuine failures too, so the precondition
+# is checked explicitly here rather than by treating every False as "no data".
+CORPUS = Path("data/all_messages_cleaned.jsonl")
+_NO_CORPUS = pytest.mark.skipif(
+    not CORPUS.exists(),
+    reason=f"{CORPUS} not present (gitignored); run src/data/extract_all_messages.py",
+)
+
+
+@_NO_CORPUS
 def test_rag_logic():
     assert run_rag_logic()
 
