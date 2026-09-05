@@ -143,6 +143,31 @@ FILTER_BY_PERSON = RAG_CONFIG['filter_by_person']
 DB_DIR = Path("/app/data/rag_db") if os.path.exists('/app') else Path(__file__).parent.parent.parent / "data" / "rag_db"
 
 
+def open_documents_collection(client, name: str):
+    """The documents collection, CREATED if it does not exist yet. None on failure.
+
+    get_or_create, not get, and that distinction was a live bug. The collection
+    is created by the first document anybody shares, which is almost never before
+    the serving process starts — and this resolves ONCE, at startup. `get_collection`
+    therefore left ``documents_collection = None`` for the life of the process, so
+    ``retrieve_documents`` returned [] on its first line and document RAG was
+    silently dead until the next restart.
+
+    Found in production on 2026-09-05, and only because the answers looked right:
+    three papers indexed correctly into 162 chunks, while the bot answered from the
+    "[Documento: …]" synopsis line carried in the recent window. The telemetry is
+    what gave it away — ``retrieved_chars: 164`` on a question about a 35-page paper.
+
+    Never raises: a missing document store is not worth refusing to boot over.
+    """
+    try:
+        return client.get_or_create_collection(
+            name=name, metadata={"hnsw:space": "cosine"})
+    except Exception as exc:  # noqa: BLE001
+        print(f"ℹ️  documents collection unavailable: {exc}")
+        return None
+
+
 class ConversationRetriever:
     """Retrieve relevant conversation chunks for RAG."""
 
@@ -207,12 +232,10 @@ class ConversationRetriever:
         # created on first upload, so a store that has never seen one is normal.
         docs_name = (self.config.get('documents', {}) or {}).get(
             'collection_name', 'kaya_documents')
-        try:
-            self.documents_collection = self.client.get_collection(name=docs_name)
+        self.documents_collection = open_documents_collection(self.client, docs_name)
+        if self.documents_collection is not None:
             print(f"✅ Documents collection loaded "
                   f"({self.documents_collection.count()} chunks)")
-        except Exception:
-            self.documents_collection = None
 
         # Load embedding model (GTE requires trust_remote_code)
         self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
