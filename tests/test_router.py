@@ -341,3 +341,48 @@ def test_reconcile_never_overrides_a_command():
 def test_the_match_is_case_insensitive():
     route = router.reconcile(_route(router.GENERAL), ["Bernardo"], ["bernardo"])
     assert route.mode == router.MIXED
+
+
+class TestDebateMode:
+    """DEBATE, added 2026-09-05.
+
+    The turn that motivated it: Frederico asked the bot to referee the
+    Pedro/Bernardo argument and be analytical, and the live log records it as
+    `roast` with 9,962 chars of member profiles and no web search.
+    """
+
+    def test_debate_label_is_parsed(self):
+        route = router.classify(StubBackend("DEBATE"), _config(), "debate me")
+        assert route.mode == router.DEBATE
+        assert route.fallback is False
+
+    def test_debate_retrieves(self):
+        """An argument about the group's own thread needs the thread."""
+        route = router.classify(StubBackend("DEBATE"), _config(), "quem tem razão?")
+        assert route.retrieval_enabled is True
+
+    def test_debate_is_in_modes(self):
+        assert router.DEBATE in router.MODES
+
+    def test_debate_carries_a_rewritten_query(self):
+        route = router.classify(
+            StubBackend("DEBATE\nQ: quem tem razão sobre o custo da comida?"),
+            _config(), "e então?")
+        assert route.query == "quem tem razão sobre o custo da comida?"
+
+    def test_the_prompt_separates_a_verdict_on_a_claim_from_one_on_a_person(self):
+        """The rubric has to state the ROAST/DEBATE line, or the model guesses."""
+        assert "DEBATE and ROAST" in router._ROUTER_SYSTEM
+        assert "DEBATE and GENERAL" in router._ROUTER_SYSTEM
+
+    def test_the_prompt_forbids_volunteering_into_an_argument(self):
+        """Gustavo: "deixa de discutir por AI @Bernardo / Wack ass tactic"."""
+        assert "never puts itself into an argument" in router._ROUTER_SYSTEM
+
+    def test_debate_does_not_shadow_another_label(self):
+        for output, expected in (("BANTER", router.BANTER),
+                                 ("ROAST", router.ROAST),
+                                 ("GENERAL", router.GENERAL),
+                                 ("DEBATE", router.DEBATE)):
+            route = router.classify(StubBackend(output), _config(), "x")
+            assert route.mode == expected, output

@@ -152,6 +152,7 @@ class ConversationRetriever:
         self.client = None
         self.collection = None
         self.knowledge_collection = None
+        self.documents_collection = None
         self.encoder = None
 
         # Load group members from JSON file (single source of truth)
@@ -201,6 +202,17 @@ class ConversationRetriever:
         except Exception:
             self.knowledge_collection = None
             print("ℹ️  No knowledge base collection found — run build_vector_db.py to create it")
+
+        # Documents shared in the chat (src/chat/documents.py). Optional and
+        # created on first upload, so a store that has never seen one is normal.
+        docs_name = (self.config.get('documents', {}) or {}).get(
+            'collection_name', 'kaya_documents')
+        try:
+            self.documents_collection = self.client.get_collection(name=docs_name)
+            print(f"✅ Documents collection loaded "
+                  f"({self.documents_collection.count()} chunks)")
+        except Exception:
+            self.documents_collection = None
 
         # Load embedding model (GTE requires trust_remote_code)
         self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
@@ -551,6 +563,101 @@ class ConversationRetriever:
 
         return knowledge_chunks
 
+    def retrieve_documents(self, query: str, top_k: Optional[int] = None,
+                           scope: Optional[str] = None,
+                           query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
+        """Retrieve chunks from documents the group has shared.
+
+        Scope-filtered exactly like conversations, and for the same reason: a PDF
+        sent in a DM must never surface in the group. The `where` clause is
+        backed by the same in-Python `is_readable` check, because failing open
+        here leaks a private document rather than merely a stale one.
+
+        Every chunk carries the pages it came from, which is what lets an answer
+        say "página 51" instead of "o documento diz".
+        """
+        if not self.documents_collection or not self.encoder:
+            return []
+        try:
+            available = self.documents_collection.count()
+        except Exception:  # noqa: BLE001
+            return []
+        if not available:
+            return []
+
+        dcfg = self.config.get('documents', {}) or {}
+        if top_k is None:
+            top_k = int(dcfg.get('top_k', 4))
+        if query_embedding is None:
+            query_embedding = self.encoder.encode([query], normalize_embeddings=True)[0]
+
+        query_kwargs = dict(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, available),
+            include=['documents', 'metadatas', 'distances'],
+        )
+        where = scope_filter(scope) if scope else None
+        if where:
+            query_kwargs['where'] = where
+        try:
+            results = self.documents_collection.query(**query_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if not where:
+                return []
+            print(f"⚠️  scope-filtered document query failed ({exc}); shared-only")
+            query_kwargs['where'] = {"scope": SHARED}
+            try:
+                results = self.documents_collection.query(**query_kwargs)
+            except Exception:  # noqa: BLE001
+                return []
+
+        min_similarity = float(dcfg.get('min_similarity', 0.25))
+        chunks: List[Dict[str, Any]] = []
+        for doc, metadata, distance in zip(results['documents'][0],
+                                           results['metadatas'][0],
+                                           results['distances'][0]):
+            similarity = 1 - distance
+            if similarity < min_similarity:
+                continue
+            # Defence in depth, load-bearing: the where clause above is the only
+            # other thing standing between a DM's document and the group.
+            if scope and not is_readable(metadata.get('scope'), scope):
+                continue
+            chunks.append({
+                'text': doc,
+                'filename': metadata.get('filename', 'documento'),
+                'sender': metadata.get('sender', ''),
+                'page_start': metadata.get('page_start', 0),
+                'page_end': metadata.get('page_end', 0),
+                'page_count': metadata.get('page_count', 0),
+                'synopsis': metadata.get('synopsis', ''),
+                'doc_id': metadata.get('doc_id', ''),
+                'similarity_score': similarity,
+            })
+        return chunks
+
+    @staticmethod
+    def page_label(chunk: Dict[str, Any]) -> str:
+        """"p. 51" or "pp. 51-52" — how a chunk is cited."""
+        start, end = chunk.get('page_start') or 0, chunk.get('page_end') or 0
+        if not start:
+            return ""
+        return f"p. {start}" if not end or end == start else f"pp. {start}-{end}"
+
+    def format_documents_context(self, chunks: List[Dict[str, Any]]) -> str:
+        """Render document hits with the page numbers that make them citable."""
+        if not chunks:
+            return ""
+        parts = ["=== Documentos partilhados no grupo ==="]
+        for chunk in chunks:
+            pages = self.page_label(chunk)
+            sender = f", enviado por {chunk['sender']}" if chunk.get('sender') else ""
+            header = f"--- {chunk.get('filename', 'documento')}"
+            header += f", {pages}" if pages else ""
+            header += f"{sender} ---"
+            parts.append(f"{header}\n{chunk['text']}")
+        return "\n\n".join(parts)
+
     def _fact_date_suffix(self, chunk: Dict[str, Any]) -> str:
         """Build a recency suffix for a knowledge fact (mixed rule).
 
@@ -628,9 +735,15 @@ class ConversationRetriever:
         top_k: Optional[int] = None,
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
+        include_documents: bool = True,
     ) -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
+
+        ``include_documents=False`` is for a debate, which retrieves documents
+        itself so it can hand them to the model as a NUMBERED source list that
+        can be cited and verified. Leaving them here as well would send the same
+        pages twice.
 
         knowledge_approach:
           "both"         — JSON members (injected via system prompt externally) + KB retrieval + conversation RAG
@@ -666,6 +779,15 @@ class ConversationRetriever:
             if kb_config.get('enabled', False):
                 kb_chunks = self.retrieve_knowledge(query, query_embedding=query_embedding)
 
+        # Documents the group has shared. Retrieved for every mode that retrieves
+        # at all, not only for debates: "que docs mandou o Bana?" and "o que dizia
+        # aquele paper?" are ordinary questions, and an index nothing reads is an
+        # index not worth building.
+        doc_chunks = []
+        if include_documents and (self.config.get('documents', {}) or {}).get('enabled', True):
+            doc_chunks = self.retrieve_documents(
+                query, scope=scope, query_embedding=query_embedding)
+
         # Inject recent summaries for members mentioned in the query
         recent_summaries_text = ""
         if inject_recent_summaries:
@@ -674,11 +796,18 @@ class ConversationRetriever:
 
         # Enforce token budget — truncate lowest-priority context first:
         #   1. Conversation chunks (lowest similarity first, i.e. from the end)
-        #   2. Knowledge facts (all at once)
-        #   3. Recent summaries
+        #   2. Document chunks (lowest similarity first)
+        #   3. Knowledge facts (all at once)
+        #   4. Recent summaries
+        #
+        # Documents outrank conversation chunks here because a document chunk is
+        # the only kind of context that can be cited by page, and a question that
+        # pulled documents at all is usually a question about them. They are still
+        # dropped before the curated knowledge facts, which are cheap and dense.
         def _total() -> int:
             return (
                 self._count_tokens(self.format_context(conv_chunks, show_dates=show_dates))
+                + self._count_tokens(self.format_documents_context(doc_chunks))
                 + self._count_tokens(self.format_knowledge_context(kb_chunks, show_dates=show_dates))
                 + self._count_tokens(recent_summaries_text)
             )
@@ -687,6 +816,9 @@ class ConversationRetriever:
             # retrieve() returns chunks sorted by similarity descending, so the last
             # item is the lowest-similarity chunk — remove it first.
             conv_chunks.pop()
+
+        while doc_chunks and _total() > max_tokens:
+            doc_chunks.pop()
 
         if kb_chunks and _total() > max_tokens:
             kb_chunks = []
@@ -702,6 +834,9 @@ class ConversationRetriever:
             context_parts.append(recent_summaries_text)
         if conv_chunks:
             context_parts.append(self.format_context(conv_chunks, show_dates=show_dates))
+        # Last, so the pages sit closest to the question being answered.
+        if doc_chunks:
+            context_parts.append(self.format_documents_context(doc_chunks))
 
         return "\n\n".join(context_parts)
 

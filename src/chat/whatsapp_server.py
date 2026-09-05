@@ -282,6 +282,56 @@ def _describe(url: str, mimetype: str):
     )
 
 
+def _ingest_document(msg):
+    """Read, index and archive a document shared in the chat.
+
+    Returns the one line that goes into the message text, or None when there is
+    nothing to say — an unreadable or scanned PDF must not be announced as one
+    the bot has read.
+
+    Runs on the webhook's background worker, not under the GPU lock: extraction
+    is CPU work and the synopsis is one short llama call. Embedding borrows the
+    retriever's already-loaded bge-m3.
+    """
+    from src.chat import documents
+    from src.chat.scope import scope_for_chat
+
+    if not documents.is_available(config):
+        return None
+
+    dcfg = config.get("documents", {}) or {}
+    payload = documents.download(
+        msg.media_url,
+        api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
+        waha_base_url=os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""),
+        max_bytes=int(float(dcfg.get("max_file_mb", 50)) * 1024 * 1024),
+    )
+    if not payload:
+        return None
+
+    report = documents.index_document(
+        payload,
+        filename=msg.media_filename or "documento",
+        scope=scope_for_chat(msg.chat_id, adapter.shared_chats),
+        # The CANONICAL member name, not the raw WhatsApp push name. This runs
+        # before the adapter resolves the speaker for the reply, and the name is
+        # stored on every chunk — "enviado por Tomas Carnall" would be invisible
+        # to the person filter that matches "Carnall". `resolve_speaker` is an
+        # idempotent lookup, so calling it early costs nothing.
+        sender=adapter.resolve_speaker(msg) or msg.sender_name or "",
+        config=config,
+        mimetype=msg.media_mimetype,
+        timestamp=msg.timestamp,
+    )
+    if not report.get("ok"):
+        print(f"⚠️  could not index {msg.media_filename!r}: "
+              f"{report.get('error', 'unknown')}")
+        return None
+    print(f"📄 indexed {report['filename']!r}: {report['pages']} pages, "
+          f"{report['chunks']} chunks")
+    return documents.describe_for_log(report)
+
+
 from src.chat.summary import SummaryWriter
 
 # Rolling per-chat summary of what has scrolled out of the verbatim window.
@@ -292,6 +342,7 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
                           transcribe=_stt,
                           describe_image=_describe,
+                          ingest_document=_ingest_document,
                           summary_writer=_summary_writer,
                           sender_resolver=_sender_resolver)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.

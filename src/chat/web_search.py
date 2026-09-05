@@ -221,3 +221,48 @@ def maybe_web_search(query: str, retriever, config: Dict[str, Any], query_embedd
     except Exception as exc:  # noqa: BLE001 — never break a reply on search
         print(f"⚠️  web search failed: {exc}")
         return WebSearchResult()
+
+
+def search_for(query: str, retriever, config: Dict[str, Any]) -> WebSearchResult:
+    """Run a lookup the PLANNER asked for, skipping the trigger heuristics.
+
+    `should_search` exists to guess whether an ordinary message wants the web.
+    In a debate that guess has already been made, explicitly and with the whole
+    thread in view, by the model writing its argument plan — so re-deriving it
+    from keywords and a RAG similarity score would only overrule a better
+    decision with a worse one.
+
+    What is NOT skipped is the privacy guard. A query naming a group member never
+    leaves the box, whoever asked for it: the plan is written by a model that has
+    just read the group's own conversation, which is exactly the input most
+    likely to produce "quanto ganha o Pedro" as a search query. That check is the
+    reason this is a separate function rather than a flag on `maybe_web_search`.
+
+    Never raises: a failed lookup means the argument is made without it.
+    """
+    try:
+        if not query or not query.strip():
+            return WebSearchResult()
+        ws_cfg = (config.get("web_search", {}) or {})
+        if not ws_cfg.get("enabled", False):
+            return WebSearchResult()
+        if not os.environ.get("XAI_API_KEY", "").strip():
+            return WebSearchResult()
+        if retriever is not None:
+            try:
+                named = retriever.extract_query_persons(query)
+            except Exception:  # noqa: BLE001 — fail closed
+                named = True
+            if named:
+                print(f"🔒 not searching the web for a query naming a member: {query!r}")
+                return WebSearchResult()
+        client = _get_client(config)
+        if client is None:
+            return WebSearchResult()
+        answer, sources = client.search(query)
+        if not answer:
+            return WebSearchResult()
+        return WebSearchResult(used=True, answer=answer, sources=sources)
+    except Exception as exc:  # noqa: BLE001 — never break a reply on search
+        print(f"⚠️  web search failed: {exc}")
+        return WebSearchResult()

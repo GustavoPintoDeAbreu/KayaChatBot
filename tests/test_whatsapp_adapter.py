@@ -1883,3 +1883,134 @@ def test_the_bots_own_messages_are_not_read_back_as_chatter(tmp_path):
     adapter.handle_event(event, system_prompt="")
     adapter.handle_event(group_event("e então", mention=True), system_prompt="")
     assert not any("isto sou eu" in line for line in seen["recent"])
+
+
+# ── documents ────────────────────────────────────────────────────────────────
+def _document_event(filename="labour.pdf", mimetype="application/pdf", body="",
+                    timestamp=1700000000, group=True):
+    event = group_event(body, mention=True) if group else dm_event(body)
+    event["payload"]["media"] = {"url": "http://waha:3000/f.pdf",
+                                 "mimetype": mimetype, "filename": filename}
+    # MessageLog.read() only yields records newer than its cutoff, so a message
+    # with no timestamp is written and never read back.
+    event["payload"]["timestamp"] = timestamp
+    return event
+
+
+def test_a_pdf_is_not_sent_to_the_transcriber(tmp_path):
+    """The live bug: a PDF was not an image, so it went to Whisper and vanished.
+
+    Four papers shared in the group on 2026-09-05 left no trace on disk because
+    the transcribe branch was gated on "not an image" rather than on "audio".
+    """
+    transcribed = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    adapter.transcribe = lambda url, mimetype: transcribed.append(url) or "nope"
+    adapter.ingest_document = lambda msg: "labour.pdf, 51 páginas — sobre sindicatos"
+
+    adapter.handle_event(_document_event(), system_prompt="")
+
+    assert transcribed == [], "a PDF must never reach Whisper"
+
+
+def _logging_adapter(tmp_path, synopsis):
+    """An adapter whose message log can be read back, as the photo test does."""
+    from src.chat.memory import ChatPreferences
+    from src.data.message_log import MessageLog
+
+    log = MessageLog(base_dir=str(tmp_path / "log"))
+    adapter = WhatsAppAdapter(
+        responder=lambda message, speaker, recent_lines, **kw: "ok",
+        waha_client=MockWahaClient(echo=False),
+        config={"whatsapp": {"bot_jid": BOT_JID, "send_seen": False,
+                             "log_messages": True, "shared_chats": [GROUP]}},
+        session_store=KeyedSessionMemory(base_dir=str(tmp_path / "sessions")),
+        prefs=ChatPreferences(base_dir=str(tmp_path / "prefs")),
+        message_log=log,
+        ingest_document=synopsis,
+    )
+    return adapter, log
+
+
+def test_a_document_becomes_text_the_group_can_search(tmp_path):
+    """This is what makes "aquele doc que o Bana mandou" findable later."""
+    adapter, log = _logging_adapter(
+        tmp_path, lambda msg: "labour.pdf, 51 páginas — sobre sindicatos")
+
+    adapter.handle_event(_document_event(), system_prompt="")
+
+    logged = [m["text"] for m in log.read("shared")]
+    assert any("[Documento: labour.pdf" in text for text in logged), logged
+
+
+def test_a_document_caption_is_kept(tmp_path):
+    adapter, log = _logging_adapter(
+        tmp_path, lambda msg: "labour.pdf, 51 páginas — sobre sindicatos")
+
+    adapter.handle_event(
+        _document_event(body="argue with the paper boys"), system_prompt="")
+
+    logged = "\n".join(m["text"] for m in log.read("shared"))
+    assert "argue with the paper boys" in logged
+    assert "[Documento:" in logged
+
+
+def test_an_unreadable_document_is_not_announced(tmp_path):
+    """A scanned PDF must not be logged as one the bot has read."""
+    adapter, log = _logging_adapter(tmp_path, lambda msg: "")
+
+    adapter.handle_event(_document_event(), system_prompt="")
+
+    logged = "\n".join(m["text"] for m in log.read("shared"))
+    assert "[Documento:" not in logged
+
+
+def test_a_failing_document_reader_does_not_break_the_message(tmp_path):
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+
+    def boom(msg):
+        raise RuntimeError("pypdf exploded")
+
+    adapter.ingest_document = boom
+
+    # Must not raise.
+    adapter.handle_event(
+        _document_event(body="olhem este doc"), system_prompt="")
+
+
+def test_the_document_filename_survives_parsing():
+    msg = parse_waha_message(_document_event(filename="Página 51.pdf"))
+    assert msg.media_filename == "Página 51.pdf"
+
+
+def test_a_voice_note_is_still_transcribed(tmp_path):
+    """The regression guard for the fix itself."""
+    transcribed = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    adapter.transcribe = lambda url, mimetype: (transcribed.append(url)
+                                                or "disse isto em voz alta")
+
+    event = dm_event("")
+    event["payload"]["media"] = {"url": "http://waha/f.oga",
+                                 "mimetype": "audio/ogg; codecs=opus"}
+    adapter.handle_event(event, system_prompt="")
+
+    assert transcribed, "voice notes must still be transcribed"
+
+
+def test_resolve_speaker_is_idempotent(tmp_path):
+    """`whatsapp_server._ingest_document` calls it before the reply path does.
+
+    A document's chunks store who shared it, and that has to be the canonical
+    member name — "enviado por Tomas Carnall" is invisible to a person filter
+    matching "Carnall". Resolving early is only safe if resolving twice gives the
+    same answer and does not corrupt the learned contact map.
+    """
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    msg = parse_waha_message(_document_event())
+
+    first = adapter.resolve_speaker(msg)
+    second = adapter.resolve_speaker(msg)
+
+    assert first == second
+    assert first, "a speaker must always resolve to something usable"
