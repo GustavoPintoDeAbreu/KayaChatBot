@@ -160,6 +160,7 @@ of this file said. `models/` is shared because it is 42GB of read-only weights;
 | `data/ingest_state.json` | the ingest watermark. A dev watermark makes prod re-read or skip chunks. |
 | `data/whatsapp_sessions/`, `whatsapp_prefs/`, `whatsapp_summaries/` | live per-chat state |
 | `data/feedback/` | bug reports, ratings and the interaction log |
+| `data/documents/` | the PDFs the group shared, kept so they can be re-indexed without asking anyone to re-send. Scoped per chat, so dev's copy is not prod's. |
 
 The `data.bak.*` directory on the box is what a previous attempt at the symlink
 cost. Seed it once, then leave it alone.
@@ -295,6 +296,26 @@ scripts/app_up.sh dev
   `RAG Retriever initialized` and `Loaded N WhatsApp whitelist number(s)`.
   **Do not "fix" this by symlinking `data/` to the dev checkout** — that is what
   the `data.bak.*` directory on the box is a record of.
+
+- **Document retrieval silently returns nothing.** The `kaya_documents`
+  collection is created by the FIRST document anybody shares, and the retriever
+  resolves it once at startup. If the serving process booted before any document
+  existed, an older build left it unresolved for the life of the process — the
+  bot still answered plausibly from the `[Documento: … — sinopse]` line in the
+  recent window, so nothing looked wrong. The boot log is the tell: it must say
+  `✅ Documents collection loaded (N chunks)`. If that line is missing on a build
+  from before 2026-09-05, restart. `retrieved_chars` in
+  `data/feedback/live_interactions.jsonl` is the other tell — a few hundred
+  characters on a question about a long paper means retrieval is not running.
+
+- **Every message processed twice.** WAHA delivers each event to the webhook
+  twice (the hook is registered both globally via `WHATSAPP_HOOK_URL` and in the
+  session config). Replies were never doubled — `should_respond` deduped those —
+  but the media work ran twice per message until the guard at the top of
+  `handle_event`. To confirm: `docker logs kaya-waha | grep "Sending POST"` and
+  look for the same `event.id` twice. Removing one registration needs a WAHA
+  restart, which risks a QR re-scan, so it is deliberately left for a moment when
+  somebody is at the machine.
 
 - **gguf backend: bot never replies / errors on generate.** The `llama` service
   isn't up. `deploy_prod.sh` starts it, or manually
