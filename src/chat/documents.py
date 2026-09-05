@@ -406,6 +406,35 @@ def index_document(payload: bytes, filename: str, scope: str, sender: str,
     report: Dict[str, Any] = {"ok": False, "doc_id": identifier, "filename": filename,
                               "pages": 0, "chunks": 0, "synopsis": ""}
 
+    collection = collection if collection is not None else get_collection(config)
+
+    # Already indexed? Skip the expensive half. WAHA delivers the same message
+    # twice (observed 2026-09-05: six webhook POSTs for three PDFs, same message
+    # ids), and re-sharing a paper the group already has is an ordinary thing to
+    # do. Upserting by content hash made that harmless for the STORE, but the
+    # work still ran twice: two downloads, two extractions, two synopsis calls to
+    # the model and two embedding passes — the third paper's two synopses even
+    # came back different lengths, 488 and 465 chars.
+    #
+    # The check is on the content hash, so the same paper under a different
+    # filename is still recognised, and a genuinely edited document is not.
+    try:
+        seen = collection.get(where={"doc_id": identifier}, limit=1,
+                              include=["metadatas"])
+        if seen.get("ids"):
+            meta = (seen.get("metadatas") or [{}])[0] or {}
+            report.update({
+                "ok": True,
+                "pages": int(meta.get("page_count") or 0),
+                "chunks": len(collection.get(where={"doc_id": identifier}).get("ids") or []),
+                "synopsis": meta.get("synopsis", ""),
+                "filename": meta.get("filename") or filename,
+                "cached": True,
+            })
+            return report
+    except Exception as exc:  # noqa: BLE001 — a failed check just re-indexes
+        logger.debug("could not check for an existing copy: %s", exc)
+
     pages = extract_pages(payload, mimetype,
                           max_pages=int(dcfg.get("max_pages", 0) or 0))
     if not pages:
@@ -431,7 +460,6 @@ def index_document(payload: bytes, filename: str, scope: str, sender: str,
                meta={"sender": sender, "pages": len(pages), "synopsis": text,
                      "mimetype": mimetype})
 
-    collection = collection if collection is not None else get_collection(config)
     encoder = encoder if encoder is not None else _encoder(config)
 
     ids, texts, metadatas = [], [], []

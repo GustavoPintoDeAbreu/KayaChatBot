@@ -126,3 +126,150 @@ def test_a_crafted_scope_cannot_escape_the_store(tmp_path):
 
     assert path
     assert Path(path).resolve().is_relative_to(tmp_path.resolve())
+
+
+# ── the live bugs of 2026-09-05 ──────────────────────────────────────────────
+class _FakeClient:
+    """A Chroma client where the documents collection does not exist yet."""
+
+    def __init__(self):
+        self.created = []
+
+    def get_collection(self, name):
+        raise ValueError(f"Collection {name} does not exist.")
+
+    def get_or_create_collection(self, name, metadata=None):
+        self.created.append(name)
+        return f"collection:{name}"
+
+
+def test_the_documents_collection_is_created_not_merely_fetched():
+    """It is created by the first upload, which is after the process starts.
+
+    Resolving it with `get_collection` left `documents_collection = None` for the
+    life of the serving process, so retrieve_documents returned [] on its first
+    line and document RAG was dead until the next restart. Live on 2026-09-05:
+    162 chunks indexed, `retrieved_chars: 164` on a question about them.
+    """
+    from src.chat.retriever import open_documents_collection
+
+    client = _FakeClient()
+    assert open_documents_collection(client, "kaya_documents") == "collection:kaya_documents"
+    assert client.created == ["kaya_documents"]
+
+
+def test_an_unavailable_documents_collection_does_not_stop_the_boot():
+    from src.chat.retriever import open_documents_collection
+
+    class Broken:
+        def get_or_create_collection(self, **kwargs):
+            raise RuntimeError("disk gone")
+
+    assert open_documents_collection(Broken(), "kaya_documents") is None
+
+
+class _RecordingCollection:
+    """Enough of a Chroma collection to see whether work was repeated."""
+
+    def __init__(self):
+        self.rows = {}
+        self.upserts = 0
+
+    def get(self, where=None, limit=None, include=None):
+        ids = [i for i, meta in self.rows.items()
+               if not where or meta.get("doc_id") == where.get("doc_id")]
+        if limit:
+            ids = ids[:limit]
+        return {"ids": ids, "metadatas": [self.rows[i] for i in ids]}
+
+    def upsert(self, ids, documents, embeddings, metadatas):
+        self.upserts += 1
+        for identifier, meta in zip(ids, metadatas):
+            self.rows[identifier] = meta
+
+
+class _CountingEncoder:
+    def __init__(self):
+        self.calls = 0
+
+    def encode(self, texts, **kwargs):
+        self.calls += 1
+        import numpy as np
+
+        return np.zeros((len(texts), 8), dtype="float32")
+
+
+def _pdf_bytes():
+    return ("%PDF-1.4\n" + "x" * 200).encode()
+
+
+def test_the_same_document_is_not_reindexed(tmp_path):
+    """WAHA delivered each message TWICE: six webhook POSTs for three PDFs.
+
+    Upserting by content hash already made that harmless for the store, but the
+    expensive half still ran twice — two extractions, two synopsis calls and two
+    embedding passes, which produced two different synopses for the same paper.
+    """
+    config = {"documents": {"store_dir": str(tmp_path), "chunk_size_tokens": 100,
+                            "chunk_overlap_tokens": 20},
+              "rag": {"db_path": str(tmp_path / "db")}}
+    collection, encoder = _RecordingCollection(), _CountingEncoder()
+    pages = [(1, "uma frase com conteudo suficiente para sobreviver ao filtro de paginas curtas")]
+
+    import unittest.mock as mock
+
+    with mock.patch.object(documents, "extract_pages", return_value=pages), \
+            mock.patch.object(documents, "synopsis", return_value="uma sinopse"):
+        first = documents.index_document(
+            _pdf_bytes(), "paper.pdf", "shared", "Bernardo", config,
+            "application/pdf", collection=collection, encoder=encoder)
+        second = documents.index_document(
+            _pdf_bytes(), "paper.pdf", "shared", "Bernardo", config,
+            "application/pdf", collection=collection, encoder=encoder)
+
+    assert first["ok"] and not first.get("cached")
+    assert second["ok"] and second["cached"] is True
+    assert encoder.calls == 1, "the second delivery re-embedded the document"
+    assert collection.upserts == 1
+
+
+def test_a_redelivery_still_reports_enough_to_log(tmp_path):
+    """The cached report has to produce the same "[Documento: …]" line."""
+    config = {"documents": {"store_dir": str(tmp_path), "chunk_size_tokens": 100,
+                            "chunk_overlap_tokens": 20},
+              "rag": {"db_path": str(tmp_path / "db")}}
+    collection, encoder = _RecordingCollection(), _CountingEncoder()
+    pages = [(1, "uma frase com conteudo suficiente para sobreviver ao filtro curto")]
+
+    import unittest.mock as mock
+
+    with mock.patch.object(documents, "extract_pages", return_value=pages), \
+            mock.patch.object(documents, "synopsis", return_value="uma sinopse"):
+        documents.index_document(_pdf_bytes(), "paper.pdf", "shared", "B", config,
+                                 "application/pdf", collection=collection, encoder=encoder)
+        cached = documents.index_document(_pdf_bytes(), "paper.pdf", "shared", "B", config,
+                                          "application/pdf", collection=collection,
+                                          encoder=encoder)
+
+    assert documents.describe_for_log(cached) == "paper.pdf, 1 página — uma sinopse"
+
+
+def test_the_same_bytes_under_a_new_name_are_recognised(tmp_path):
+    """Forwarding a paper the group already has must not re-embed it."""
+    config = {"documents": {"store_dir": str(tmp_path), "chunk_size_tokens": 100,
+                            "chunk_overlap_tokens": 20},
+              "rag": {"db_path": str(tmp_path / "db")}}
+    collection, encoder = _RecordingCollection(), _CountingEncoder()
+    pages = [(1, "uma frase com conteudo suficiente para sobreviver ao filtro curto")]
+
+    import unittest.mock as mock
+
+    with mock.patch.object(documents, "extract_pages", return_value=pages), \
+            mock.patch.object(documents, "synopsis", return_value="uma sinopse"):
+        documents.index_document(_pdf_bytes(), "original.pdf", "shared", "B", config,
+                                 "application/pdf", collection=collection, encoder=encoder)
+        again = documents.index_document(_pdf_bytes(), "forwarded.pdf", "shared", "R", config,
+                                         "application/pdf", collection=collection, encoder=encoder)
+
+    assert again["cached"] is True
+    assert encoder.calls == 1
