@@ -438,6 +438,9 @@ class WhatsAppAdapter:
         # Message ids already answered, so a replay is not answered twice.
         self._answered_ids: "OrderedDict[str, bool]" = OrderedDict()
         self._answered_max = 2000
+        # Message ids already SEEN. Separate from `_answered_ids`, which is
+        # checked in should_respond — far too late to stop the expensive work.
+        self._processed_ids: "OrderedDict[str, bool]" = OrderedDict()
         # Deeper than the read window, so the file always has more than the prompt
         # asks for. It used to be 2x on the assumption of one asker line per bot
         # line; now every message the bot SEES goes in, and in a busy group that
@@ -1001,6 +1004,31 @@ class WhatsAppAdapter:
         msg = parse_waha_message(event)
         if msg is None:
             return None
+
+        # The same message, delivered twice, must not be processed twice.
+        #
+        # WAHA sends every event to this URL TWICE — confirmed in its own logs,
+        # the same `event.id` dispatched by two WebhookPlugin instances, because
+        # the hook is registered both globally (WHATSAPP_HOOK_URL) and in the
+        # session config. It also replays its backlog after a reconnect.
+        #
+        # `should_respond` already guards the REPLY (`_answered_ids`), which is
+        # why this was invisible: nobody ever got two answers. But it is checked
+        # further down, after the media branches have run, so every photo was
+        # described twice, every voice note transcribed twice, and every PDF
+        # downloaded, extracted, summarised by the model and embedded twice. Two
+        # synopses of the same paper came back at 488 and 465 chars, which is what
+        # a wasted second generation looks like.
+        #
+        # Dropping the duplicate outright is safe: `message_log.append` upserts by
+        # a content hash, so nothing is lost by not repeating it.
+        if msg.message_id:
+            if msg.message_id in self._processed_ids:
+                logger.info("ignoring duplicate delivery of %s", msg.message_id)
+                return None
+            self._processed_ids[msg.message_id] = True
+            while len(self._processed_ids) > self._answered_max:
+                self._processed_ids.popitem(last=False)
 
         # A shared document is read BEFORE the audio branch, because the two used
         # to be the same branch: transcription was gated on "not an image", so a

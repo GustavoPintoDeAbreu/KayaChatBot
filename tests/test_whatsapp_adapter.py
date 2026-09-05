@@ -2014,3 +2014,66 @@ def test_resolve_speaker_is_idempotent(tmp_path):
 
     assert first == second
     assert first, "a speaker must always resolve to something usable"
+
+
+def test_a_duplicate_delivery_does_no_work_twice(tmp_path):
+    """WAHA sends every event to the webhook TWICE.
+
+    Confirmed in WAHA's own logs: the same `event.id` dispatched by two
+    WebhookPlugin instances, because the hook is registered both globally
+    (WHATSAPP_HOOK_URL) and in the session config. `should_respond` already
+    guarded the reply, which is why nobody ever saw two answers — but it is
+    checked after the media branches, so the expensive work ran twice.
+    """
+    reads = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    adapter.ingest_document = lambda msg: (reads.append(msg.media_filename)
+                                           or "paper.pdf, 5 páginas — uma sinopse")
+
+    event = _document_event()
+    adapter.handle_event(event, system_prompt="")
+    second = adapter.handle_event(event, system_prompt="")
+
+    assert reads == ["labour.pdf"], "the document was read twice"
+    assert second is None, "the duplicate should be dropped, not answered"
+
+
+def test_a_duplicate_photo_is_described_once(tmp_path):
+    """Same bug, and it was costing a vision call on every photo in the group."""
+    described = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    adapter.describe_image = lambda url, mimetype: (described.append(url)
+                                                    or "dois homens num barco")
+
+    event = photo_event()
+    adapter.handle_event(event, system_prompt="")
+    adapter.handle_event(event, system_prompt="")
+
+    assert len(described) == 1, "the photo was described twice"
+
+
+def test_a_duplicate_voice_note_is_transcribed_once(tmp_path):
+    transcribed = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+    adapter.transcribe = lambda url, mimetype: (transcribed.append(url) or "disse isto")
+
+    event = dm_event("")
+    event["payload"]["media"] = {"url": "http://waha/f.oga",
+                                 "mimetype": "audio/ogg; codecs=opus"}
+    adapter.handle_event(event, system_prompt="")
+    adapter.handle_event(event, system_prompt="")
+
+    assert len(transcribed) == 1
+
+
+def test_distinct_messages_are_still_both_processed(tmp_path):
+    """The guard is on the message id, not on the content."""
+    replies = []
+    adapter = make_routed_adapter(tmp_path, RoutedReply(text="ok", mode="banter"))
+
+    for index in range(2):
+        result = adapter.handle_event(
+            dm_event("olá", message_id=f"MSG{index}"), system_prompt="")
+        replies.append(result)
+
+    assert all(r is not None for r in replies), "two real messages must both answer"
