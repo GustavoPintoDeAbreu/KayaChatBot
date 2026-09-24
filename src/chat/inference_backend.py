@@ -17,12 +17,22 @@ the migration on is a one-line config flip and ``hf`` stays the current path.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from threading import Thread
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
+
+# ``http://llm-broker:8080/upstream/kaya``: the shared llama-swap broker, which
+# starts the named model on first request (see ~/llm-broker/README.md).
+_BROKER_UPSTREAM = re.compile(r"^(?P<base>.+)/upstream/(?P<model>[^/]+)/?$")
 
 
 def resolve_backend(config: Dict[str, Any]) -> str:
@@ -51,6 +61,49 @@ def resolve_llama_url(config: Dict[str, Any]) -> str:
         or config.get("inference", {}).get("gguf", {}).get("server_url")
         or "http://127.0.0.1:8080"
     )
+
+
+def broker_target(url: str) -> Optional[Tuple[str, str]]:
+    """``(broker_base, model)`` when ``url`` is a broker upstream URL, else None."""
+    match = _BROKER_UPSTREAM.match(url or "")
+    return (match.group("base"), match.group("model")) if match else None
+
+
+def ensure_model_loaded(config: Dict[str, Any]) -> None:
+    """Make the serving model ready before GPU work. Best effort; never raises.
+
+    Behind the broker the model may be unloaded, or GPU1 may be lent to a coding
+    model or a two-card model. llama-swap would evict those by itself when Kaya is
+    requested, but it waits for their in-flight requests first, and a long agent
+    turn could then hold a WhatsApp reply for minutes. So the borrowers are
+    unloaded explicitly, then the model is loaded, and the time is recorded for
+    the broker's ``llm-use-g1``/``llm-use-big`` guards, which lend GPU1 only after
+    Kaya has been quiet for a while. Against a plain llama-server this only
+    records the time.
+    """
+    bcfg = (config.get("inference", {}) or {}).get("broker", {}) or {}
+    activity_file = bcfg.get("activity_file", "data/kaya_last_active")
+    try:
+        Path(activity_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(activity_file).write_text(f"{time.time():.0f}\n")
+    except OSError as exc:
+        logger.warning("could not record activity in %s: %s", activity_file, exc)
+
+    target = broker_target(resolve_llama_url(config))
+    if target is None:
+        return
+    base, model = target
+    try:
+        running = requests.get(f"{base}/running", timeout=5).json().get("running", []) or []
+        loaded = {entry.get("model") for entry in running if isinstance(entry, dict)}
+        for borrower in bcfg.get("evict_before_use", []) or []:
+            if borrower in loaded:
+                logger.info("unloading %s to take GPU1 back", borrower)
+                requests.post(f"{base}/api/models/unload/{borrower}", timeout=60)
+        requests.get(f"{base}/upstream/{model}/health",
+                     timeout=float(bcfg.get("load_timeout", 300))).raise_for_status()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("broker preparation failed (%s); generating anyway", exc)
 
 
 def _templated_prompt(tokenizer, messages: List[Dict[str, str]], strip_bos: bool = False) -> str:

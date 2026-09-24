@@ -33,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
 from src.chat.gpu_lock import GpuBusyError, gpu_section
+from src.chat.inference_backend import ensure_model_loaded
 from src.chat.whatsapp_adapter import PendingReply, WhatsAppAdapter
 from src.chat.relay import BacklogTracker, RelayState, parse_envelope
 from src.chat.waha_client import WahaClient, MockWahaClient
@@ -263,6 +264,7 @@ def _stt(url: str, mimetype: str):
 
     if not stt.is_available(config):
         return None
+    ensure_model_loaded(config)
     return stt.transcribe_url(
         url, mimetype, config,
         api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
@@ -278,6 +280,7 @@ def _describe(url: str, mimetype: str):
 
     if not vision.is_available(config):
         return None
+    ensure_model_loaded(config)
     return vision.describe_url(
         url, mimetype, config,
         api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
@@ -312,6 +315,7 @@ def _ingest_document(msg):
     if not payload:
         return None
 
+    ensure_model_loaded(config)
     report = documents.index_document(
         payload,
         filename=msg.media_filename or "documento",
@@ -595,7 +599,8 @@ def _check_relay_token(token: str) -> None:
 
 
 if not MOCK_MODE:
-    _preload_audio_models()
+    if ((config.get("chat", {}) or {}).get("audio", {}) or {}).get("whisper_preload", False):
+        _preload_audio_models()
     _start_ingest_scheduler()
     _start_bio_scheduler()
 

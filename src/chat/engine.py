@@ -23,6 +23,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.chat import router, sources, variety
+from src.chat.inference_backend import LlamaCppBackend, ensure_model_loaded
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -440,6 +441,10 @@ class KayaEngine:
             and (self.config.get("chat", {}) or {}).get("reasoning", {}).get("enabled", True)
         )
 
+        # Outside the lock: a cold load behind the broker takes seconds, and the
+        # lock's acquire timeout is what everything else waits on.
+        if isinstance(self.backend, LlamaCppBackend):
+            ensure_model_loaded(self.config)
         with gpu_section(self.config):
             # 1. What kind of message is this? Inside the lock, so the whole turn
             #    costs one acquisition. Never raises; falls back to `factual`.

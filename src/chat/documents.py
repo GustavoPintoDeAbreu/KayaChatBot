@@ -387,6 +387,7 @@ def _encoder(config: Dict[str, Any]):
     return SentenceTransformer(
         (config.get("rag", {}) or {}).get("embedding_model", "BAAI/bge-m3"),
         trust_remote_code=True,
+        device=(config.get("rag", {}) or {}).get("embedding_device") or None,
     )
 
 

@@ -250,6 +250,16 @@ inference:
     # without disturbing what prod resolves.
     server_url: "http://llama:8080"
     timeout: 180
+  # The shared GPU broker (~/llm-broker). Only used when the llama URL is a
+  # broker upstream URL (…/upstream/<model>), e.g. KAYA_LLAMA_URL on kaya-prod.
+  broker:
+    # Models that borrow GPU1 while Kaya is idle. Unloaded explicitly before
+    # Kaya's GPU work, because llama-swap waits for their in-flight requests.
+    evict_before_use: ["big", "qwen-impl-g1"]
+    load_timeout: 300
+    # Written on every GPU turn; the broker's llm-use-g1/llm-use-big read it and
+    # lend GPU1 only after Kaya has been quiet for a while.
+    activity_file: "data/kaya_last_active"
   max_new_tokens: 768  # Elaboration ceiling — used when a question explicitly asks for detail
   max_new_tokens_default: 256  # Chatty default; replies stay short unless detail is requested
   temperature: 0.8             # chat default; chosen by scripts/temperature_sweep.py (v15: AVG 4.6 vs 4.4-4.47)
@@ -490,6 +500,11 @@ chat:
     whisper_device: "cuda"
     whisper_compute: "int8_float16"
     language: "pt"
+    # Free Whisper's VRAM after this many minutes without a voice note (0 keeps
+    # it loaded). It reloads on the next one, which costs that voice note the
+    # load time. whisper_preload loads it at boot, which pins it from the start.
+    whisper_idle_unload_minutes: 30
+    whisper_preload: false
 
   # Reading inbound photos. The serving model is multimodal, so this needs no
   # second model — only --mmproj on the llama service. A described photo becomes
@@ -770,6 +785,11 @@ rag:
   always_on: true  # Retrieve context for every message, not just detected questions
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
+  # null lets sentence-transformers choose (CUDA when present, ~2.2 GB on the
+  # serving card for as long as the app runs). "cpu" frees that for the broker
+  # at the cost of slower encoding; see reports/benchmarks/runtime_* for the
+  # measured query and ingest times before changing it.
+  embedding_device: null
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 10

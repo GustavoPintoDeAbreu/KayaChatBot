@@ -220,6 +220,7 @@ class Ingester:
         rag = config.get("rag", {}) or {}
         self.db_path = rag.get("db_path", "./data/rag_db")
         self.embedding_model = rag.get("embedding_model", "BAAI/bge-m3")
+        self.embedding_device = rag.get("embedding_device") or None
         self.log = MessageLog(
             (config.get("whatsapp", {}) or {}).get("message_log_dir", "data/live_messages")
         )
@@ -253,7 +254,8 @@ class Ingester:
             from sentence_transformers import SentenceTransformer
 
             logger.info("loading a private embedder (%s)", self.embedding_model)
-            self._encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+            self._encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True,
+                                                device=self.embedding_device)
         return self._encoder
 
     @property
