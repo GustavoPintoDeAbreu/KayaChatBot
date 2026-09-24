@@ -69,7 +69,12 @@ band). RAG supplies the group facts; a capable base supplies the voice. Treat "w
 must fine-tune" as a claim needing evidence, not a given. Full results:
 `reports/benchmarks/bakeoff_20260808T013135Z.json`.
 
-**Privacy invariant**: No group data leaves the box. Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles).
+**Privacy invariant**: No group data leaves the user's own hardware. Since
+2026-09-24 that is two machines on one LAN: the GPU PC, and the Raspberry Pi that
+receives WhatsApp and journals every event (and its media) for **7 days** while
+the PC may be off (`deploy/pi/README.md`). Nothing on the Pi talks to a cloud
+service except the Cloudflare tunnel, which carries the landing page and `/app`.
+Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles).
 
 ---
 
@@ -144,6 +149,10 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
+scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
+sudo deploy/power/install.sh    # the PC's scheduled shutdown; `python3 -m src.gateway.schedule is-on` for the schedule
+pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
+~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
 scripts/app_down.sh dev|prod    # stop and free the GPU
 scripts/app_status.sh           # running containers + GPU usage
@@ -215,6 +224,57 @@ this path**, not defence in depth — there is no `where` clause in front of it.
 Every failure returns the semantic results unchanged.
 
 **Follow-up suggestions (web UI only).** After each answer, `src/chat/suggestions.py` prompts the already-loaded local model a second time for 2-3 follow-up questions, shown as clickable chips in the Gradio UI (`web_app.py`). Controlled by `chat.suggestions` in `config.yaml`; degrades to no chips on any failure.
+
+### Always on, and on demand (2026-09-24)
+
+The PC stopped being always on: it runs 07:00-23:00, to 02:00 after Friday and
+Saturday nights (`config.yaml` → `power`, the one source for the PC's shutdown
+timer, the Pi's Wake-on-LAN timer and the offline reply). Two things follow.
+
+**WhatsApp enters through the Pi** (`src/gateway/`, `deploy/pi/`). WAHA and the
+Cloudflare tunnel run there; the gateway journals every event in SQLite, downloads
+media at once (WAHA deletes it after 180 s), and forwards events to the PC's
+`POST /whatsapp/relay` strictly in order, retrying until acked. While the PC is
+off it buffers, and a message addressed to the bot gets one fixed line per chat
+per outage, *"Estou desligado agora. Volto às 07:00 e respondo-te nessa altura."*
+On return the backlog replays, so the log, the session window and ChromaDB read as
+if the bot had listened all night. Four things make that true and are easy to
+undo by accident:
+
+- **An ack means durable.** `WhatsAppAdapter.handle_event` is split into
+  `ingest_event` (parse, media, log, session, reply gate: everything that must be
+  on disk) and `complete` (generation and delivery). The relay acks after the
+  first and runs the second on a one-worker executor, so replies keep their order
+  and a slow reply never delays logging. `handle_event` is still the pair, so
+  mock mode and the simulator are unchanged.
+- **Replay is not a new conversation.** `ignore_before_ts` still stops the bot
+  answering a backlog, except for events the gateway flagged `deferred_reply`:
+  addressed to the bot, not WAHA's own reconnect backlog, delivered late, and the
+  newest from that sender in that chat. Those are answered, quoting the original,
+  while younger than `whatsapp.deferred_reply.max_age_hours` (12). A message sent
+  during a deploy restart used to be lost; it is now answered.
+- **Ingest waits for the backlog** (`relay.BacklogTracker`). The per-scope
+  watermark is a timestamp, so embedding newer messages before an older backlog
+  had been appended would strand the backlog below it forever.
+- **Addressing is one function.** `whatsapp_adapter.is_addressed` decides both
+  whether the PC answers and whether the Pi sends the offline line. The gateway
+  imports it, which is why `whatsapp_adapter` must stay free of heavy imports at
+  module level: `tests/gateway/test_torch_free.py` fails the moment torch,
+  sentence-transformers or chromadb is pulled in.
+
+**Every LLM goes through the broker** (`~/llm-broker`, llama-swap on the same
+llama.cpp build prod ran). `KAYA_LLAMA_URL=http://llm-broker:8080/upstream/kaya`
+makes the backend, vision and documents load Kaya on demand with no other code
+change. Kaya has priority on GPU1 and **no idle timer**: it is evicted only when
+something borrows GPU1 (`qwen-impl-g1`, or `big` across both cards), which
+`llm-use-g1`/`llm-use-big` allow only after Kaya has been quiet for 15 min
+(`data/kaya_last_active`). `inference_backend.ensure_model_loaded` runs before
+every GPU turn, outside the GPU lock: it unloads those borrowers explicitly,
+because llama-swap waits for their in-flight requests before evicting and a long
+agent turn would otherwise hold a WhatsApp reply for minutes. Whisper is loaded
+lazily and freed after `chat.audio.whisper_idle_unload_minutes`;
+`rag.embedding_device` picks where bge-m3 lives. The measurements behind those
+two settings are in `reports/benchmarks/runtime_*.md`.
 
 ### GPU topology (2× RTX 3090, no NVLink)
 
