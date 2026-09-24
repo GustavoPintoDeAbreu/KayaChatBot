@@ -1179,3 +1179,21 @@ model_profiles:
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
       max_steps: 450
+
+# ── PC power schedule ──────────────────────────────────────────────────────────
+# One source of truth for three consumers: the PC's shutdown timer
+# (deploy/power), the Pi's Wake-on-LAN timer, and the gateway's offline reply
+# ("volto às 07:00"). Generate the systemd OnCalendar lines with
+# `python -m src.gateway.schedule oncalendar-shutdown`, never by hand.
+power:
+  timezone: "Europe/Lisbon"
+  wake_time: "07:00"
+  wol_lead_minutes: 5
+  shutdown:
+    sun: "23:00"
+    mon: "23:00"
+    tue: "23:00"
+    wed: "23:00"
+    thu: "23:00"
+    fri: "02:00"
+    sat: "02:00"
