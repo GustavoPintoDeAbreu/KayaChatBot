@@ -32,6 +32,7 @@ services:
       # firewalled to the PC. The public listener (8080) has no host port at all;
       # only cloudflared reaches it, over this compose network.
       - "${PI_LAN_IP}:8088:8088"
+      - "127.0.0.1:8088:8088"
 
   waha:
     image: devlikeapro/waha:noweb-arm-2026.8.2
