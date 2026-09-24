@@ -611,6 +611,14 @@ whatsapp:
   # (whatsapp_adapter), and `exclude_from` moves earlier, so retrieval stops
   # re-injecting chunks that are now held verbatim.
   history_turns: 60
+  # The Pi gateway (src/gateway) journals every event and forwards it here, in
+  # order, through POST /whatsapp/relay (token: env KAYA_RELAY_TOKEN).
+  relay:
+    state_file: "data/relay_state.json"
+  # A message the gateway flagged as addressed to the bot while this PC was off is
+  # answered on return, quoting the original, if it is younger than this.
+  deferred_reply:
+    max_age_hours: 12
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"
   prefs_dir: "data/whatsapp_prefs"

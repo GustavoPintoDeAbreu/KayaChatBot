@@ -14,10 +14,12 @@ captured and readable at ``GET /whatsapp/outbox``. This is what
     KAYA_WHATSAPP_MOCK=1 kaya_chatbot_env/bin/python -m src.chat.whatsapp_server
 """
 
+import asyncio
 import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -31,7 +33,8 @@ from starlette.concurrency import run_in_threadpool
 from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
 from src.chat.gpu_lock import GpuBusyError, gpu_section
-from src.chat.whatsapp_adapter import WhatsAppAdapter
+from src.chat.whatsapp_adapter import PendingReply, WhatsAppAdapter
+from src.chat.relay import BacklogTracker, RelayState, parse_envelope
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
 from src.chat import feedback
@@ -520,6 +523,9 @@ def _start_ingest_scheduler() -> None:
     Runs in a daemon thread, never at message time: embedding competes with
     answering for the GPU, and a reply must not wait on it. Ingest is idempotent
     (chunk ids derive from message ids), so a crash mid-run is safe to repeat.
+    Each pass waits while the Pi gateway is still replaying a backlog: ingest's
+    timestamp watermark would strand older messages appended after newer ones
+    had already been embedded.
     """
     icfg = (_wcfg.get("ingest") or {})
     if not icfg.get("on_boot", True) and not icfg.get("interval_minutes", 0):
@@ -527,8 +533,13 @@ def _start_ingest_scheduler() -> None:
 
     from src.data.ingest import run_ingest
 
+    def _wait_for_backlog() -> None:
+        while _backlog.draining():
+            time.sleep(30)
+
     def _loop() -> None:
         if icfg.get("on_boot", True):
+            _wait_for_backlog()
             try:
                 run_ingest(config)
             except Exception as exc:  # noqa: BLE001 — ingestion must never take the bot down
@@ -538,6 +549,7 @@ def _start_ingest_scheduler() -> None:
             return
         while True:
             time.sleep(interval * 60)
+            _wait_for_backlog()
             try:
                 run_ingest(config)
             except Exception as exc:  # noqa: BLE001
@@ -548,6 +560,38 @@ def _start_ingest_scheduler() -> None:
         f"✓ Ingestion scheduled (boot={icfg.get('on_boot', True)}, "
         f"every {icfg.get('interval_minutes', 0)} min)"
     )
+
+
+# The Pi gateway (src/gateway) journals every WhatsApp event and forwards it here
+# in order, retrying until acked. An ack means the event is on disk; the answer is
+# generated afterwards, on one worker, so replies keep their order too.
+RELAY_TOKEN = os.environ.get("KAYA_RELAY_TOKEN", "")
+_relay_state = RelayState(str(_wcfg.get("relay", {}).get("state_file", "data/relay_state.json")))
+_backlog = BacklogTracker()
+_relay_lock = asyncio.Lock()
+_reply_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kaya-reply")
+_pending_replies = 0
+_pending_lock = threading.Lock()
+
+
+def _complete_pending(pending: PendingReply, t0: float) -> None:
+    global _pending_replies
+    try:
+        _log_interaction_metrics(adapter.complete(pending), t0)
+    except GpuBusyError:
+        print("⚠️  GPU busy — dropped a relayed WhatsApp reply rather than queueing it.")
+    except Exception as exc:  # noqa: BLE001 — never crash the reply worker
+        print(f"⚠️  WhatsApp relay reply error: {exc}")
+    finally:
+        with _pending_lock:
+            _pending_replies -= 1
+
+
+def _check_relay_token(token: str) -> None:
+    if not RELAY_TOKEN:
+        raise HTTPException(status_code=503, detail="relay disabled (KAYA_RELAY_TOKEN unset)")
+    if token != RELAY_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid relay token")
 
 
 if not MOCK_MODE:
@@ -582,6 +626,57 @@ async def webhook(
         return {"handled": result is not None, **(result or {})}
     background_tasks.add_task(_process, event)
     return {"handled": True}
+
+
+@app.post("/whatsapp/relay")
+async def relay(request: Request, x_relay_token: str = Header(default="")):
+    """One journaled event from the Pi gateway. Acked only once it is durable."""
+    global _pending_replies
+    _check_relay_token(x_relay_token)
+    try:
+        envelope = parse_envelope(await request.json())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with _relay_lock:
+        _backlog.update(envelope.backlog_remaining)
+        if _relay_state.is_duplicate(envelope.journal_id, envelope.seq):
+            return {"ack": envelope.seq, "duplicate": True}
+        t0 = time.perf_counter()
+        event = envelope.event
+        if event.get("event") in _REACTION_EVENTS:
+            _log_reaction_feedback(await run_in_threadpool(adapter.handle_reaction, event))
+            _relay_state.mark_applied(envelope.journal_id, envelope.seq)
+            return {"ack": envelope.seq}
+        try:
+            pending = await run_in_threadpool(adapter.ingest_event, event,
+                                              envelope.deferred_reply)
+        except Exception:
+            # The gateway retries an unacked event; without this the retry would
+            # be dropped as a duplicate delivery of a message never logged.
+            adapter._processed_ids.pop(str((event.get("payload") or {}).get("id") or ""), None)
+            raise
+        _relay_state.mark_applied(envelope.journal_id, envelope.seq)
+    if isinstance(pending, PendingReply):
+        if MOCK_MODE:
+            result = await run_in_threadpool(adapter.complete, pending)
+            _log_interaction_metrics(result, t0)
+            return {"ack": envelope.seq, "handled": result is not None, **(result or {})}
+        with _pending_lock:
+            _pending_replies += 1
+        _reply_executor.submit(_complete_pending, pending, t0)
+    elif pending is not None:
+        _log_interaction_metrics(pending, t0)
+    return {"ack": envelope.seq}
+
+
+@app.get("/whatsapp/relay/status")
+def relay_status(x_relay_token: str = Header(default="")):
+    """What the gateway and the shutdown script need: position, queue, backlog."""
+    _check_relay_token(x_relay_token)
+    return {"journal_id": _relay_state.journal_id,
+            "last_applied_seq": _relay_state.last_applied_seq,
+            "pending_replies": _pending_replies,
+            "draining": _backlog.draining()}
 
 
 def _web_credentials() -> Optional[Tuple[str, str]]:
