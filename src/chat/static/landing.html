@@ -195,6 +195,17 @@
   .login:hover{opacity:.85}
   .login:focus-visible{outline:2px solid var(--teal); outline-offset:2px}
 
+  /* Served by the Pi, which stays up when the PC that runs the bot is off. The
+     badge only appears when /status says so; served by the PC itself there is
+     no /status and the header looks exactly as it always did. */
+  .pc-status{
+    align-self:center; font-family:var(--mono); font-size:.78rem; color:var(--amber);
+    background:var(--amber-soft); border-radius:8px; padding:.36rem .7rem;
+  }
+  .pc-status[hidden]{display:none}
+  .pc-status + .login{margin-left:.6rem}
+  .login.is-off{opacity:.45; pointer-events:none; cursor:not-allowed}
+
   @media (prefers-reduced-motion: reduce){ .seg button{transition:none} .login{transition:none} }
 /* the message-path figure */
   .figure{margin:1.6rem 0}
@@ -221,6 +232,7 @@
     <button type="button" data-set="lang" data-value="en" aria-pressed="true">EN</button>
     <button type="button" data-set="lang" data-value="pt" aria-pressed="false">PT</button>
   </div>
+  <span class="pc-status" role="status" hidden></span>
   <a class="login" href="/app"><span class="doc-inline" data-lang="en">Log in</span><span class="doc-inline" data-lang="pt">Entrar</span> &rarr;</a>
 </div>
 
@@ -1572,6 +1584,28 @@ inventa experiências partilhadas. Quando não sabe alguma coisa, é suposto diz
   });
 
   apply();
+
+  var badge = document.querySelector('.pc-status');
+  var login = document.querySelector('.login');
+  function showOffline(status) {
+    var back = status.scheduled_on === false && status.next_wake_hhmm;
+    badge.innerHTML =
+      '<span class="doc-inline" data-lang="en">' +
+      (back ? 'Bot asleep until ' + status.next_wake_hhmm : 'Bot restarting, back soon') +
+      '</span><span class="doc-inline" data-lang="pt">' +
+      (back ? 'Bot a dormir até às ' + status.next_wake_hhmm : 'Bot a reiniciar, volta já') +
+      '</span>';
+    badge.hidden = false;
+    login.classList.add('is-off');
+    login.setAttribute('aria-disabled', 'true');
+    login.setAttribute('tabindex', '-1');
+  }
+  if (badge && login && window.fetch) {
+    fetch('/status', { cache: 'no-store' })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (status) { if (status && status.pc_online === false) showOffline(status); })
+      .catch(function () {});
+  }
 })();
 </script>
 

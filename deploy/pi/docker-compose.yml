@@ -1,0 +1,68 @@
+# The always-on front door, on the Raspberry Pi. See README.md.
+#
+#   gateway      landing page + /status (public, via the tunnel), WAHA webhook,
+#                journal, media cache, forwarder to the PC (LAN)
+#   waha         WhatsApp (NOWEB). Profile `waha`: started only once its session
+#                has been moved here; never alongside the PC's.
+#   cloudflared  the public tunnel. Profile `tunnel`: started at cutover.
+#
+# Enable the profiles through COMPOSE_PROFILES in .env (e.g. waha,tunnel).
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/pi/Dockerfile
+    image: kaya-gateway:latest
+    container_name: kaya-gateway
+    restart: unless-stopped
+    environment:
+      - GATEWAY_DATA_DIR=/data
+      - GATEWAY_WHITELIST=/config/whatsapp_whitelist.json
+      - GATEWAY_MEDIA_BASE_URL=http://${PI_LAN_IP:?set PI_LAN_IP}:8088
+      - KAYA_PC_URL=${KAYA_PC_URL:-http://192.168.1.149:7860}
+      - KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:?set KAYA_RELAY_TOKEN}
+      - KAYA_WAHA_URL=http://waha:3000
+      - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
+      - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+    volumes:
+      - ./data/gateway:/data
+      - ./data/runtime:/config:ro
+    ports:
+      # Internal listener (webhook, media for the PC, going-down): LAN only, and
+      # firewalled to the PC. The public listener (8080) has no host port at all;
+      # only cloudflared reaches it, over this compose network.
+      - "${PI_LAN_IP}:8088:8088"
+
+  waha:
+    image: devlikeapro/waha:noweb-arm-2026.8.2
+    container_name: kaya-waha
+    profiles: [waha]
+    restart: unless-stopped
+    ports:
+      # The PC sends replies through this. LAN only, firewalled to the PC.
+      - "${PI_LAN_IP}:3000:3000"
+    volumes:
+      - ./data/waha:/app/.sessions
+    environment:
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WHATSAPP_START_SESSION=default
+      # Registered ONCE, here. The PC's WAHA also had it in the session config,
+      # which is why every event used to arrive twice; the journal's dedup key
+      # absorbs that either way.
+      - WHATSAPP_HOOK_URL=http://gateway:8088/waha/webhook
+      - WHATSAPP_HOOK_EVENTS=message,message.reaction
+      - WHATSAPP_HOOK_CUSTOM_HEADERS=X-Webhook-Token:${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+      - WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
+      - WAHA_DASHBOARD_USERNAME=${KAYA_WEB_USER:-admin}
+      - WAHA_DASHBOARD_PASSWORD=${KAYA_WEB_PASS:-admin}
+      - WHATSAPP_SWAGGER_USERNAME=${KAYA_WEB_USER:-admin}
+      - WHATSAPP_SWAGGER_PASSWORD=${KAYA_WEB_PASS:-admin}
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: kaya-cloudflared
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
