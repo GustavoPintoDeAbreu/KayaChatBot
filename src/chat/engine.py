@@ -217,10 +217,10 @@ def _load_model(config: Dict[str, Any]):
     # sidecar; this process only needs the tokenizer (for chat templating).
     from src.chat.inference_backend import resolve_backend
 
-    if resolve_backend(config) == "gguf":
+    if resolve_backend(config) in ("gguf", "ollama"):
         from transformers import AutoTokenizer
 
-        print(f"Backend=gguf — loading tokenizer only from {model_dir} (generation via llama.cpp) …")
+        print(f"Backend={resolve_backend(config)} — loading tokenizer only from {model_dir} …")
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         print("✓ Tokenizer loaded")
         return None, tokenizer

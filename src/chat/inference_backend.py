@@ -249,6 +249,73 @@ class LlamaCppBackend(InferenceBackend):
                     break
 
 
+class OllamaBackend(InferenceBackend):
+    """Generation via Ollama's ``/api/generate`` in raw mode.
+
+    A benchmark arm (scripts/bench_runtime.py), not a serving path. Raw mode sends
+    the same HF-templated prompt ``LlamaCppBackend`` sends, so the comparison is
+    the runtime and not two different chat templates. Every sampling option and
+    the context size are passed explicitly: Ollama's defaults (a 4096 context
+    among them) are not llama-server's.
+    """
+
+    def __init__(self, tokenizer, server_url: str, model: str, timeout: float = 180.0,
+                 num_ctx: int = 32768, keep_alive: str = "30m"):
+        self.tokenizer = tokenizer
+        self.server_url = server_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+        self.num_ctx = num_ctx
+        self.keep_alive = keep_alive
+
+    def _payload(self, messages, max_new_tokens, sampling, stream):
+        return {
+            "model": self.model,
+            "prompt": _templated_prompt(self.tokenizer, messages, strip_bos=True),
+            "raw": True,
+            "stream": stream,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "num_ctx": self.num_ctx,
+                "num_predict": max_new_tokens,
+                "temperature": sampling.get("temperature", 1.0),
+                "top_p": sampling.get("top_p", 0.95),
+                "top_k": sampling.get("top_k", 64),
+                "repeat_penalty": sampling.get("repetition_penalty", 1.0),
+            },
+        }
+
+    def generate(self, messages, *, max_new_tokens, sampling):
+        resp = requests.post(
+            f"{self.server_url}/api/generate",
+            json=self._payload(messages, max_new_tokens, sampling, False),
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "")
+
+    def generate_stream(self, messages, *, max_new_tokens, sampling):
+        with requests.post(
+            f"{self.server_url}/api/generate",
+            json=self._payload(messages, max_new_tokens, sampling, True),
+            timeout=self.timeout,
+            stream=True,
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                chunk = obj.get("response", "")
+                if chunk:
+                    yield chunk
+                if obj.get("done"):
+                    break
+
+
 def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
     """Pick the backend (``KAYA_INFERENCE_BACKEND`` env or ``inference.backend``)."""
     backend = resolve_backend(config)
@@ -257,5 +324,12 @@ def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
         url = resolve_llama_url(config)
         print(f"✓ Inference backend: gguf (llama.cpp @ {url})")
         return LlamaCppBackend(tokenizer, url, timeout=gcfg.get("timeout", 180.0))
+    if backend == "ollama":
+        ocfg = config.get("inference", {}).get("ollama", {}) or {}
+        url = os.environ.get("KAYA_OLLAMA_URL") or ocfg.get("server_url") or "http://127.0.0.1:11434"
+        name = os.environ.get("KAYA_OLLAMA_MODEL") or ocfg.get("model") or "gemma4:12b-it-q8_0"
+        print(f"✓ Inference backend: ollama ({name} @ {url})")
+        return OllamaBackend(tokenizer, url, name, timeout=ocfg.get("timeout", 180.0),
+                             num_ctx=int(ocfg.get("num_ctx", 32768)))
     print("✓ Inference backend: hf (in-process model)")
     return HFBackend(model, tokenizer)
