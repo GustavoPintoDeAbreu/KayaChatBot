@@ -231,6 +231,7 @@ class Gateway:
             "next_wake": next_wake.isoformat(),
             "next_wake_hhmm": next_wake.strftime("%H:%M"),
             "scheduled_on": self.schedule.is_scheduled_on(now),
+            "outage": self.responder.outage(),
             "journal": self.journal.stats(),
         }
 
@@ -278,6 +279,13 @@ class Gateway:
             if not settings.relay_token or x_relay_token != settings.relay_token:
                 raise HTTPException(status_code=401, detail="invalid relay token")
             self.monitor.announce_going_down()
+            return {"ok": True}
+
+        @app.post("/pc/degraded")
+        def degraded(x_relay_token: str = Header(default="")):
+            if not settings.relay_token or x_relay_token != settings.relay_token:
+                raise HTTPException(status_code=401, detail="invalid relay token")
+            self.monitor.mark_degraded()
             return {"ok": True}
 
         @app.get("/status")

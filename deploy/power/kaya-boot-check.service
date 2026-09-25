@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the GPU driver and restart GPU containers Docker gave up on
+After=snap.docker.dockerd.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kaya-boot-check.sh
+
+[Install]
+WantedBy=multi-user.target
