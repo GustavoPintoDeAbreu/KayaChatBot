@@ -314,7 +314,9 @@ class OllamaBackend(InferenceBackend):
         self.model = model
         self.timeout = timeout
         self.num_ctx = num_ctx
-        self.keep_alive = keep_alive
+        # Ollama takes a number of seconds or a duration ("30m"); the string "-1"
+        # is a 400, so a bare number from config is sent as a number.
+        self.keep_alive = int(keep_alive) if str(keep_alive).lstrip("-").isdigit() else keep_alive
 
     def _payload(self, messages, max_new_tokens, sampling, stream):
         return {

@@ -108,3 +108,10 @@ def test_one_chat_payload_serves_both_runtimes(monkeypatch):
     assert resolve_server_url({}) == "http://ollama:11434"
     monkeypatch.setenv("KAYA_INFERENCE_BACKEND", "gguf")
     assert resolve_server_url({}) == "http://llama:8080"
+
+
+def test_ollama_keep_alive_is_sent_as_a_number():
+    from src.chat.inference_backend import OllamaBackend
+
+    assert OllamaBackend(None, "http://o", "m", keep_alive="-1").keep_alive == -1
+    assert OllamaBackend(None, "http://o", "m", keep_alive="30m").keep_alive == "30m"
