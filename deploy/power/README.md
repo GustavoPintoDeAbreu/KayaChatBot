@@ -48,12 +48,19 @@ Every decision is in the journal: `journalctl -u kaya-shutdown`. Dry run:
   run `pi5 wake-pc`.
 - **Backup:** the RTC alarm set at shutdown.
 
-Both depend on **BIOS settings that software cannot change** (MSI MS-7C91):
+Both depend on **BIOS settings that software cannot change**. The board is a
+**Gigabyte X570 AORUS PRO** (BIOS F39; `cat /sys/class/dmi/id/board_name`; the
+hostname's "MS-7C91" is not the board). Under **Settings → Platform Power**:
 
-- **ErP Ready: Disabled.** With it enabled the board cuts standby power, and
-  neither wake source works.
-- **Resume By PCI-E Device: Enabled** (Wake-on-LAN).
-- **Resume By RTC Alarm: Enabled** (or "controlled by OS").
+| Setting | Value | Why |
+|---|---|---|
+| **ErP** | **Disabled** | When enabled, it disables Resume by Alarm, Wake on LAN and every other wake source (manual, Platform Power) |
+| **Wake on LAN** | **Enabled** | Default. The onboard NIC is an Intel I211 (`igb`), which supports magic-packet wake |
+| **Resume by Alarm** | **Enabled**, any time | `rtcwake` rewrites the alarm at each shutdown; some Gigabyte boards ignore an OS-set alarm while this is off |
+| AC BACK | Memory (optional) | After a power cut, the PC returns to the state it was in |
+
+The RTC alarm does not survive removing AC power (manual), so it is only the
+backup. The Pi's magic packet is the primary wake.
 
 `install.sh` also makes Wake-on-LAN persistent in NetworkManager
 (`802-3-ethernet.wake-on-lan magic`).
