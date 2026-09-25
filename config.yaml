@@ -250,8 +250,21 @@ inference:
     # without disturbing what prod resolves.
     server_url: "http://llama:8080"
     timeout: 180
-  # The shared GPU broker (~/llm-broker). Only used when the llama URL is a
-  # broker upstream URL (…/upstream/<model>), e.g. KAYA_LLAMA_URL on kaya-prod.
+  # Ollama (backend: ollama). The serving runtime since 2026-09-25: llama.cpp
+  # rebuilds Gemma 4's sliding-window cache on every cache hit (~1.2 s, twice per
+  # turn) and Ollama does not, so a turn went 9.5 s -> 4.6 s at equal quality
+  # (reports/benchmarks/runtime_20260924T232255Z.md). The LIBRARY q8_0 model, not
+  # our Q6_K file: an imported GGUF with a separate mmproj loses vision.
+  # KAYA_OLLAMA_URL / KAYA_OLLAMA_MODEL override these.
+  ollama:
+    server_url: "http://llm-broker:8080/upstream/kaya"
+    model: "gemma4:12b-it-q8_0"
+    num_ctx: 32768
+    # -1: never unload on Ollama's own timer; the broker decides when GPU1 is lent.
+    keep_alive: "-1"
+    timeout: 180
+  # The shared GPU broker (~/llm-broker). Only used when the serving URL is a
+  # broker upstream URL (…/upstream/<model>), e.g. KAYA_OLLAMA_URL on kaya-prod.
   broker:
     # Models that borrow GPU1 while Kaya is idle. Unloaded explicitly before
     # Kaya's GPU work, because llama-swap waits for their in-flight requests.

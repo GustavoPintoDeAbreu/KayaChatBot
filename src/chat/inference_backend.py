@@ -63,6 +63,43 @@ def resolve_llama_url(config: Dict[str, Any]) -> str:
     )
 
 
+def resolve_ollama_url(config: Dict[str, Any]) -> str:
+    """Ollama's URL: ``KAYA_OLLAMA_URL`` env wins, else config, else localhost."""
+    return (os.environ.get("KAYA_OLLAMA_URL")
+            or (config.get("inference", {}).get("ollama", {}) or {}).get("server_url")
+            or "http://127.0.0.1:11434")
+
+
+def resolve_ollama_model(config: Dict[str, Any]) -> str:
+    """The Ollama model name: ``KAYA_OLLAMA_MODEL`` env wins, else config."""
+    return (os.environ.get("KAYA_OLLAMA_MODEL")
+            or (config.get("inference", {}).get("ollama", {}) or {}).get("model")
+            or "gemma4:12b-it-q8_0")
+
+
+def resolve_server_url(config: Dict[str, Any]) -> str:
+    """Where the active runtime answers, for the OpenAI-style calls (vision, synopsis)."""
+    if resolve_backend(config) == "ollama":
+        return resolve_ollama_url(config)
+    return resolve_llama_url(config)
+
+
+def openai_chat_fields(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Fields every ``/v1/chat/completions`` call adds so either runtime answers.
+
+    Gemma 4 thinks by default, and a thinking reply spends the whole token budget
+    in a reasoning channel and comes back with empty content. llama.cpp is told
+    through the chat template (``enable_thinking``), Ollama through
+    ``reasoning_effort``; each ignores the other's switch, which is what lets one
+    payload serve both. ``model`` is required by Ollama and ignored by llama.cpp.
+    """
+    return {
+        "model": resolve_ollama_model(config),
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
 def broker_target(url: str) -> Optional[Tuple[str, str]]:
     """``(broker_base, model)`` when ``url`` is a broker upstream URL, else None."""
     match = _BROKER_UPSTREAM.match(url or "")
@@ -89,10 +126,11 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
     except OSError as exc:
         logger.warning("could not record activity in %s: %s", activity_file, exc)
 
-    target = broker_target(resolve_llama_url(config))
+    target = broker_target(resolve_server_url(config))
     if target is None:
         return
     base, model = target
+    ollama = resolve_backend(config) == "ollama"
     try:
         running = requests.get(f"{base}/running", timeout=5).json().get("running", []) or []
         loaded = {entry.get("model") for entry in running if isinstance(entry, dict)}
@@ -100,8 +138,16 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
             if borrower in loaded:
                 logger.info("unloading %s to take GPU1 back", borrower)
                 requests.post(f"{base}/api/models/unload/{borrower}", timeout=60)
-        requests.get(f"{base}/upstream/{model}/health",
-                     timeout=float(bcfg.get("load_timeout", 300))).raise_for_status()
+        load_timeout = float(bcfg.get("load_timeout", 300))
+        if ollama:
+            # A generate with no prompt loads the model and returns; /api/version
+            # would only start the server process, leaving the load to the reply.
+            requests.post(f"{base}/upstream/{model}/api/generate",
+                          json={"model": resolve_ollama_model(config)},
+                          timeout=load_timeout).raise_for_status()
+        else:
+            requests.get(f"{base}/upstream/{model}/health",
+                         timeout=load_timeout).raise_for_status()
     except (requests.RequestException, ValueError) as exc:
         logger.warning("broker preparation failed (%s); generating anyway", exc)
 
@@ -252,15 +298,17 @@ class LlamaCppBackend(InferenceBackend):
 class OllamaBackend(InferenceBackend):
     """Generation via Ollama's ``/api/generate`` in raw mode.
 
-    A benchmark arm (scripts/bench_runtime.py), not a serving path. Raw mode sends
-    the same HF-templated prompt ``LlamaCppBackend`` sends, so the comparison is
-    the runtime and not two different chat templates. Every sampling option and
-    the context size are passed explicitly: Ollama's defaults (a 4096 context
-    among them) are not llama-server's.
+    The serving path since 2026-09-25 (reports/benchmarks/runtime_20260924T232255Z.md):
+    llama.cpp pays ~1.2 s to rebuild Gemma 4's sliding-window cache on every cache
+    hit, twice per turn, and Ollama does not, so a turn went from 9.5 s to 4.6 s at
+    equal quality. Raw mode sends the same HF-templated prompt ``LlamaCppBackend``
+    sends, so the runtime is the only thing that changed. Every sampling option and
+    the context size are passed explicitly: Ollama's defaults (a 4096 context among
+    them) are not llama-server's. ``keep_alive`` -1 leaves unloading to the broker.
     """
 
     def __init__(self, tokenizer, server_url: str, model: str, timeout: float = 180.0,
-                 num_ctx: int = 32768, keep_alive: str = "30m"):
+                 num_ctx: int = 32768, keep_alive: str = "-1"):
         self.tokenizer = tokenizer
         self.server_url = server_url.rstrip("/")
         self.model = model
@@ -326,10 +374,10 @@ def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
         return LlamaCppBackend(tokenizer, url, timeout=gcfg.get("timeout", 180.0))
     if backend == "ollama":
         ocfg = config.get("inference", {}).get("ollama", {}) or {}
-        url = os.environ.get("KAYA_OLLAMA_URL") or ocfg.get("server_url") or "http://127.0.0.1:11434"
-        name = os.environ.get("KAYA_OLLAMA_MODEL") or ocfg.get("model") or "gemma4:12b-it-q8_0"
+        url, name = resolve_ollama_url(config), resolve_ollama_model(config)
         print(f"✓ Inference backend: ollama ({name} @ {url})")
         return OllamaBackend(tokenizer, url, name, timeout=ocfg.get("timeout", 180.0),
-                             num_ctx=int(ocfg.get("num_ctx", 32768)))
+                             num_ctx=int(ocfg.get("num_ctx", 32768)),
+                             keep_alive=str(ocfg.get("keep_alive", "-1")))
     print("✓ Inference backend: hf (in-process model)")
     return HFBackend(model, tokenizer)

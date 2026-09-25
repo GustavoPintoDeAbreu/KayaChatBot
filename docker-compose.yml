@@ -208,12 +208,15 @@ services:
       - KAYA_WEB_PORT=7860
       - KAYA_ENV=prod
       - KAYA_VERSION=${KAYA_VERSION:-unknown}
-      # Prod serves generation from the llama.cpp gguf server (the `llama`
-      # service). Overrides config.yaml's hf default. Set to hf to roll back.
+      # gguf: the llama.cpp `llama` service, or the broker via KAYA_PROD_LLAMA_URL.
+      # ollama: Ollama inside the broker (the default since 2026-09-25, set in .env).
       - KAYA_INFERENCE_BACKEND=${KAYA_INFERENCE_BACKEND:-gguf}
       # Empty falls through to config.yaml (http://llama:8080). Behind the GPU
       # broker it is http://llm-broker:8080/upstream/kaya.
       - KAYA_LLAMA_URL=${KAYA_PROD_LLAMA_URL:-}
+      # With KAYA_INFERENCE_BACKEND=ollama: the broker's Ollama upstream
+      # (http://llm-broker:8080/upstream/kaya). Empty falls through to config.yaml.
+      - KAYA_OLLAMA_URL=${KAYA_PROD_OLLAMA_URL:-}
       # The local WAHA, or the Pi's (http://<pi>:3000) once the edge has moved.
       - KAYA_WAHA_URL=${KAYA_PROD_WAHA_URL:-http://waha:3000}
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}

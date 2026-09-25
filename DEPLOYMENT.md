@@ -93,8 +93,8 @@ loads through one broker instead of holding a GPU permanently.
    └────────────────────┼───────────────────────────────┼───────────────┘
                         ▼ POST /whatsapp/relay           ▼ /app (Gradio)
    ┌──────────── GPU PC (192.168.1.149, 07:00-23:00/02:00) ─────────────┐
-   │ kaya-prod :7860 ── KAYA_LLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
-   │   replies ──▶ WAHA on the Pi         ├─ kaya        GPU1, priority  │
+   │ kaya-prod :7860 ─ KAYA_OLLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
+   │   replies ──▶ WAHA on the Pi         ├─ kaya (Ollama) GPU1, priority│
    │                                      ├─ qwen-impl   GPU0            │
    │                                      ├─ qwen-impl-g1 GPU1 (Kaya idle)│
    │                                      └─ big         both (runs alone)│
@@ -114,7 +114,9 @@ and `app_up.sh`:
 | Variable | Old layout | New layout |
 |---|---|---|
 | `KAYA_EDGE` | `local` (WAHA + tunnel on the PC) | `pi` (the PC runs neither) |
-| `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | `http://llm-broker:8080/upstream/kaya` |
+| `KAYA_INFERENCE_BACKEND` | `gguf` | `ollama` (see CLAUDE.md, "Kaya runs on Ollama") |
+| `KAYA_PROD_OLLAMA_URL` | unused | `http://llm-broker:8080/upstream/kaya` |
+| `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused; rollback: `.../upstream/kaya-llamacpp` with backend `gguf` |
 | `KAYA_PROD_WAHA_URL` | empty (`http://waha:3000`) | `http://192.168.1.238:3000` |
 | `KAYA_RELAY_TOKEN` | unused | shared secret with the Pi gateway |
 
@@ -135,9 +137,10 @@ the gateway on the Pi's own compose network, and the relay is LAN-only.
 
 1. **Relay-capable prod.** Deploy the branch with `KAYA_EDGE=local` and a
    `KAYA_RELAY_TOKEN` in `~/kaya-prod/.env`. Nothing changes behaviourally.
-2. **Broker.** `cd ~/llm-broker && docker compose up -d`, set
-   `KAYA_PROD_LLAMA_URL`, redeploy (this removes `kaya-llama`), and verify a
-   reply with `scripts/run_conversation_probe.py` against prod's URL.
+2. **Broker.** `docker network create llm`, `cd ~/llm-broker && docker compose up -d`,
+   set `KAYA_INFERENCE_BACKEND=ollama` and `KAYA_PROD_OLLAMA_URL` in
+   `~/kaya-prod/.env`, redeploy (this removes `kaya-llama`), and send the bot a
+   message and a photo.
 3. **Pi gateway, alone.** `scripts/deploy_pi.sh --init-env` (profiles empty).
 4. **Tunnel on LAN IPs first.** Change every existing ingress rule to
    `http://192.168.1.149:<port>`, which both connectors can reach. Then set

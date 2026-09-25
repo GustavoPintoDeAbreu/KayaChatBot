@@ -195,3 +195,4 @@ reports/landing/
 
 # The Pi gateway runtime state lives on the Pi, never in git.
 deploy/pi/data/
+data/kaya_last_active

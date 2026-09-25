@@ -21,9 +21,10 @@
 #                            pi: they run on the Raspberry Pi (deploy/pi), so this
 #                            script removes any local copy instead: a second WAHA on
 #                            the same session fights the Pi's for the login.
-#   KAYA_PROD_LLAMA_URL      empty: the local `llama` service serves the model.
-#                            …/upstream/kaya: the shared GPU broker (~/llm-broker)
-#                            does, and `kaya-llama` is removed to free GPU1.
+#   KAYA_INFERENCE_BACKEND   ollama (via KAYA_PROD_OLLAMA_URL) or gguf (via
+#                            KAYA_PROD_LLAMA_URL; empty = the local `llama` service).
+#                            A …/upstream/kaya URL means the shared GPU broker
+#                            (~/llm-broker) serves it, and `kaya-llama` is removed.
 set -euo pipefail
 
 REF="${1:-main}"
@@ -58,7 +59,10 @@ fi
 env_value() { sed -n "s/^$1=//p" .env | tail -1 | tr -d '"'"'"; }
 KAYA_EDGE="$(env_value KAYA_EDGE)"; KAYA_EDGE="${KAYA_EDGE:-local}"
 PROD_LLAMA_URL="$(env_value KAYA_PROD_LLAMA_URL)"
-echo "🧭 edge=$KAYA_EDGE, model=${PROD_LLAMA_URL:-local llama service}"
+PROD_OLLAMA_URL="$(env_value KAYA_PROD_OLLAMA_URL)"
+PROD_BACKEND="$(env_value KAYA_INFERENCE_BACKEND)"
+if [[ "$PROD_BACKEND" == "ollama" ]]; then MODEL_URL="$PROD_OLLAMA_URL"; else MODEL_URL="$PROD_LLAMA_URL"; fi
+echo "🧭 edge=$KAYA_EDGE, backend=${PROD_BACKEND:-gguf}, model=${MODEL_URL:-local llama service}"
 
 docker network inspect llm >/dev/null 2>&1 || docker network create llm >/dev/null
 
@@ -101,12 +105,12 @@ else
   docker compose --profile prod up -d --force-recreate kaya-prod
 fi
 
-if [[ "$PROD_LLAMA_URL" == */upstream/* ]]; then
+if [[ "$MODEL_URL" == */upstream/* ]]; then
   # The broker loads the model on demand; a resident kaya-llama would hold 13 GB
   # of GPU1 that the broker thinks is free.
   docker rm -f kaya-llama 2>/dev/null || true
   if curl -fsS --max-time 3 http://127.0.0.1:8200/health >/dev/null 2>&1; then
-    echo "🦙 model served by the GPU broker ($PROD_LLAMA_URL)"
+    echo "🦙 model served by the GPU broker ($MODEL_URL)"
   else
     echo "⚠️  the GPU broker is not answering on :8200 — start it: cd ~/llm-broker && docker compose up -d" >&2
   fi

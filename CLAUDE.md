@@ -262,10 +262,10 @@ undo by accident:
   module level: `tests/gateway/test_torch_free.py` fails the moment torch,
   sentence-transformers or chromadb is pulled in.
 
-**Every LLM goes through the broker** (`~/llm-broker`, llama-swap on the same
-llama.cpp build prod ran). `KAYA_LLAMA_URL=http://llm-broker:8080/upstream/kaya`
-makes the backend, vision and documents load Kaya on demand with no other code
-change. Kaya has priority on GPU1 and **no idle timer**: it is evicted only when
+**Every LLM goes through the broker** (`~/llm-broker`, llama-swap, with Ollama
+inside it for Kaya). `KAYA_INFERENCE_BACKEND=ollama` plus
+`KAYA_OLLAMA_URL=http://llm-broker:8080/upstream/kaya` makes the backend, vision
+and documents load Kaya on demand. Kaya has priority on GPU1 and **no idle timer**: it is evicted only when
 something borrows GPU1 (`qwen-impl-g1`, or `big` across both cards), which
 `llm-use-g1`/`llm-use-big` allow only after Kaya has been quiet for 15 min
 (`data/kaya_last_active`). `inference_backend.ensure_model_loaded` runs before
@@ -273,8 +273,36 @@ every GPU turn, outside the GPU lock: it unloads those borrowers explicitly,
 because llama-swap waits for their in-flight requests before evicting and a long
 agent turn would otherwise hold a WhatsApp reply for minutes. Whisper is loaded
 lazily and freed after `chat.audio.whisper_idle_unload_minutes`;
-`rag.embedding_device` picks where bge-m3 lives. The measurements behind those
-two settings are in `reports/benchmarks/runtime_*.md`.
+`rag.embedding_device` picks where bge-m3 lives, and it stays `null` (the GPU):
+a query encodes in 105 ms there and 881 ms on CPU, several times per turn.
+
+**Kaya runs on Ollama, not llama.cpp (2026-09-25).** The benchmark
+(`reports/benchmarks/runtime_20260924T232255Z.md`) started as "is the broker's
+overhead acceptable" and found something bigger. Gemma 4 uses sliding-window
+attention, and llama.cpp rebuilds that cache on **every** prompt-cache hit: a
+cached 3k-token prompt costs 1,234 ms to produce one token, even though
+`prompt_n` says one token was evaluated. It is the same in the newest build.
+Ollama answers the same request in 241 ms. A turn is two calls, so the
+conversation probe's median turn went **9.52 s → 4.64 s**, with golden 3.994 →
+4.042 (inside ±0.07), 0% refusals and 100% needle recall to 28k either way.
+`--swa-full` fixes llama.cpp too (27 ms), but needs 22.8 GB at `-c 32768` and
+cannot share GPU1 with the app. The broker adds nothing measurable when warm,
+and about 5.5 s on the first request after Kaya was evicted.
+
+Three things to know:
+
+- **Use the library `gemma4:12b-it-q8_0` model, not our Q6_K GGUF.** Imported
+  with its separate mmproj, the GGUF comes out text-only.
+- **Ollama's gemma4 thinks by default.** Every OpenAI-style call must send
+  `reasoning_effort: "none"`, or the thinking eats the token budget and
+  `content` comes back empty. `inference_backend.openai_chat_fields` sends that
+  and llama.cpp's `enable_thinking: False`; each runtime ignores the other's
+  switch. `OllamaBackend` uses raw `/api/generate` with the HF template, which
+  never triggers thinking, so the router and the reply see exactly the prompt
+  llama.cpp saw.
+- **Rollback is one line.** The broker keeps `kaya-llamacpp`.
+  `KAYA_INFERENCE_BACKEND=gguf` with
+  `KAYA_PROD_LLAMA_URL=http://llm-broker:8080/upstream/kaya-llamacpp` goes back.
 
 ### GPU topology (2× RTX 3090, no NVLink)
 
