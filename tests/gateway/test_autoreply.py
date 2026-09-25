@@ -1,270 +1,162 @@
-"""Tests for ``src.gateway.autoreply``."""
-from __future__ import annotations
-
+"""The fixed line the Pi sends when the bot cannot answer."""
 import datetime
 import sys
-import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.gateway.autoreply import FAULT, FAULT_TEXT, SCHEDULED, OfflineResponder, offline_text
 from src.gateway.journal import Journal
 from src.gateway.monitor import PcMonitor, PcState
-from src.gateway.schedule import PowerSchedule
-from src.gateway.autoreply import OfflineResponder, offline_text
+from src.gateway.schedule import PowerSchedule, schedule_sentence
+
+LISBON = ZoneInfo("Europe/Lisbon")
+POWER = {"timezone": "Europe/Lisbon", "wake_time": "07:00", "wol_lead_minutes": 5,
+         "shutdown": {"sun": "23:00", "mon": "23:00", "tue": "23:00", "wed": "23:00",
+                      "thu": "23:00", "fri": "02:00", "sat": "02:00"}}
+# Dashes as clause separators; a hyphen inside a word ("respondo-te") is Portuguese.
+DASHES = (" - ", "\u2013", "\u2014")
 
 
-# ── fixtures ─────────────────────────────────────────────────────────────
-
-_POWER_BLOCK = {
-    "timezone": "Europe/Lisbon",
-    "wake_time": "07:00",
-    "wol_lead_minutes": 5,
-    "shutdown": {
-        "sun": "23:00",
-        "mon": "23:00",
-        "tue": "23:00",
-        "wed": "23:00",
-        "thu": "23:00",
-        "fri": "02:00",
-        "sat": "02:00",
-    },
-}
+def _epoch(*args) -> float:
+    return datetime.datetime(*args, tzinfo=LISBON).timestamp()
 
 
-def _make_journal(tmp_path: Path) -> Journal:
-    return Journal(str(tmp_path / "journal.db"), str(tmp_path / "media"))
+# Wednesday 2026-09-23: 12:00 is scheduled on, 23:30 is scheduled off.
+DAYTIME = _epoch(2026, 9, 23, 12, 0)
+NIGHT = _epoch(2026, 9, 23, 23, 30)
 
 
-def _make_schedule():
-    return PowerSchedule.from_config(_POWER_BLOCK)
+class Clock:
+    def __init__(self, value: float):
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
 
 
-def _make_monitor(state: PcState = PcState.OFFLINE) -> PcMonitor:
-    monitor = PcMonitor("http://192.168.1.100:7860")
-    monitor._state = state
-    return monitor
-
-
-def _make_entry(
-    journal: Journal,
-    seq: int = 1,
-    chat_id: str = "1234@c.us",
-    sender_id: "351912345678@c.us" = "351912345678@c.us",
-    addressed: bool = True,
-    backlog: bool = False,
-    message_id: str = "msg001",
-    received_at: float = 1000.0,
-) -> int:
-    return journal.append(
-        {"from": sender_id, "body": "hello", "type": "chat"},
-        dedup_key=f"dedup-{seq}",
-        event_type="message",
-        chat_id=chat_id,
-        sender_id=sender_id,
-        message_id=message_id,
-        wa_ts=int(received_at),
-        received_at=received_at,
-        addressed=addressed,
-        backlog=backlog,
-    )
-
-
-# ── offline_text tests ──────────────────────────────────────────────────
-
-class TestOfflineText:
-    def test_same_day(self):
-        now = datetime.datetime(2026, 10, 3, 14, 0)
-        wake = datetime.datetime(2026, 10, 3, 7, 0)
-        text = offline_text(wake, now)
-        assert "Volto às 07:00" in text
-        assert "amanh" not in text
-        assert "dia" not in text
-
-    def test_next_day(self):
-        now = datetime.datetime(2026, 10, 3, 14, 0)
-        wake = datetime.datetime(2026, 10, 4, 7, 0)
-        text = offline_text(wake, now)
-        assert "amanh" in text
-        assert "07:00" in text
-
-    def test_later_date(self):
-        now = datetime.datetime(2026, 10, 3, 14, 0)
-        wake = datetime.datetime(2026, 10, 13, 7, 0)
-        text = offline_text(wake, now)
-        assert "dia 13/10" in text
-
-    def test_no_dashes_in_any_variant(self):
-        now = datetime.datetime(2026, 10, 3, 14, 0)
-        for day_offset in (0, 1, 10):
-            wake = datetime.datetime(2026, 10, 3 + day_offset, 7, 0)
-            text = offline_text(wake, now)
-            assert "–" not in text  # en-dash
-            assert "—" not in text  # em-dash
-
-
-# ── maybe_reply: no reply while reachable ───────────────────────────────
-
-class TestNoReplyWhileReachable:
-    def test_no_reply_online(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.ONLINE)
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
-        send.assert_not_called()
-
-    def test_no_reply_app_down(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.APP_DOWN)
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
-
-    def test_no_reply_offline_under_grace(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = time.time() - 30  # 30 s < 90 s grace
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor, grace_seconds=90.0)
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
-
-
-# ── maybe_reply: one reply when OFFLINE past grace ──────────────────────
-
-class TestReplyWhenOffline:
-    def test_sends_and_records(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        now_time = 2000.0
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = now_time - 100  # past grace
-        send = MagicMock()
+@pytest.fixture
+def rig(tmp_path):
+    def build(start: float):
+        clock = Clock(start)
+        monitor = PcMonitor("http://pc:7860", now=clock, probe=lambda: PcState.ONLINE)
+        monitor.observe(PcState.ONLINE)
+        journal = Journal(str(tmp_path / "j.sqlite3"), str(tmp_path / "media"))
+        sent = []
         responder = OfflineResponder(
-            journal, send, schedule, monitor,
-            grace_seconds=90.0,
-            now=lambda: now_time,
-        )
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is True
-        send.assert_called_once()
-        args = send.call_args
-        assert args[0][0] == "1234@c.us"
-        assert "desligado" in args[0][1]
-        assert args[0][2] == "msg001"
-        assert journal.autoreply_sent("1234@c.us", now_time - 100)
-
-    def test_quotes_message_id(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = 1900.0
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal, message_id="abc123")
-        responder.maybe_reply(journal.get(seq))
-        assert send.call_args[0][2] == "abc123"
+            journal, lambda chat, text, reply_to=None: sent.append((chat, text, reply_to)),
+            PowerSchedule.from_config(POWER), monitor, now=clock)
+        return clock, monitor, journal, responder, sent
+    return build
 
 
-# ── maybe_reply: second addressed message in same chat → no reply ───────
-
-class TestNoSecondReply:
-    def test_same_chat_same_period(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = 1900.0
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq1 = _make_entry(journal, seq=1, message_id="m1")
-        seq2 = _make_entry(journal, seq=2, message_id="m2", chat_id="1234@c.us")
-        responder.maybe_reply(journal.get(seq1))
-        result = responder.maybe_reply(journal.get(seq2))
-        assert result is False
-        assert send.call_count == 1
+def _entry(journal, key, *, chat="group@g.us", addressed=True, backlog=False, kind="message"):
+    seq = journal.append({"event": kind, "payload": {"id": key}}, dedup_key=key, event_type=kind,
+                         chat_id=chat, sender_id="a@c.us", message_id=key, wa_ts=1,
+                         received_at=1.0, addressed=addressed, backlog=backlog)
+    return journal.get(seq)
 
 
-# ── maybe_reply: different chat → reply ─────────────────────────────────
-
-class TestDifferentChat:
-    def test_reply_in_new_chat(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = 1900.0
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq1 = _make_entry(journal, seq=1, chat_id="1234@c.us", message_id="m1")
-        seq2 = _make_entry(journal, seq=2, chat_id="5678@c.us", message_id="m2")
-        responder.maybe_reply(journal.get(seq1))
-        result = responder.maybe_reply(journal.get(seq2))
-        assert result is True
-        assert send.call_count == 2
+def test_schedule_sentence_follows_the_config():
+    assert schedule_sentence(PowerSchedule.from_config(POWER)) == \
+        "das 07:00 às 23:00, e até às 02:00 às sextas e sábados"
 
 
-# ── maybe_reply: backlog or unaddressed → no reply ──────────────────────
-
-class TestBacklogUnaddressed:
-    def test_backlog_no_reply(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal, addressed=True, backlog=True)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
-
-    def test_unaddressed_no_reply(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal, addressed=False)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
+def test_offline_text_variants_have_no_dashes():
+    now = datetime.datetime(2026, 9, 23, 3, 0, tzinfo=LISBON)
+    hours = schedule_sentence(PowerSchedule.from_config(POWER))
+    same_day = offline_text(now.replace(hour=7), now, hours)
+    assert "Volto às 07:00" in same_day and "O meu horário é das 07:00" in same_day
+    assert "amanhã às 07:00" in offline_text(now.replace(hour=7) + datetime.timedelta(days=1), now)
+    assert "no dia 26/09" in offline_text(now.replace(day=26, hour=7), now)
+    for text in (same_day, FAULT_TEXT):
+        assert not any(dash in text for dash in DASHES)
 
 
-# ── maybe_reply: GOING_DOWN → reply immediately ─────────────────────────
-
-class TestGoingDown:
-    def test_going_down_replies_without_grace(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.GOING_DOWN)
-        monitor._offline_since = 1999.0  # just set
-        send = MagicMock()
-        responder = OfflineResponder(journal, send, schedule, monitor, grace_seconds=90.0)
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is True
+def test_online_or_briefly_app_down_stays_silent(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    assert not responder.maybe_reply(_entry(journal, "m1"))
+    monitor.observe(PcState.APP_DOWN)
+    clock.value += 120
+    assert responder.outage() is None
+    assert not responder.maybe_reply(_entry(journal, "m2"))
+    assert sent == []
 
 
-# ── maybe_reply: send_text raising → False and nothing recorded ─────────
+def test_app_down_past_the_grace_is_a_fault(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    monitor.observe(PcState.APP_DOWN)
+    clock.value += 301
+    assert responder.outage() == FAULT
+    assert responder.maybe_reply(_entry(journal, "m1"))
+    assert sent == [("group@g.us", FAULT_TEXT, "m1")]
 
-class TestSendFailure:
-    def test_exception_returns_false(self, tmp_path: Path):
-        journal = _make_journal(tmp_path)
-        schedule = _make_schedule()
-        monitor = _make_monitor(PcState.OFFLINE)
-        monitor._offline_since = 1900.0
-        send = MagicMock(side_effect=RuntimeError("network"))
-        responder = OfflineResponder(journal, send, schedule, monitor)
-        seq = _make_entry(journal)
-        result = responder.maybe_reply(journal.get(seq))
-        assert result is False
-        assert not journal.autoreply_sent("1234@c.us", 1900.0)
+
+def test_offline_at_night_gives_the_schedule(rig):
+    clock, monitor, journal, responder, sent = rig(NIGHT)
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 30
+    assert responder.outage() is None
+    clock.value += 90
+    assert responder.outage() == SCHEDULED
+    assert responder.maybe_reply(_entry(journal, "m1"))
+    assert "O meu horário é das 07:00 às 23:00" in sent[0][1] and "amanhã às 07:00" in sent[0][1]
+
+
+def test_offline_during_the_day_is_a_fault(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 120
+    assert responder.outage() == FAULT
+
+
+def test_going_down_and_degraded_reply_at_once(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    monitor.announce_going_down()
+    assert responder.outage() == SCHEDULED
+    monitor.observe(PcState.ONLINE)
+    monitor.observe(PcState.APP_DOWN)
+    assert responder.outage() is None
+    monitor.mark_degraded()
+    assert responder.outage() == FAULT
+
+
+def test_once_per_chat_per_outage(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    monitor.observe(PcState.APP_DOWN)
+    clock.value += 400
+    assert responder.maybe_reply(_entry(journal, "m1"))
+    assert not responder.maybe_reply(_entry(journal, "m2"))
+    assert responder.maybe_reply(_entry(journal, "m3", chat="other@g.us"))
+    monitor.observe(PcState.ONLINE)
+    monitor.observe(PcState.APP_DOWN)
+    clock.value += 400
+    assert responder.maybe_reply(_entry(journal, "m4"))
+    assert [chat for chat, _, _ in sent] == ["group@g.us", "other@g.us", "group@g.us"]
+
+
+def test_unaddressed_backlog_and_reactions_never_get_a_line(rig):
+    clock, monitor, journal, responder, sent = rig(DAYTIME)
+    monitor.mark_degraded()
+    assert not responder.maybe_reply(_entry(journal, "m1", addressed=False))
+    assert not responder.maybe_reply(_entry(journal, "m2", backlog=True))
+    assert not responder.maybe_reply(_entry(journal, "m3", kind="message.reaction"))
+    assert sent == []
+
+
+def test_a_failed_send_records_nothing(tmp_path):
+    clock = Clock(DAYTIME)
+    monitor = PcMonitor("http://pc:7860", now=clock)
+    monitor.mark_degraded()
+    journal = Journal(str(tmp_path / "j.sqlite3"), str(tmp_path / "media"))
+
+    def boom(*args):
+        raise RuntimeError("waha down")
+
+    responder = OfflineResponder(journal, boom, PowerSchedule.from_config(POWER), monitor, now=clock)
+    entry = _entry(journal, "m1")
+    assert not responder.maybe_reply(entry)
+    assert not journal.autoreply_sent("group@g.us", monitor.down_since)

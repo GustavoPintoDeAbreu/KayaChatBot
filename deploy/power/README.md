@@ -77,3 +77,34 @@ Test once, with nobody depending on the bot:
 
 - **RTC:** `sudo rtcwake -m off -s 300` should power off and come back in 5 minutes.
 - **Wake-on-LAN:** `sudo systemctl poweroff`, then `pi5 wake-pc`.
+
+## Tested 2026-09-25
+
+One full cycle: the real `kaya-shutdown.sh` (idle check off), then the Pi's
+magic packet. Nobody logged in; everything below is system services.
+
+| Time | Event |
+|---|---|
+| 16:04:14 | Shutdown script: going-down sent to the Pi, RTC alarm set, poweroff |
+| 16:08:20 | Pi `pc-wake.sh`: magic packet |
+| 16:08:31 | PC boots |
+| 16:08:38 | `kaya-boot-check`: driver OK |
+| 16:08:45 | `llm-broker`, `kaya-prod` running (14 s after boot) |
+| 16:09:09 | Pi gateway sees the PC online, delivers the backlog |
+
+## Kernel updates are manual
+
+`install.sh` keeps `linux-*` out of unattended-upgrades. On 2026-09-25 they
+installed kernel 7.0.0-34 without its nvidia module, and the next boot had no
+GPU driver: Docker could not start the GPU containers and the bot went silent.
+Upgrade kernels at the machine with `sudo apt full-upgrade` (which brings
+`linux-modules-nvidia-595-open-*` for the new kernel), then reboot.
+
+Two guards stay in place:
+
+- `kaya-shutdown.sh` skips the night if the kernel booted next has no nvidia
+  module.
+- `kaya-boot-check.service` tells the Pi gateway when a boot has no driver, so
+  users get "Estou em baixo…" instead of silence. It never loads the module
+  itself: loading it under a desktop that booted without it froze the PC.
+

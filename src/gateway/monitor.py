@@ -52,7 +52,9 @@ class PcMonitor:
         self._hostname = urlsplit(pc_url).hostname or "localhost"
         self._state: PcState = PcState.OFFLINE
         self._offline_since: Optional[float] = None
+        self._down_since: Optional[float] = None
         self._going_down: bool = False
+        self._degraded: bool = False
 
     @property
     def state(self) -> PcState:
@@ -62,11 +64,34 @@ class PcMonitor:
     def offline_since(self) -> Optional[float]:
         return self._offline_since
 
+    @property
+    def down_since(self) -> Optional[float]:
+        """When the PC stopped answering for any reason; None while it answers."""
+        return self._down_since
+
+    @property
+    def degraded(self) -> bool:
+        """The PC booted but reported it cannot serve (e.g. no GPU driver)."""
+        return self._degraded
+
+    def down_for(self) -> float:
+        """Seconds since the PC stopped answering, 0 while it answers."""
+        return 0.0 if self._down_since is None else self._now() - self._down_since
+
+    def mark_degraded(self) -> None:
+        """The PC's boot check found it cannot serve; cleared when it answers again."""
+        if self._down_since is None:
+            self._down_since = self._now()
+        self._degraded = True
+        logger.warning("PC reported itself degraded")
+
     def announce_going_down(self) -> None:
         """Mark the PC as going down; persists until ONLINE is observed again."""
         now = self._now()
         if self._offline_since is None:
             self._offline_since = now
+        if self._down_since is None:
+            self._down_since = now
         self._going_down = True
         self._state = PcState.GOING_DOWN
         logger.info("PC announced going down")
@@ -79,20 +104,19 @@ class PcMonitor:
         if observed is PcState.ONLINE:
             self._state = PcState.ONLINE
             self._offline_since = None
+            self._down_since = None
             self._going_down = False
-
-        elif observed is PcState.APP_DOWN:
-            self._state = PcState.GOING_DOWN if self._going_down else PcState.APP_DOWN
-
-        elif observed is PcState.OFFLINE:
-            self._state = PcState.GOING_DOWN if self._going_down else PcState.OFFLINE
-            if self._offline_since is None:
-                self._offline_since = now
-
-        elif observed is PcState.GOING_DOWN:
-            self._state = PcState.GOING_DOWN
-            if self._offline_since is None:
-                self._offline_since = now
+            self._degraded = False
+        else:
+            if self._down_since is None:
+                self._down_since = now
+            if observed is PcState.APP_DOWN:
+                self._state = PcState.GOING_DOWN if self._going_down else PcState.APP_DOWN
+            else:
+                going_down = self._going_down or observed is PcState.GOING_DOWN
+                self._state = PcState.GOING_DOWN if going_down else PcState.OFFLINE
+                if self._offline_since is None:
+                    self._offline_since = now
 
         if self._state is not old_state:
             logger.info("PC state: %s -> %s", old_state.value, self._state.value)

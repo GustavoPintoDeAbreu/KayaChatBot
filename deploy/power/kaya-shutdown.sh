@@ -76,6 +76,18 @@ wait_for_replies() {
   done
 }
 
+# The kernel GRUB boots next (the newest installed) must have an nvidia module,
+# or tomorrow's boot comes up without a GPU driver and the bot is gone. A kernel
+# installed without its module is what took the bot down on 2026-09-25.
+next_kernel="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#/boot/vmlinuz-##' | sort -V | tail -1)"
+if [ -n "$next_kernel" ] && ! find "/lib/modules/$next_kernel" -name 'nvidia.ko*' 2>/dev/null | grep -q .; then
+  say "skipping tonight's shutdown: kernel $next_kernel has no nvidia module (sudo apt install linux-modules-nvidia-595-open-generic-hwe-24.04)"
+  as_user notify-send -u critical "Kaya: o PC não se desligou" \
+    "O kernel $next_kernel não tem o driver NVIDIA. Instala linux-modules-nvidia-595-open-generic-hwe-24.04 antes de reiniciar." \
+    2>/dev/null || true
+  exit 0
+fi
+
 reason="$(busy_reason)"
 if [ -n "$reason" ]; then
   say "skipping tonight's shutdown: $reason"

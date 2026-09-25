@@ -107,6 +107,34 @@ class PowerSchedule:
         return (anchor - self.wol_lead).strftime("*-*-* %H:%M:%S")
 
 
+_EVENINGS_PT = ["segundas", "terças", "quartas", "quintas", "sextas", "sábados", "domingos"]
+
+
+def _join_pt(items: List[str]) -> str:
+    """"a", "a e b", "a, b e c"."""
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " e " + items[-1]
+
+
+def schedule_sentence(schedule: PowerSchedule) -> str:
+    """The hours in words, for a WhatsApp reply: "das 07:00 às 23:00, e até às 02:00 às sextas e sábados".
+
+    The most common shutdown time is the rule and the others are named as
+    exceptions, by the evening they belong to (as people say it).
+    """
+    wake = schedule.wake_time.strftime("%H:%M")
+    if not schedule.shutdown:
+        return f"sempre ligado a partir das {wake}"
+    by_time: Dict[str, List[int]] = {}
+    for evening, at in sorted(schedule.shutdown.items()):
+        by_time.setdefault(at.strftime("%H:%M"), []).append(evening)
+    usual = max(by_time, key=lambda clock: len(by_time[clock]))
+    sentence = f"das {wake} às {usual}"
+    for clock, evenings in sorted(by_time.items()):
+        if clock != usual:
+            sentence += f", e até às {clock} às {_join_pt([_EVENINGS_PT[day] for day in evenings])}"
+    return sentence
+
+
 def _systemd_days(weekdays: List[int]) -> str:
     """Sorted weekday numbers as systemd days: runs of three or more become ``A..B``."""
     runs: List[List[int]] = []

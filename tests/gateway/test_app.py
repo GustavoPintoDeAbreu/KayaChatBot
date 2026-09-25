@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.gateway.app import Gateway, GatewaySettings
+from src.gateway.autoreply import FAULT_TEXT
 from src.gateway.monitor import PcMonitor, PcState
 
 BOT = "351900000000@c.us"
@@ -112,7 +113,7 @@ def test_offline_reply_only_when_the_pc_is_really_off(rig):
     _post(gateway, _message("d3", chat=ALICE, timestamp=int(clock.value)))
     assert len(sent) == 1
     chat, text, reply_to = sent[0]
-    assert chat == ALICE and reply_to == "d2" and "Volto" in text
+    assert chat == ALICE and reply_to == "d2" and text == FAULT_TEXT
 
 
 def test_webhook_token_is_enforced(rig):

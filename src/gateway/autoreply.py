@@ -1,8 +1,17 @@
-"""Offline reply for addressed messages when the PC is unreachable.
+"""The fixed WhatsApp line sent when the bot cannot answer.
 
-When the PC is down the gateway must still answer addressed messages once
-per offline period so the sender knows the bot is alive and when to expect
-a real reply.
+Two situations, two texts, no model:
+
+- the PC is off by schedule (or announced its shutdown): say so, give the hours
+  from config.yaml ``power``, and say when it is back;
+- the PC should be answering but is not (the app has been down past a deploy's
+  length, the PC reported itself degraded at boot, or it is unreachable during
+  scheduled hours): say it is down and that the message is kept.
+
+One line per chat per outage. The message itself stays in the journal and is
+answered properly when the PC returns (see the forwarder's deferred replies).
+No dashes anywhere: the group asked for none, and a canned string is the one
+place a prompt rule cannot reach.
 """
 from __future__ import annotations
 
@@ -13,28 +22,35 @@ from typing import Any, Callable, Optional
 
 from src.gateway.journal import Journal, JournalEvent
 from src.gateway.monitor import PcMonitor, PcState
-from src.gateway.schedule import PowerSchedule
+from src.gateway.schedule import PowerSchedule, schedule_sentence
 
 logger = logging.getLogger(__name__)
 
+SCHEDULED = "scheduled"
+FAULT = "fault"
 
-def offline_text(next_wake: datetime.datetime, now: datetime.datetime) -> str:
-    """Return the Portuguese offline message for *next_wake* relative to *now*."""
-    time_str = next_wake.strftime("%H:%M")
+FAULT_TEXT = ("Estou em baixo neste momento e não consigo responder. "
+              "Já fiquei com a tua mensagem e respondo assim que voltar.")
+
+
+def offline_text(next_wake: datetime.datetime, now: datetime.datetime, hours: str = "") -> str:
+    """The scheduled-off line: off now, the hours, and when it is back."""
+    clock = next_wake.strftime("%H:%M")
     if next_wake.date() == now.date():
-        return f"Estou desligado agora. Volto às {time_str} e respondo-te nessa altura."
-    tomorrow = now.date() + datetime.timedelta(days=1)
-    if next_wake.date() == tomorrow:
-        return f"Estou desligado agora. Volto amanhã às {time_str} e respondo-te nessa altura."
-    day_month = next_wake.strftime("%d/%m")
-    return f"Estou desligado agora. Volto no dia {day_month} às {time_str} e respondo-te nessa altura."
+        back = f"às {clock}"
+    elif next_wake.date() == now.date() + datetime.timedelta(days=1):
+        back = f"amanhã às {clock}"
+    else:
+        back = f"no dia {next_wake.strftime('%d/%m')} às {clock}"
+    schedule = f" O meu horário é {hours}." if hours else ""
+    return f"Estou desligado agora.{schedule} Volto {back} e respondo-te nessa altura."
 
 
 class OfflineResponder:
-    """Send a single offline notice per chat per offline period.
+    """Decide whether the bot is unavailable, and send the fixed line once per chat per outage.
 
-    ``send_text`` is called with ``(chat_id, text, message_id_or_none)``.
-    It should quote the original message (WhatsApp reply).
+    ``send_text`` is called with ``(chat_id, text, message_id_or_none)`` and
+    quotes the original message.
     """
 
     def __init__(
@@ -45,6 +61,7 @@ class OfflineResponder:
         monitor: PcMonitor,
         *,
         grace_seconds: float = 90.0,
+        app_down_grace_seconds: float = 300.0,
         now: Callable[[], float] = time.time,
     ) -> None:
         self._journal = journal
@@ -52,40 +69,55 @@ class OfflineResponder:
         self._schedule = schedule
         self._monitor = monitor
         self._grace_seconds = grace_seconds
+        self._app_down_grace_seconds = app_down_grace_seconds
         self._now = now
 
-    def maybe_reply(self, entry: JournalEvent) -> bool:
-        """Send an offline reply when conditions are met.
+    def outage(self) -> Optional[str]:
+        """``SCHEDULED``, ``FAULT``, or None while the bot can (or may soon) answer.
 
-        Returns ``True`` when a reply was sent.
+        App down for less than ``app_down_grace_seconds`` is a deploy or a boot
+        still starting its containers: the message is buffered and answered
+        within minutes, so saying "I am down" would be wrong. Past it, the bot is
+        down whatever the reason, which is the case that stayed silent before.
         """
-        if not entry.addressed or entry.backlog or entry.event_type != "message":
-            return False
-
         monitor = self._monitor
         state = monitor.state
-        is_offline = (
-            state is PcState.GOING_DOWN
-            or (state is PcState.OFFLINE and monitor.unreachable_for() >= self._grace_seconds)
-        )
-        if not is_offline:
-            return False
+        if state is PcState.ONLINE or monitor.down_since is None:
+            return None
+        if state is PcState.GOING_DOWN:
+            return SCHEDULED
+        if monitor.degraded:
+            return FAULT
+        if state is PcState.OFFLINE and monitor.unreachable_for() >= self._grace_seconds:
+            local_now = datetime.datetime.fromtimestamp(self._now(), self._schedule.timezone)
+            return FAULT if self._schedule.is_scheduled_on(local_now) else SCHEDULED
+        if state is PcState.APP_DOWN and monitor.down_for() >= self._app_down_grace_seconds:
+            return FAULT
+        return None
 
-        if monitor.offline_since is None:
-            return False
-
-        if self._journal.autoreply_sent(entry.chat_id, monitor.offline_since):
-            return False
-
+    def text_for(self, outage: str) -> str:
+        """The fixed line for an outage kind."""
+        if outage == FAULT:
+            return FAULT_TEXT
         now = datetime.datetime.fromtimestamp(self._now(), self._schedule.timezone)
-        text = offline_text(self._schedule.next_wake(now), now)
+        return offline_text(self._schedule.next_wake(now), now, schedule_sentence(self._schedule))
 
-        try:
-            self._send_text(entry.chat_id, text, entry.message_id or None)
-            self._journal.record_autoreply(entry.chat_id, monitor.offline_since, self._now())
-            self._journal.mark_auto_replied(entry.seq, self._now())
-            logger.info("Sent offline reply to %s", entry.chat_id)
-            return True
-        except Exception:
-            logger.exception("Failed to send offline reply to %s", entry.chat_id)
+    def maybe_reply(self, entry: JournalEvent) -> bool:
+        """Send the line for this message if the bot is unavailable. True when sent."""
+        if not entry.addressed or entry.backlog or entry.event_type != "message":
             return False
+        outage = self.outage()
+        down_since = self._monitor.down_since
+        if outage is None or down_since is None:
+            return False
+        if self._journal.autoreply_sent(entry.chat_id, down_since):
+            return False
+        try:
+            self._send_text(entry.chat_id, self.text_for(outage), entry.message_id or None)
+        except Exception:  # noqa: BLE001 — nothing recorded, so a later message may try again
+            logger.exception("offline reply to %s failed", entry.chat_id)
+            return False
+        self._journal.record_autoreply(entry.chat_id, down_since, self._now())
+        self._journal.mark_auto_replied(entry.seq, self._now())
+        logger.info("sent the %s line to %s", outage, entry.chat_id)
+        return True

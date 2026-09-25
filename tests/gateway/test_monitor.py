@@ -62,3 +62,28 @@ def test_going_down_holds_until_the_pc_is_back():
 def test_check_uses_the_injected_probe():
     monitor = PcMonitor("http://pc:7860", now=Clock(), probe=lambda: PcState.APP_DOWN)
     assert monitor.check() is PcState.APP_DOWN
+
+
+def test_down_since_covers_every_kind_of_outage():
+    clock = Clock()
+    monitor = _monitor(clock)
+    monitor.observe(PcState.ONLINE)
+    assert monitor.down_since is None
+    monitor.observe(PcState.APP_DOWN)
+    assert monitor.down_since == 1000.0
+    clock.value = 1400.0
+    monitor.observe(PcState.OFFLINE)
+    assert monitor.down_since == 1000.0 and monitor.down_for() == 400.0
+    monitor.observe(PcState.ONLINE)
+    assert monitor.down_since is None and monitor.down_for() == 0.0
+
+
+def test_degraded_holds_until_the_pc_answers():
+    monitor = _monitor(Clock())
+    monitor.observe(PcState.ONLINE)
+    monitor.mark_degraded()
+    assert monitor.degraded and monitor.down_since == 1000.0
+    monitor.observe(PcState.APP_DOWN)
+    assert monitor.degraded
+    monitor.observe(PcState.ONLINE)
+    assert not monitor.degraded
