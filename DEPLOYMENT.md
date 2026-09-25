@@ -113,7 +113,8 @@ and `app_up.sh`:
 
 | Variable | Old layout | New layout |
 |---|---|---|
-| `KAYA_EDGE` | `local` (WAHA + tunnel on the PC) | `pi` (the PC runs neither) |
+| `KAYA_EDGE` | `local` (WAHA on the PC) | `pi` (WAHA on the Pi) |
+| `KAYA_TUNNEL` | follows `KAYA_EDGE` | `pi` once the Cloudflare rules point at LAN IPs; `local` until then |
 | `KAYA_INFERENCE_BACKEND` | `gguf` | `ollama` (see CLAUDE.md, "Kaya runs on Ollama") |
 | `KAYA_PROD_OLLAMA_URL` | unused | `http://llm-broker:8080/upstream/kaya` |
 | `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused; rollback: `.../upstream/kaya-llamacpp` with backend `gguf` |

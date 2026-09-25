@@ -17,10 +17,13 @@
 # Requires ~/kaya-prod/.env with KAYA_WEB_USER/PASS and CLOUDFLARE_TUNNEL_TOKEN.
 #
 # Two settings in that .env decide what else this script manages:
-#   KAYA_EDGE=local|pi       local (default): WAHA + the tunnel run here, as before.
-#                            pi: they run on the Raspberry Pi (deploy/pi), so this
+#   KAYA_EDGE=local|pi       local (default): WAHA runs here, as before.
+#                            pi: WAHA runs on the Raspberry Pi (deploy/pi), so this
 #                            script removes any local copy instead: a second WAHA on
 #                            the same session fights the Pi's for the login.
+#   KAYA_TUNNEL=local|pi     where cloudflared runs; defaults to KAYA_EDGE. They are
+#                            separate because the tunnel's move needs the Cloudflare
+#                            dashboard and WAHA's does not.
 #   KAYA_INFERENCE_BACKEND   ollama (via KAYA_PROD_OLLAMA_URL) or gguf (via
 #                            KAYA_PROD_LLAMA_URL; empty = the local `llama` service).
 #                            A …/upstream/kaya URL means the shared GPU broker
@@ -58,11 +61,12 @@ fi
 
 env_value() { sed -n "s/^$1=//p" .env | tail -1 | tr -d '"'"'"; }
 KAYA_EDGE="$(env_value KAYA_EDGE)"; KAYA_EDGE="${KAYA_EDGE:-local}"
+KAYA_TUNNEL="$(env_value KAYA_TUNNEL)"; KAYA_TUNNEL="${KAYA_TUNNEL:-$KAYA_EDGE}"
 PROD_LLAMA_URL="$(env_value KAYA_PROD_LLAMA_URL)"
 PROD_OLLAMA_URL="$(env_value KAYA_PROD_OLLAMA_URL)"
 PROD_BACKEND="$(env_value KAYA_INFERENCE_BACKEND)"
 if [[ "$PROD_BACKEND" == "ollama" ]]; then MODEL_URL="$PROD_OLLAMA_URL"; else MODEL_URL="$PROD_LLAMA_URL"; fi
-echo "🧭 edge=$KAYA_EDGE, backend=${PROD_BACKEND:-gguf}, model=${MODEL_URL:-local llama service}"
+echo "🧭 edge=$KAYA_EDGE, tunnel=$KAYA_TUNNEL, backend=${PROD_BACKEND:-gguf}, model=${MODEL_URL:-local llama service}"
 
 docker network inspect llm >/dev/null 2>&1 || docker network create llm >/dev/null
 
@@ -86,23 +90,22 @@ if [[ "$KAYA_EDGE" == "local" ]]; then
   docker pull devlikeapro/waha:latest >/dev/null 2>&1 \
     && echo "   ✓ WAHA image up to date" \
     || echo "   ⚠️  pull failed — continuing with the cached image" >&2
-else
-  # The Pi owns WhatsApp and the public tunnel. Leave nothing here that could
-  # log in to the same session or register as a second tunnel connector.
+fi
+if [[ "$KAYA_TUNNEL" == "pi" ]]; then
+  # A second connector here would take half the tunnel's traffic.
   docker rm -f kaya-cloudflared 2>/dev/null || true
 fi
 
 echo "🔨 Building image ..."
 docker compose build kaya-prod
 
-if [[ "$KAYA_EDGE" == "local" ]]; then
-  # kaya-prod runs the WhatsApp bridge (UI + webhook); waha is its inbound gateway.
-  echo "🚀 (Re)starting prod + WAHA + tunnel ..."
-  docker compose --profile prod --profile waha-local --profile tunnel \
-    up -d --force-recreate kaya-prod waha cloudflared
-else
-  echo "🚀 (Re)starting prod (WAHA and the tunnel run on the Pi) ..."
-  docker compose --profile prod up -d --force-recreate kaya-prod
+services=(kaya-prod); profiles=(--profile prod)
+[[ "$KAYA_EDGE" == "local" ]] && { services+=(waha); profiles+=(--profile waha-local); }
+echo "🚀 (Re)starting ${services[*]} ..."
+docker compose "${profiles[@]}" up -d --force-recreate "${services[@]}"
+if [[ "$KAYA_TUNNEL" == "local" ]]; then
+  # Not force-recreated: restarting the connector drops every open page.
+  docker compose --profile tunnel up -d cloudflared
 fi
 
 if [[ "$MODEL_URL" == */upstream/* ]]; then
@@ -114,7 +117,7 @@ if [[ "$MODEL_URL" == */upstream/* ]]; then
   else
     echo "⚠️  the GPU broker is not answering on :8200 — start it: cd ~/llm-broker && docker compose up -d" >&2
   fi
-elif [[ "${KAYA_INFERENCE_BACKEND:-gguf}" == "gguf" ]]; then
+elif [[ "${PROD_BACKEND:-gguf}" == "gguf" ]]; then
   # Prod generates via the llama.cpp gguf server (KAYA_INFERENCE_BACKEND=gguf, set
   # on the kaya-prod service). Start it too. Not force-recreated, so a redeploy
   # leaves the model loaded. Export KAYA_INFERENCE_BACKEND=hf to skip + roll back.
