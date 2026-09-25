@@ -114,7 +114,7 @@ and `app_up.sh`:
 | Variable | Old layout | New layout |
 |---|---|---|
 | `KAYA_EDGE` | `local` (WAHA on the PC) | `pi` (WAHA on the Pi) |
-| `KAYA_TUNNEL` | follows `KAYA_EDGE` | `pi` once the Cloudflare rules point at LAN IPs; `local` until then |
+| `KAYA_TUNNEL` | follows `KAYA_EDGE` | `pi` (the PC runs no connector) |
 | `KAYA_INFERENCE_BACKEND` | `gguf` | `ollama` (see CLAUDE.md, "Kaya runs on Ollama") |
 | `KAYA_PROD_OLLAMA_URL` | unused | `http://llm-broker:8080/upstream/kaya` |
 | `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused; rollback: `.../upstream/kaya-llamacpp` with backend `gguf` |
@@ -133,6 +133,13 @@ Order matters: the `^/app` rule must be above the catch-all. Rules point at LAN
 IPs, never at PC compose names, because the connector now runs on the Pi.
 `/whatsapp/*` on the PC is deliberately **not** published any more: WAHA reaches
 the gateway on the Pi's own compose network, and the relay is LAN-only.
+
+**Done 2026-09-25.** WAHA moved first (its session carried over with no QR
+re-scan), then the tunnel. The live tunnel is `kaya-chatbot-2` (Zero Trust →
+Networks → Tunnels & Mesh → Published application routes). It has one connector,
+the Pi's. `/whatsapp/*` on the PC is no longer published, so it answers 404 from
+the internet: the gateway's public app serves only `/` and `/status`. Gradio also
+requests `/manifest.json` at the root, which 404s harmlessly.
 
 ### Cutover runbook (done once; kept for rollback and for a rebuild)
 
