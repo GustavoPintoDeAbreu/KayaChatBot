@@ -322,6 +322,7 @@ class Gateway:
 def main() -> None:
     """Entry point for the container."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(Gateway(GatewaySettings.from_env()).serve())
 
 
