@@ -21,10 +21,11 @@ import json
 import logging
 import os
 import re
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from src.chat import documents, feedback
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
@@ -81,6 +82,9 @@ class InboundMessage:
     media_filename: str = ""
     # Filled in once a photo has been read by the vision model.
     image_description: str = ""
+    # Addressed to the bot while this PC was off: the Pi gateway held it and
+    # flagged it, and it is still young enough to be worth answering late.
+    deferred: bool = False
 
 
 def _normalize_jid(value: Optional[str]) -> str:
@@ -339,6 +343,67 @@ def parse_waha_reaction(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def dm_allowed(msg: InboundMessage, whitelist_enabled: bool,
+               whitelist_numbers: set) -> bool:
+    """Whether a DM from this sender is allowed by the anti-spam whitelist.
+
+    When the whitelist is disabled the bot answers every DM (original
+    behaviour). When enabled, only DMs from whitelisted numbers are answered;
+    everyone else is silently ignored so a leaked number can't be spammed.
+    """
+    if not whitelist_enabled:
+        return True
+    candidates = {
+        _phone_from_alt(msg.sender_phone),
+        _phone_from_alt(msg.sender_id),
+        msg.sender_id.split("@", 1)[0].strip().lower(),
+    }
+    return bool(candidates & whitelist_numbers)
+
+
+def is_addressed(msg: InboundMessage, bot_jids: set, respond_on_mention: bool,
+                 respond_on_reply: bool, whitelist_enabled: bool,
+                 whitelist_numbers: set) -> bool:
+    """Whether this message is addressed to the bot.
+
+    Returns ``False`` for ``from_me``. For a DM it delegates to
+    ``dm_allowed``. For a group it checks mention-or-reply-to-bot exactly as
+    ``should_respond`` does, but does NOT check empty text,
+    ``ignore_before_ts`` or ``_answered_ids``: the Pi gateway asks this of a
+    voice note before anyone has transcribed it.
+    """
+    if msg.from_me:
+        return False
+    if not msg.is_group:
+        return dm_allowed(msg, whitelist_enabled, whitelist_numbers)
+    mentioned = (
+        respond_on_mention
+        and bool(bot_jids.intersection(msg.mentioned_ids))
+    )
+    replied = (
+        respond_on_reply
+        and msg.reply_to_participant is not None
+        and msg.reply_to_participant in bot_jids
+    )
+    return bool(mentioned or replied)
+
+
+@dataclass
+class PendingReply:
+    """A message that passed the reply gate, with everything its answer needs.
+
+    Snapshotted at ingest time, so a reply generated later (the relay path acks
+    the gateway first and answers in the background) sees the conversation as it
+    stood when the message arrived, not as it stands when the GPU is free.
+    """
+    msg: InboundMessage
+    speaker: str
+    text: str
+    asked: str
+    recent: List[str]
+    kwargs: Dict[str, Any]
+
+
 class WhatsAppAdapter:
     """Decides whether/how to reply and wires history + engine + WAHA together."""
 
@@ -432,6 +497,8 @@ class WhatsAppAdapter:
         self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
         self.send_seen = bool(wcfg.get("send_seen", True))
+        self.deferred_max_age_hours = float(
+            (wcfg.get("deferred_reply") or {}).get("max_age_hours", 12))
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
         self.ignore_before_ts = 0
@@ -524,7 +591,11 @@ class WhatsAppAdapter:
             return False
         if not msg.text.strip():
             return False
-        if self.ignore_before_ts and msg.timestamp and msg.timestamp < self.ignore_before_ts:
+        # A deferred message is the exception: the gateway held it while this PC
+        # was off and flagged it as addressed to the bot, so it predates startup
+        # by design and still deserves its answer.
+        if (self.ignore_before_ts and msg.timestamp and not msg.deferred
+                and msg.timestamp < self.ignore_before_ts):
             return False
         # WAHA replays its backlog after a reconnect — which the DNS drop that
         # killed the session in production would cause — and the same message id
@@ -538,18 +609,9 @@ class WhatsAppAdapter:
             self._answered_ids[msg.message_id] = True
             while len(self._answered_ids) > self._answered_max:
                 self._answered_ids.popitem(last=False)
-        if not msg.is_group:
-            return self._dm_allowed(msg)  # DM: gated by whitelist when enabled
-        mentioned = (
-            self.respond_on_mention
-            and bool(self.bot_jids.intersection(msg.mentioned_ids))
-        )
-        replied = (
-            self.respond_on_reply
-            and msg.reply_to_participant is not None
-            and msg.reply_to_participant in self.bot_jids
-        )
-        return bool(mentioned or replied)
+        return is_addressed(msg, self.bot_jids, self.respond_on_mention,
+                            self.respond_on_reply, self.whitelist_enabled,
+                            self.whitelist_numbers)
 
     def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None,
                  force_voice: bool = False, citation: str = ""):
@@ -682,20 +744,8 @@ class WhatsAppAdapter:
         return self.prefs.output_mode(chat_id)
 
     def _dm_allowed(self, msg: InboundMessage) -> bool:
-        """Anti-spam gate for direct messages.
-
-        When the whitelist is disabled the bot answers every DM (original
-        behaviour). When enabled, only DMs from whitelisted numbers are answered;
-        everyone else is silently ignored so a leaked number can't be spammed.
-        """
-        if not self.whitelist_enabled:
-            return True
-        candidates = {
-            _phone_from_alt(msg.sender_phone),
-            _phone_from_alt(msg.sender_id),
-            msg.sender_id.split("@", 1)[0].strip().lower(),
-        }
-        return bool(candidates & self.whitelist_numbers)
+        """Anti-spam gate for direct messages; see ``dm_allowed``."""
+        return dm_allowed(msg, self.whitelist_enabled, self.whitelist_numbers)
 
     # ── speaker identity ──────────────────────────────────────────────────────
     def resolve_speaker(self, msg: InboundMessage) -> str:
@@ -990,6 +1040,22 @@ class WhatsAppAdapter:
         message that didn't address the bot). The caller (server/simulator)
         supplies the ``system_prompt`` to use.
         """
+        pending = self.ingest_event(event)
+        if isinstance(pending, PendingReply):
+            return self.complete(pending)
+        return pending
+
+    def ingest_event(self, event: Dict[str, Any], deferred: bool = False
+                     ) -> Union[PendingReply, Dict[str, Any], None]:
+        """Everything a message costs before its answer: parse, media, logging, the gate.
+
+        Returns ``None`` when there is nothing to answer, a result dict when a
+        command was answered by code, or a ``PendingReply`` for ``complete``. The
+        relay endpoint acks the gateway once this returns, so everything here
+        must be durable by then. ``deferred`` is the gateway's flag for a message
+        addressed to the bot while this PC was off; it is honoured only while the
+        message is younger than ``whatsapp.deferred_reply.max_age_hours``.
+        """
         # Learn the bot's own identities from the webhook envelope so group
         # @-mention/reply detection works. NOWEB mentions the bot by its @lid, so
         # we must track both ``me.id`` (its @c.us number) and ``me.lid``.
@@ -1004,6 +1070,9 @@ class WhatsAppAdapter:
         msg = parse_waha_message(event)
         if msg is None:
             return None
+        if deferred and msg.timestamp is not None \
+                and time.time() - msg.timestamp < self.deferred_max_age_hours * 3600:
+            msg.deferred = True
 
         # The same message, delivered twice, must not be processed twice.
         #
@@ -1185,10 +1254,6 @@ class WhatsAppAdapter:
             self.waha_client.send_text(msg.chat_id, reply)
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply, "command": "clear"}
 
-        if self.send_seen:
-            self.waha_client.send_seen(msg.chat_id)
-            self.waha_client.start_typing(msg.chat_id)
-
         # One line further back, then drop the message being answered: it was
         # appended above, and handing it to the model both as history and as the
         # question is how a turn reads its own message as something already said.
@@ -1212,8 +1277,17 @@ class WhatsAppAdapter:
             except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
                 logger.warning("could not read the summary for this chat: %s", exc)
         asked = f"{quoted}\n{text}" if quoted else text
+        return PendingReply(msg=msg, speaker=speaker, text=text, asked=asked,
+                            recent=recent, kwargs=kwargs)
+
+    def complete(self, pending: PendingReply) -> Optional[Dict[str, Any]]:
+        """Generate and deliver the answer to a message ``ingest_event`` accepted."""
+        msg, speaker, text = pending.msg, pending.speaker, pending.text
+        if self.send_seen:
+            self.waha_client.send_seen(msg.chat_id)
+            self.waha_client.start_typing(msg.chat_id)
         try:
-            result = self.responder(asked, speaker, recent, **kwargs)
+            result = self.responder(pending.asked, speaker, pending.recent, **pending.kwargs)
         finally:
             if self.send_seen:
                 self.waha_client.stop_typing(msg.chat_id)
@@ -1261,8 +1335,10 @@ class WhatsAppAdapter:
         # with every other message the bot saw, before the reply gate.
         self.session_store.append(msg.chat_id, f"Kaya Bot: {reply}")
 
-        # Quote the asker's message in groups so it's clear who the bot answers.
-        reply_to = msg.message_id if msg.is_group else None
+        # Quote the asker's message in groups so it's clear who the bot answers,
+        # and always for a late answer, which would otherwise arrive hours after
+        # the question with nothing to say what it is answering.
+        reply_to = msg.message_id if (msg.is_group or msg.deferred) else None
         sent, delivered_as, spoken = self._deliver(
             msg.chat_id, reply, reply_to=reply_to,
             force_voice=deliver_as_voice_once, citation=citation,
@@ -1298,6 +1374,7 @@ class WhatsAppAdapter:
             "citation": citation,
             "user_text": text,
             "is_group": msg.is_group,
+            "deferred": msg.deferred,
             # What medium it actually went out on, and — for a voice note — the
             # exact string Piper was given. Without these the interaction log
             # cannot tell a spoken reply from a written one, let alone show that

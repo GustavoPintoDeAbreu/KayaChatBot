@@ -2077,3 +2077,91 @@ def test_distinct_messages_are_still_both_processed(tmp_path):
         replies.append(result)
 
     assert all(r is not None for r in replies), "two real messages must both answer"
+
+
+# ── relay: addressing, split, deferred replies ──────────────────────────────
+from src.chat.whatsapp_adapter import PendingReply, is_addressed
+
+
+def _addressed(adapter, event):
+    msg = parse_waha_message(event)
+    return is_addressed(msg, adapter.bot_jids, adapter.respond_on_mention,
+                        adapter.respond_on_reply, adapter.whitelist_enabled,
+                        adapter.whitelist_numbers)
+
+
+@pytest.mark.parametrize("event", [
+    dm_event("olá"),
+    dm_event("olá", sender="351999999999@c.us"),
+    dm_event("olá", from_me=True),
+    group_event("@bot olá", mention=True),
+    group_event("isso", reply=True),
+    group_event("conversa normal"),
+])
+def test_is_addressed_agrees_with_should_respond(tmp_path, event):
+    adapter, _ = make_adapter(tmp_path, whitelist=_wl())
+    msg = parse_waha_message(event)
+    assert _addressed(adapter, event) == adapter.should_respond(msg)
+
+
+def test_is_addressed_ignores_empty_text(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+    voice = group_event("", mention=True)
+    assert _addressed(adapter, voice) is True
+    assert adapter.should_respond(parse_waha_message(voice)) is False
+
+
+def test_ingest_then_complete_matches_handle_event(tmp_path):
+    split, _ = make_adapter(tmp_path / "split")
+    whole, _ = make_adapter(tmp_path / "whole")
+    pending = split.ingest_event(group_event("@bot olá", mention=True, message_id="same"))
+    assert isinstance(pending, PendingReply)
+    assert split.complete(pending)["reply"] == \
+        whole.handle_event(group_event("@bot olá", mention=True, message_id="same"))["reply"]
+
+
+def test_ingest_of_unaddressed_message_still_reaches_the_session(tmp_path):
+    adapter, client = make_adapter(tmp_path)
+    assert adapter.ingest_event(group_event("só conversa")) is None
+    assert adapter.session_store.recent(GROUP, 5) == ["Alice: só conversa"]
+    assert client.sent == []
+
+
+def _aged(event, seconds):
+    import time as _time
+    event["payload"]["timestamp"] = int(_time.time() - seconds)
+    return event
+
+
+def test_deferred_flag_bypasses_startup_gate_while_young(tmp_path):
+    import time as _time
+    adapter, _ = make_adapter(tmp_path)
+    adapter.ignore_before_ts = int(_time.time())
+    assert adapter.ingest_event(_aged(group_event("@bot ontem?", mention=True), 3600)) is None
+    pending = adapter.ingest_event(
+        _aged(group_event("@bot ontem?", mention=True), 3600), deferred=True)
+    assert isinstance(pending, PendingReply) and pending.msg.deferred
+
+
+def test_deferred_flag_expires(tmp_path):
+    import time as _time
+    adapter, _ = make_adapter(tmp_path, deferred_reply={"max_age_hours": 12})
+    adapter.ignore_before_ts = int(_time.time())
+    event = _aged(group_event("@bot ontem?", mention=True), 13 * 3600)
+    assert adapter.ingest_event(event, deferred=True) is None
+
+
+def test_deferred_dm_reply_quotes_the_original(tmp_path):
+    import time as _time
+    adapter, client = make_adapter(tmp_path)
+    adapter.ignore_before_ts = int(_time.time())
+    event = _aged(dm_event("estás aí?", message_id="late1"), 600)
+    result = adapter.complete(adapter.ingest_event(event, deferred=True))
+    assert result["deferred"] is True
+    assert client.sent[-1]["reply_to"] == "late1"
+
+
+def test_live_dm_reply_is_not_quoted(tmp_path):
+    adapter, client = make_adapter(tmp_path)
+    adapter.handle_event(dm_event("olá", message_id="live1"))
+    assert client.sent[-1]["reply_to"] is None

@@ -1,0 +1,7 @@
+[Unit]
+Description=Scheduled shutdown of the GPU PC (skipped while in use)
+Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kaya-shutdown.sh

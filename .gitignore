@@ -192,3 +192,7 @@ reports/sim/
 # Rendered landing-page PNGs (~10MB a set). Regenerate with
 # scripts/render_landing_shots.py; the HTML is the source of truth.
 reports/landing/
+
+# The Pi gateway runtime state lives on the Pi, never in git.
+deploy/pi/data/
+data/kaya_last_active

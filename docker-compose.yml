@@ -178,7 +178,13 @@ services:
     container_name: kaya-prod
     profiles: [prod]
     restart: unless-stopped
-    depends_on: [waha]
+    # WAHA runs on the Pi once the edge has moved there (KAYA_EDGE=pi, see
+    # DEPLOYMENT.md), so the local one is optional rather than a dependency.
+    depends_on:
+      waha:
+        condition: service_started
+        required: false
+    networks: [default, llm]
     ports:
       - "7860:7860"
     environment:
@@ -202,12 +208,21 @@ services:
       - KAYA_WEB_PORT=7860
       - KAYA_ENV=prod
       - KAYA_VERSION=${KAYA_VERSION:-unknown}
-      # Prod serves generation from the llama.cpp gguf server (the `llama`
-      # service). Overrides config.yaml's hf default. Set to hf to roll back.
+      # gguf: the llama.cpp `llama` service, or the broker via KAYA_PROD_LLAMA_URL.
+      # ollama: Ollama inside the broker (the default since 2026-09-25, set in .env).
       - KAYA_INFERENCE_BACKEND=${KAYA_INFERENCE_BACKEND:-gguf}
-      - KAYA_WAHA_URL=http://waha:3000
+      # Empty falls through to config.yaml (http://llama:8080). Behind the GPU
+      # broker it is http://llm-broker:8080/upstream/kaya.
+      - KAYA_LLAMA_URL=${KAYA_PROD_LLAMA_URL:-}
+      # With KAYA_INFERENCE_BACKEND=ollama: the broker's Ollama upstream
+      # (http://llm-broker:8080/upstream/kaya). Empty falls through to config.yaml.
+      - KAYA_OLLAMA_URL=${KAYA_PROD_OLLAMA_URL:-}
+      # The local WAHA, or the Pi's (http://<pi>:3000) once the edge has moved.
+      - KAYA_WAHA_URL=${KAYA_PROD_WAHA_URL:-http://waha:3000}
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+      # Shared secret for POST /whatsapp/relay, which the Pi gateway calls.
+      - KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:-}
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
 
@@ -409,9 +424,11 @@ services:
   waha:
     image: devlikeapro/waha:latest
     container_name: kaya-waha
-    # In the [prod] profile too so it starts alongside kaya-prod (the live bridge);
+    # [waha-local] is the pre-Pi layout, where WAHA ran here beside kaya-prod;
+    # deploy_prod.sh starts it only with KAYA_EDGE=local. With the edge on the
+    # Pi a second WAHA on the same session would fight the Pi's for the login.
     # [whatsapp] is the on-demand dev variant pointing at kaya-whatsapp.
-    profiles: [whatsapp, prod]
+    profiles: [whatsapp, waha-local]
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"   # WAHA dashboard / REST — localhost only
@@ -531,3 +548,9 @@ services:
     # pytest cannot write .pytest_cache there.
     command: python -m pytest tests/ -v -p no:cacheprovider
 
+networks:
+  # The GPU broker's network (~/llm-broker). External, so this project never
+  # owns or removes it; deploy_prod.sh creates it when missing.
+  llm:
+    name: llm
+    external: true

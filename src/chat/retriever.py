@@ -136,6 +136,9 @@ config = load_config(str(CONFIG_PATH))
 RAG_CONFIG = config['rag']
 VECTOR_DB = RAG_CONFIG['vector_db']
 EMBEDDING_MODEL = RAG_CONFIG['embedding_model']
+# None lets sentence-transformers pick (CUDA when present). "cpu" keeps the
+# embedder off the GPU entirely, so an idle bot holds no VRAM for it.
+EMBEDDING_DEVICE = RAG_CONFIG.get('embedding_device') or None
 TOP_K = RAG_CONFIG['top_k']
 FILTER_BY_PERSON = RAG_CONFIG['filter_by_person']
 
@@ -238,7 +241,8 @@ class ConversationRetriever:
                   f"({self.documents_collection.count()} chunks)")
 
         # Load embedding model (GTE requires trust_remote_code)
-        self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
+        self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True,
+                                           device=EMBEDDING_DEVICE)
 
         conv_count = self.collection.count()
         if conv_count == 0:

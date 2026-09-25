@@ -250,6 +250,29 @@ inference:
     # without disturbing what prod resolves.
     server_url: "http://llama:8080"
     timeout: 180
+  # Ollama (backend: ollama). The serving runtime since 2026-09-25: llama.cpp
+  # rebuilds Gemma 4's sliding-window cache on every cache hit (~1.2 s, twice per
+  # turn) and Ollama does not, so a turn went 9.5 s -> 4.6 s at equal quality
+  # (reports/benchmarks/runtime_20260924T232255Z.md). The LIBRARY q8_0 model, not
+  # our Q6_K file: an imported GGUF with a separate mmproj loses vision.
+  # KAYA_OLLAMA_URL / KAYA_OLLAMA_MODEL override these.
+  ollama:
+    server_url: "http://llm-broker:8080/upstream/kaya"
+    model: "gemma4:12b-it-q8_0"
+    num_ctx: 32768
+    # -1: never unload on Ollama's own timer; the broker decides when GPU1 is lent.
+    keep_alive: "-1"
+    timeout: 180
+  # The shared GPU broker (~/llm-broker). Only used when the serving URL is a
+  # broker upstream URL (…/upstream/<model>), e.g. KAYA_OLLAMA_URL on kaya-prod.
+  broker:
+    # Models that borrow GPU1 while Kaya is idle. Unloaded explicitly before
+    # Kaya's GPU work, because llama-swap waits for their in-flight requests.
+    evict_before_use: ["big", "qwen-impl-g1"]
+    load_timeout: 300
+    # Written on every GPU turn; the broker's llm-use-g1/llm-use-big read it and
+    # lend GPU1 only after Kaya has been quiet for a while.
+    activity_file: "data/kaya_last_active"
   max_new_tokens: 768  # Elaboration ceiling — used when a question explicitly asks for detail
   max_new_tokens_default: 256  # Chatty default; replies stay short unless detail is requested
   temperature: 0.8             # chat default; chosen by scripts/temperature_sweep.py (v15: AVG 4.6 vs 4.4-4.47)
@@ -490,6 +513,11 @@ chat:
     whisper_device: "cuda"
     whisper_compute: "int8_float16"
     language: "pt"
+    # Free Whisper's VRAM after this many minutes without a voice note (0 keeps
+    # it loaded). It reloads on the next one, which costs that voice note the
+    # load time. whisper_preload loads it at boot, which pins it from the start.
+    whisper_idle_unload_minutes: 30
+    whisper_preload: false
 
   # Reading inbound photos. The serving model is multimodal, so this needs no
   # second model — only --mmproj on the llama service. A described photo becomes
@@ -611,6 +639,14 @@ whatsapp:
   # (whatsapp_adapter), and `exclude_from` moves earlier, so retrieval stops
   # re-injecting chunks that are now held verbatim.
   history_turns: 60
+  # The Pi gateway (src/gateway) journals every event and forwards it here, in
+  # order, through POST /whatsapp/relay (token: env KAYA_RELAY_TOKEN).
+  relay:
+    state_file: "data/relay_state.json"
+  # A message the gateway flagged as addressed to the bot while this PC was off is
+  # answered on return, quoting the original, if it is younger than this.
+  deferred_reply:
+    max_age_hours: 12
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"
   prefs_dir: "data/whatsapp_prefs"
@@ -762,6 +798,11 @@ rag:
   always_on: true  # Retrieve context for every message, not just detected questions
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
+  # null lets sentence-transformers choose (CUDA when present, ~2.2 GB on the
+  # serving card for as long as the app runs). "cpu" frees that for the broker
+  # at the cost of slower encoding; see reports/benchmarks/runtime_* for the
+  # measured query and ingest times before changing it.
+  embedding_device: null
   chunk_size_tokens: 300
   chunk_overlap_tokens: 50
   top_k: 10
@@ -1171,3 +1212,21 @@ model_profiles:
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
       max_steps: 450
+
+# ── PC power schedule ──────────────────────────────────────────────────────────
+# One source of truth for three consumers: the PC's shutdown timer
+# (deploy/power), the Pi's Wake-on-LAN timer, and the gateway's offline reply
+# ("volto às 07:00"). Generate the systemd OnCalendar lines with
+# `python -m src.gateway.schedule oncalendar-shutdown`, never by hand.
+power:
+  timezone: "Europe/Lisbon"
+  wake_time: "07:00"
+  wol_lead_minutes: 5
+  shutdown:
+    sun: "23:00"
+    mon: "23:00"
+    tue: "23:00"
+    wed: "23:00"
+    thu: "23:00"
+    fri: "02:00"
+    sat: "02:00"

@@ -8,11 +8,14 @@ in whatever medium that chat prefers.
 faster-whisper (CTranslate2) rather than openai-whisper: ~4x the throughput on
 NVIDIA at int8, and measured here at ~24x realtime on real group voice notes.
 
-The model loads lazily and once — most messages are text, and holding ~1.5GB of
-VRAM for a capability that may never be used in a session is wasteful.
+The model loads lazily — most messages are text, and holding ~1.5GB of VRAM for
+a capability that may never be used in a session is wasteful. It is also freed
+again after ``chat.audio.whisper_idle_unload_minutes`` without a voice note, so an
+idle bot leaves its card to whatever else the broker wants to run there.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import tempfile
 import threading
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _model = None
 _model_lock = threading.Lock()
+_unload_timer: Optional[threading.Timer] = None
 
 # WhatsApp voice notes are opus; the others appear when someone forwards a file.
 _EXT = {
@@ -59,6 +63,31 @@ def _load(config: Dict[str, Any]):
     return _model
 
 
+def unload() -> None:
+    """Drop the model so CTranslate2 releases its VRAM. Reloaded on next use."""
+    global _model
+    with _model_lock:
+        if _model is None:
+            return
+        _model = None
+    gc.collect()
+    logger.info("Whisper unloaded after idling")
+
+
+def _schedule_unload(config: Dict[str, Any]) -> None:
+    """(Re)start the idle timer; 0 or less keeps the model loaded forever."""
+    global _unload_timer
+    acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
+    minutes = float(acfg.get("whisper_idle_unload_minutes", 0) or 0)
+    if minutes <= 0:
+        return
+    if _unload_timer is not None:
+        _unload_timer.cancel()
+    _unload_timer = threading.Timer(minutes * 60, unload)
+    _unload_timer.daemon = True
+    _unload_timer.start()
+
+
 def transcribe_file(path: str, config: Dict[str, Any]) -> Optional[str]:
     """Transcribe a local audio file. None on failure; never raises."""
     acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
@@ -71,6 +100,7 @@ def transcribe_file(path: str, config: Dict[str, Any]) -> Optional[str]:
             beam_size=1,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
+        _schedule_unload(config)
         return text or None
     except Exception as exc:  # noqa: BLE001 — a failed transcript must not drop the message
         logger.warning("Transcription failed for %s: %s", path, exc)

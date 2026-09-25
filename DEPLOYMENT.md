@@ -73,6 +73,99 @@ so the landing page stays public.
 
 ---
 
+## The Pi edge and the GPU broker (2026-09-24)
+
+The PC is no longer always on: it runs from 07:00 and shuts down at 23:00 (02:00
+after Friday and Saturday nights), per `config.yaml` → `power`. Everything that
+must be up all the time moved to the Raspberry Pi, and every LLM on the PC now
+loads through one broker instead of holding a GPU permanently.
+
+```
+                         internet
+                            │  https://sigmakayachat.pt
+                            ▼
+   ┌──────────── Raspberry Pi 5 (192.168.1.238, always on) ─────────────┐
+   │ cloudflared ──▶ gateway :8080   /  (landing)   /status             │
+   │      │                                                              │
+   │      └──(path ^/app)──────────────────────────────┐                │
+   │ WAHA :3000 ──▶ gateway :8088 journal (SQLite, media, 7 days)       │
+   │                    │ forwarder, in order, retried                  │
+   └────────────────────┼───────────────────────────────┼───────────────┘
+                        ▼ POST /whatsapp/relay           ▼ /app (Gradio)
+   ┌──────────── GPU PC (192.168.1.149, 07:00-23:00/02:00) ─────────────┐
+   │ kaya-prod :7860 ─ KAYA_OLLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
+   │   replies ──▶ WAHA on the Pi         ├─ kaya (Ollama) GPU1, priority│
+   │                                      ├─ qwen-impl   GPU0            │
+   │                                      ├─ qwen-impl-g1 GPU1 (Kaya idle)│
+   │                                      └─ big         both (runs alone)│
+   └──────────────────────────────────────────────────────────────────────┘
+```
+
+- **Pi**: see `deploy/pi/README.md`. Deploy with `scripts/deploy_pi.sh`.
+- **Broker**: `~/llm-broker` (its own repo, machine infrastructure, README there).
+  Kaya's model loads on the first request after being evicted; nothing unloads it
+  on a timer, so the only cold start is after something else borrowed GPU1.
+- **Power**: see `deploy/power/README.md`. `sudo deploy/power/install.sh` on the
+  PC; the Pi's Wake-on-LAN timer is installed by `deploy_pi.sh`.
+
+Two settings in `~/kaya-prod/.env` choose the layout, read by `deploy_prod.sh`
+and `app_up.sh`:
+
+| Variable | Old layout | New layout |
+|---|---|---|
+| `KAYA_EDGE` | `local` (WAHA on the PC) | `pi` (WAHA on the Pi) |
+| `KAYA_TUNNEL` | follows `KAYA_EDGE` | `pi` once the Cloudflare rules point at LAN IPs; `local` until then |
+| `KAYA_INFERENCE_BACKEND` | `gguf` | `ollama` (see CLAUDE.md, "Kaya runs on Ollama") |
+| `KAYA_PROD_OLLAMA_URL` | unused | `http://llm-broker:8080/upstream/kaya` |
+| `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused; rollback: `.../upstream/kaya-llamacpp` with backend `gguf` |
+| `KAYA_PROD_WAHA_URL` | empty (`http://waha:3000`) | `http://192.168.1.238:3000` |
+| `KAYA_RELAY_TOKEN` | unused | shared secret with the Pi gateway |
+
+### Cloudflare ingress (Zero Trust → Networks → Tunnels → the tunnel → Public Hostnames)
+
+| Hostname | Path | Service |
+|---|---|---|
+| `sigmakayachat.pt` | `^/app` | `http://192.168.1.149:7860` |
+| `sigmakayachat.pt` | *(empty)* | `http://kaya-gateway:8080` |
+| `dev.sigmakayachat.pt` | *(empty)* | `http://192.168.1.149:7861` |
+
+Order matters: the `^/app` rule must be above the catch-all. Rules point at LAN
+IPs, never at PC compose names, because the connector now runs on the Pi.
+`/whatsapp/*` on the PC is deliberately **not** published any more: WAHA reaches
+the gateway on the Pi's own compose network, and the relay is LAN-only.
+
+### Cutover runbook (done once; kept for rollback and for a rebuild)
+
+1. **Relay-capable prod.** Deploy the branch with `KAYA_EDGE=local` and a
+   `KAYA_RELAY_TOKEN` in `~/kaya-prod/.env`. Nothing changes behaviourally.
+2. **Broker.** `docker network create llm`, `cd ~/llm-broker && docker compose up -d`,
+   set `KAYA_INFERENCE_BACKEND=ollama` and `KAYA_PROD_OLLAMA_URL` in
+   `~/kaya-prod/.env`, redeploy (this removes `kaya-llama`), and send the bot a
+   message and a photo.
+3. **Pi gateway, alone.** `scripts/deploy_pi.sh --init-env` (profiles empty).
+4. **Tunnel on LAN IPs first.** Change every existing ingress rule to
+   `http://192.168.1.149:<port>`, which both connectors can reach. Then set
+   `COMPOSE_PROFILES=tunnel` on the Pi, deploy, and `docker rm -f
+   kaya-cloudflared` on the PC.
+5. **Split the hostname.** Add the `^/app` rule and point the catch-all at
+   `http://kaya-gateway:8080` (only the Pi connector remains, so this is safe).
+6. **Move WAHA** (the only step that can cost a QR re-scan):
+   1. `docker rm -f kaya-waha` on the PC.
+   2. `sudo rsync -a ~/kaya-prod/data/waha/ pi5.local:kaya-gateway/deploy/pi/data/waha/`.
+   3. `COMPOSE_PROFILES=tunnel,waha` on the Pi, deploy.
+   4. `KAYA_EDGE=pi` and `KAYA_PROD_WAHA_URL` in `~/kaya-prod/.env`, `scripts/deploy_prod.sh`.
+   5. Check `pi5 gateway`: the session is WORKING and events are arriving.
+7. **Power.** `sudo deploy/power/install.sh`, then the supervised WoL and RTC tests
+   in `deploy/power/README.md`.
+
+**Rollback**, from any step: restore the ingress rules above to
+`http://kaya-prod:7860` / `http://kaya-dev:7861`, set `COMPOSE_PROFILES=` on the
+Pi, copy `data/waha` back, set `KAYA_EDGE=local` and empty
+`KAYA_PROD_LLAMA_URL`/`KAYA_PROD_WAHA_URL`, and run `scripts/deploy_prod.sh`,
+which brings back WAHA, the tunnel and `kaya-llama` on the PC.
+
+---
+
 ## One-time setup
 
 ### 1. Cloudflare (outside the repo)

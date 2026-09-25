@@ -49,7 +49,7 @@ import torch
 
 from src.config_loader import load_config
 from src.chat.engine import build_system_prompt
-from src.chat.inference_backend import LlamaCppBackend, resolve_backend, resolve_llama_url
+from src.chat.inference_backend import InferenceBackend, build_backend, resolve_backend, resolve_llama_url
 import src.chat.engine as engine_module
 
 _NEEDLE = "NOTA IMPORTANTE: o código secreto do Rafa é 4827."
@@ -112,10 +112,10 @@ def _load_model_at_seq(config, seq_len: int):
     _free_model()
     model_dir = config["training"]["output_dir"]
 
-    if resolve_backend(config) == "gguf":
+    if resolve_backend(config) in ("gguf", "ollama"):
         from transformers import AutoTokenizer
 
-        _log(f"  backend=gguf — tokenizer only from {model_dir} "
+        _log(f"  backend={resolve_backend(config)} — tokenizer only from {model_dir} "
              f"(generation via {resolve_llama_url(config)})")
         return None, AutoTokenizer.from_pretrained(model_dir)
 
@@ -190,7 +190,7 @@ def _build_prompt_with_needle(
     return inputs, actual_tokens, needle_position
 
 
-def _gguf_generate(backend: LlamaCppBackend, messages: list, max_new_tokens: int = 64):
+def _gguf_generate(backend: InferenceBackend, messages: list, max_new_tokens: int = 64):
     """Greedy generate against the llama.cpp server; (answer, elapsed_s, vram_gb).
 
     temperature=0 matches the hf path's do_sample=False, so the two backends are
@@ -237,7 +237,7 @@ def sweep_seq_length(
     seq_len: int,
     target_fractions: List[float],
     depths: List[float],
-    backend: LlamaCppBackend = None,
+    backend: InferenceBackend = None,
 ) -> List[dict]:
     """Sweep one window. ``backend`` non-None selects the gguf (HTTP) path."""
     rows = []
@@ -355,17 +355,13 @@ def main() -> None:
     system_prompt = build_system_prompt(config, config_path, include_uncensored=False)
 
     all_rows: List[dict] = []
-    is_gguf = resolve_backend(config) == "gguf"
+    is_gguf = resolve_backend(config) in ("gguf", "ollama")
 
     if is_gguf:
         # One server, one tokenizer: the window is fixed by the server's -c, so
         # there is nothing to reload between seq lengths.
         model, tokenizer = _load_model_at_seq(config, args.seq_lengths[0])
-        backend = LlamaCppBackend(
-            tokenizer,
-            resolve_llama_url(config),
-            timeout=config.get("inference", {}).get("gguf", {}).get("timeout", 180.0),
-        )
+        backend = build_backend(config, None, tokenizer)
         for seq_len in args.seq_lengths:
             _log(f"\n=== target window = {seq_len} ===")
             all_rows.extend(sweep_seq_length(

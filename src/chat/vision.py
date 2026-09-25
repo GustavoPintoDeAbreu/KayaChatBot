@@ -70,8 +70,15 @@ def is_available(config: Dict[str, Any]) -> bool:
 
 
 def _server_url(config: Dict[str, Any]) -> str:
-    gguf = ((config.get("inference", {}) or {}).get("gguf", {}) or {})
-    return os.environ.get("KAYA_LLAMA_URL") or gguf.get("server_url", "http://llama:8080")
+    from src.chat.inference_backend import resolve_server_url
+
+    return resolve_server_url(config)
+
+
+def _chat_fields(config: Dict[str, Any]) -> Dict[str, Any]:
+    from src.chat.inference_backend import openai_chat_fields
+
+    return openai_chat_fields(config)
 
 
 def flatten_animation(image: bytes, mimetype: str) -> tuple:
@@ -125,9 +132,9 @@ def describe_bytes(image: bytes, config: Dict[str, Any],
                 ]}],
                 "max_tokens": int(vcfg.get("max_tokens", 160)),
                 "temperature": 0.2,
-                # Without this Gemma-4 emits its thinking channel and the answer
+                # Without these Gemma-4 emits its thinking channel and the answer
                 # lands in reasoning_content with content left empty.
-                "chat_template_kwargs": {"enable_thinking": False},
+                **_chat_fields(config),
             },
             timeout=float(vcfg.get("timeout", 120)),
         )

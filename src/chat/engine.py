@@ -23,6 +23,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.chat import router, sources, variety
+from src.chat.inference_backend import LlamaCppBackend, OllamaBackend, ensure_model_loaded
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
     build_member_prompt_suffix,
@@ -216,10 +217,10 @@ def _load_model(config: Dict[str, Any]):
     # sidecar; this process only needs the tokenizer (for chat templating).
     from src.chat.inference_backend import resolve_backend
 
-    if resolve_backend(config) == "gguf":
+    if resolve_backend(config) in ("gguf", "ollama"):
         from transformers import AutoTokenizer
 
-        print(f"Backend=gguf — loading tokenizer only from {model_dir} (generation via llama.cpp) …")
+        print(f"Backend={resolve_backend(config)} — loading tokenizer only from {model_dir} …")
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         print("✓ Tokenizer loaded")
         return None, tokenizer
@@ -440,6 +441,10 @@ class KayaEngine:
             and (self.config.get("chat", {}) or {}).get("reasoning", {}).get("enabled", True)
         )
 
+        # Outside the lock: a cold load behind the broker takes seconds, and the
+        # lock's acquire timeout is what everything else waits on.
+        if isinstance(self.backend, (LlamaCppBackend, OllamaBackend)):
+            ensure_model_loaded(self.config)
         with gpu_section(self.config):
             # 1. What kind of message is this? Inside the lock, so the whole turn
             #    costs one acquisition. Never raises; falls back to `factual`.
