@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Metrics:** this project's activity and health show up on the labwatch dashboard
+(http://192.168.1.238:8095, product card + Projects page). To add or change a metric,
+see `~/Desktop/telemetry/CLAUDE.md` (repo `GustavoPintoDeAbreu/labwatch`).
+
 ## Project Purpose
 
 KayaChatBot is a private AI assistant for the "Kaya" Portuguese friend group. It maintains long-term memory of group facts and events derived from WhatsApp history and answers in **European Portuguese or English**. It is **not** a group member — it is a bot with access to the group's collective memory.
