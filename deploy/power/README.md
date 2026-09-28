@@ -13,9 +13,9 @@ that block, never edited by hand:
 
 After changing `power:` in `config.yaml`, rerun both of those.
 
-## The shutdown skips the night when the PC is in use
+## The shutdown is postponed while the PC is in use
 
-`kaya-shutdown.sh` does nothing tonight if any of these hold:
+The PC counts as in use when any of these hold:
 
 - `~/.stay-on` exists (`touch ~/.stay-on` to keep the PC up, `rm` it to resume);
 - the keyboard or mouse was used in the last 15 minutes (GNOME's idle monitor);
@@ -24,10 +24,16 @@ After changing `power:` in `config.yaml`, rerun both of those.
   running;
 - a GPU is at 30% utilisation or more on two readings 5 s apart.
 
-Otherwise it:
+While it is, `kaya-shutdown.sh` checks again every 15 minutes and shuts down at
+the first check that finds it idle. Retries stop 1 hour before the next wake, so
+a PC that is busy all night stays on rather than going down at 06:30. `~/.stay-on`
+therefore still keeps it up the whole night. `POWER_RETRY_MINUTES` and
+`POWER_STOP_BEFORE_WAKE_MINUTES` in `/etc/kaya-power.env` change both.
 
-1. Shows a desktop notification and waits 2 minutes. Moving the mouse cancels
-   tonight's shutdown.
+Once the PC is idle, it:
+
+1. Shows a desktop notification and waits 2 minutes. Moving the mouse postpones
+   the shutdown to the next check.
 2. Waits for WhatsApp replies already accepted by the bot (up to 10 min).
 3. Tells the Pi gateway it is going down, so the offline reply starts at once
    rather than after the 90 s grace.
@@ -39,7 +45,9 @@ after the reboot, so the stack would not come back at 07:00. A stop started by t
 daemon during poweroff does come back, and so does `restart: unless-stopped`.
 
 Every decision is in the journal: `journalctl -u kaya-shutdown`. Dry run:
-`sudo /usr/local/sbin/kaya-shutdown.sh --dry-run`.
+`sudo /usr/local/sbin/kaya-shutdown.sh --dry-run` makes the same decisions without
+the notification or the poweroff. While the PC is in use it waits like the real
+run does; Ctrl-C stops it.
 
 ## Waking up
 

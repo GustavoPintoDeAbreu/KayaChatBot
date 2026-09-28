@@ -4,9 +4,11 @@
 #
 #   kaya-shutdown.sh [--dry-run]
 #
-# The night is SKIPPED, not postponed, when anything says the PC is in use:
-# that was the decision, because a PC someone is using at 23:00 is usually still
-# in use at 23:30. Transient work (a WhatsApp reply being generated) is waited out.
+# While anything says the PC is in use, the shutdown is POSTPONED: checked again
+# every POWER_RETRY_MINUTES until the PC is idle, then carried out. Retries stop
+# POWER_STOP_BEFORE_WAKE_MINUTES before the next wake, so a PC busy all night
+# stays on rather than going down in the morning. Transient work (a WhatsApp
+# reply being generated) is waited out.
 #
 # The shutdown is a plain `systemctl poweroff`. Never `docker stop` first: an
 # explicitly stopped container stays stopped after the reboot, which is how the
@@ -28,8 +30,11 @@ GATEWAY_URL="${POWER_GATEWAY_URL:-}"
 RELAY_TOKEN="${KAYA_RELAY_TOKEN:-}"
 SCHEDULE_PY="${POWER_PYTHON:-python3}"
 SCHEDULE_REPO="${POWER_REPO:-$USER_HOME/kaya-prod}"
+RETRY_MINUTES="${POWER_RETRY_MINUTES:-15}"
+STOP_BEFORE_WAKE_MINUTES="${POWER_STOP_BEFORE_WAKE_MINUTES:-60}"
 
 say() { echo "[kaya-shutdown] $*"; }
+hhmm() { date -d "@$1" +%H:%M; }
 
 as_user() {
   sudo -u "$USER_NAME" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
@@ -64,6 +69,23 @@ busy_reason() {
   fi
 }
 
+# Returns once the PC is idle. Exits when it is still busy at the last retry, or
+# at once when there is no deadline (the next wake time could not be read).
+wait_until_idle() {
+  local reason next
+  while reason="$(busy_reason)"; [ -n "$reason" ]; do
+    next=$(( $(date +%s) + RETRY_MINUTES * 60 ))
+    if [ -z "$deadline" ]; then
+      say "skipping tonight's shutdown: $reason"; exit 0
+    fi
+    if [ "$next" -gt "$deadline" ]; then
+      say "giving up tonight: $reason (retries stop at $(hhmm "$deadline"))"; exit 0
+    fi
+    say "postponing: $reason; next check at $(hhmm "$next")"
+    sleep $((RETRY_MINUTES * 60))
+  done
+}
+
 # Replies already accepted by the bot are finished rather than dropped.
 wait_for_replies() {
   [ -n "$RELAY_TOKEN" ] || return 0
@@ -88,26 +110,30 @@ if [ -n "$next_kernel" ] && ! find "/lib/modules/$next_kernel" -name 'nvidia.ko*
   exit 0
 fi
 
-reason="$(busy_reason)"
-if [ -n "$reason" ]; then
-  say "skipping tonight's shutdown: $reason"
-  exit 0
+# The wake this shutdown precedes: it sets the retry deadline and the RTC alarm.
+wake_epoch="$(cd "$SCHEDULE_REPO" && "$SCHEDULE_PY" -m src.gateway.schedule --config config.yaml next-wake-epoch 2>/dev/null)"
+deadline=""
+if [[ "$wake_epoch" =~ ^[0-9]+$ ]]; then
+  deadline=$((wake_epoch - STOP_BEFORE_WAKE_MINUTES * 60))
+else
+  wake_epoch=""
+  say "could not read the next wake time: one check, no retries"
 fi
 
-if [ "$DRY_RUN" = 1 ]; then
-  say "dry run: the PC is idle and would shut down now"
-  exit 0
-fi
-
-as_user notify-send -u critical "O PC vai desligar-se" \
-  "Desliga-se dentro de $((WARN_SECONDS / 60)) minutos (horário). Mexe no rato para cancelar esta noite." \
-  2>/dev/null || true
-sleep "$WARN_SECONDS"
-reason="$(busy_reason)"
-if [ -n "$reason" ]; then
-  say "cancelled during the warning: $reason"
-  exit 0
-fi
+while true; do
+  wait_until_idle
+  if [ "$DRY_RUN" = 1 ]; then
+    say "dry run: the PC is idle and would shut down now"
+    exit 0
+  fi
+  as_user notify-send -u critical "O PC vai desligar-se" \
+    "Desliga-se dentro de $((WARN_SECONDS / 60)) minutos (horário). Mexe no rato para adiar." \
+    2>/dev/null || true
+  sleep "$WARN_SECONDS"
+  reason="$(busy_reason)"
+  [ -z "$reason" ] && break
+  say "postponed during the warning: $reason"
+done
 
 wait_for_replies
 
@@ -118,7 +144,6 @@ if [ -n "$GATEWAY_URL" ]; then
 fi
 
 # Backup wake: the RTC alarm, in case the Pi's Wake-on-LAN packet is missed.
-wake_epoch="$(cd "$SCHEDULE_REPO" && "$SCHEDULE_PY" -m src.gateway.schedule --config config.yaml next-wake-epoch 2>/dev/null)"
 if [ -n "$wake_epoch" ]; then
   rtcwake -m no -t "$wake_epoch" >/dev/null 2>&1 \
     && say "RTC alarm set for $(date -d "@$wake_epoch")" \
