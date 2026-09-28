@@ -422,6 +422,7 @@ class WhatsAppAdapter:
         ingest_document: Optional[Callable[["InboundMessage"], Optional[str]]] = None,
         summary_writer: Any = None,
         sender_resolver: Any = None,
+        reply_ledger: Any = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -563,6 +564,10 @@ class WhatsAppAdapter:
         # verbatim window. Injected like tts_synthesize so the adapter needs no
         # model import and tests can run without one.
         self.summary_writer = summary_writer
+        # Every reply the bot sends, with the mode that produced it and what was
+        # later decided about it (src/chat/reply_review.py). The summary and the
+        # ingester read it so a roast never comes back as a fact.
+        self.reply_ledger = reply_ledger
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self.tts_synthesize = tts_synthesize
         # What a reply sounds like is not what it looks like: emoji, markdown and
@@ -1010,6 +1015,10 @@ class WhatsAppAdapter:
                 recent_turns=list(recent),
                 path=feedback.bug_log_path(self.config),
             )
+            # A bug report is the plainest verdict there is on what the bot just
+            # said: none of those replies should reach the summary or memory.
+            if self.reply_ledger is not None:
+                self.reply_ledger.mark_bug_report(msg.chat_id, list(recent))
         else:
             feedback.log_note(
                 source="whatsapp", text=body, contact=speaker,
@@ -1186,6 +1195,11 @@ class WhatsAppAdapter:
                 reply_to_id=msg.reply_to_id,
                 reply_to_text=truncate_history_line(
                     msg.quoted_text.strip(), self.quoted_max_words),
+                # The bot's own words are not the group's. The ingester keeps a
+                # quoted reply of the bot's only when the ledger says it was
+                # neither a joke nor judged bad.
+                reply_to_bot=bool(msg.quoted_text.strip())
+                and self._name_for_jid(msg.quoted_sender) == "Kaya Bot",
                 # Who actually sent it, not just what they are currently called.
                 sender_id=msg.sender_id,
                 sender_phone=msg.sender_phone,
@@ -1334,6 +1348,8 @@ class WhatsAppAdapter:
         # Only the bot's side is persisted here — the asker's line went in above,
         # with every other message the bot saw, before the reply gate.
         self.session_store.append(msg.chat_id, f"Kaya Bot: {reply}")
+        if self.reply_ledger is not None:
+            self.reply_ledger.record(msg.chat_id, reply, getattr(route, "mode", "") or "")
 
         # Quote the asker's message in groups so it's clear who the bot answers,
         # and always for a late answer, which would otherwise arrive hours after

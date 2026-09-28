@@ -166,7 +166,7 @@ def main() -> None:
             continue
         history = [f"{line[1]}: {line[2]}" for line in timeline[:index]
                    if line[2]][-args.history_lines:]
-        route = router.classify(backend, config, text, history)
+        route = router.classify(backend, config, text, history, speaker=who)
         if retriever is not None:
             named = retriever.named_members(f"{text} {route.query}")
             if named:

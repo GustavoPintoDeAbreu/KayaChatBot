@@ -183,6 +183,14 @@ class ConversationRetriever:
         self.documents_collection = None
         self.encoder = None
 
+        # Aliases that are also ordinary words: Daniel is "caramelo", and "sundaes
+        # de morango e caramelo" made him the subject of a turn about ice cream.
+        # These count only when written as a name (capitalised, or @-mentioned).
+        self._ambiguous_aliases = {
+            str(alias).lower()
+            for alias in ((config.get('rag', {}) or {}).get('ambiguous_aliases') or [])
+        }
+
         # Load group members from JSON file (single source of truth)
         members_file = config.get('data', {}).get('group_members_file')
         if members_file and Path(members_file).exists():
@@ -255,16 +263,23 @@ class ConversationRetriever:
 
     def extract_query_persons(self, query: str) -> List[str]:
         """Extract person names mentioned in the query."""
-        query_lower = query.lower()
         mentioned = []
 
         # Word-boundary match so short aliases (e.g. "gil", "rafa", "pedro")
         # don't fire inside unrelated words ("ágil", "garrafa", ...).
         for member in self.group_members:
-            if re.search(rf"\b{re.escape(member)}\b", query_lower):
+            if self._alias_in(member, query or ""):
                 mentioned.append(member)
 
         return mentioned
+
+    def _alias_in(self, alias: str, text: str) -> bool:
+        """Whether ``alias`` (lower-case) names somebody in ``text``."""
+        pattern = re.escape(alias)
+        if alias in self._ambiguous_aliases:
+            return bool(re.search(rf"\b{re.escape(alias.capitalize())}\b", text)
+                        or re.search(rf"@{pattern}\b", text, re.IGNORECASE))
+        return bool(re.search(rf"\b{pattern}\b", text.lower()))
 
     def named_members(self, text: str) -> List[str]:
         """Canonical member names appearing in ``text``, deduplicated.
@@ -274,14 +289,13 @@ class ConversationRetriever:
         Counting who a turn is about needs the canonical name instead, so "gilão"
         and "gil" are one person rather than two.
         """
-        lowered = (text or "").lower()
         found = []
         for member in self._members_data:
             name = member.get("name")
             if not name:
                 continue
             aliases = {name.lower(), *(a.lower() for a in member.get("aliases", []))}
-            if any(re.search(rf"\b{re.escape(alias)}\b", lowered) for alias in aliases):
+            if any(self._alias_in(alias, text or "") for alias in aliases):
                 found.append(name)
         return found
 

@@ -143,6 +143,7 @@ class MessageLog:
         reply_to_text: str = "",
         sender_id: str = "",
         sender_phone: str = "",
+        reply_to_bot: bool = False,
     ) -> bool:
         """Log one message. Returns False if it was already logged this process.
 
@@ -170,10 +171,12 @@ class MessageLog:
                 return False
             self._seen.add(uid)
             return self._write(uid, chat_id, sender, text, timestamp, scope,
-                               reply_to_id, reply_to_text, sender_id, sender_phone)
+                               reply_to_id, reply_to_text, sender_id, sender_phone,
+                               reply_to_bot)
 
     def _write(self, uid, chat_id, sender, text, timestamp, scope,
-               reply_to_id, reply_to_text, sender_id, sender_phone) -> bool:
+               reply_to_id, reply_to_text, sender_id, sender_phone,
+               reply_to_bot=False) -> bool:
         """Serialise and append one record. Callers must hold ``_append_lock``."""
 
         record = {
@@ -191,6 +194,8 @@ class MessageLog:
         if reply_to_id or reply_to_text:
             record["reply_to_id"] = reply_to_id
             record["reply_to_text"] = reply_to_text
+            if reply_to_bot:
+                record["reply_to_bot"] = True
         try:
             path = self.path_for(scope)
             path.parent.mkdir(parents=True, exist_ok=True)

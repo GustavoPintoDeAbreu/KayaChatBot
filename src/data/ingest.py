@@ -25,7 +25,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.data.message_log import MessageLog, message_uid
 
@@ -119,6 +119,7 @@ def build_chunks(
     max_chars: int = 1800,
     settle_seconds: int = 0,
     now: Optional[int] = None,
+    keep_bot_quote: Optional[Callable[[Dict[str, Any]], bool]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Group consecutive messages into retrievable chunks.
 
@@ -140,6 +141,12 @@ def build_chunks(
     the watermark stops short of them, and the next run picks them up and builds a
     full chunk. ``settle_seconds=0`` keeps the old flush-everything behaviour, for
     the one-shot CLI path where nothing will come later.
+
+    ``keep_bot_quote`` decides whether a reply to the BOT carries the bot's
+    words into memory. The bot's messages are never in the log themselves, so
+    the quote is the only way they get in, and on 2026-09-28 that was how its
+    roasts were becoming "what the group said". Refused, the line keeps the
+    member's side and says only that it answered the bot.
     """
     chunks: List[Dict[str, Any]] = []
     current: List[Dict[str, Any]] = []
@@ -166,7 +173,10 @@ def build_chunks(
                 message_uid(m.get("chat_id", ""), m["reply_to_id"])
                 if m.get("reply_to_id") else ""
             )
-            if quoted and parent_uid not in chunk_ids:
+            if (quoted and m.get("reply_to_bot") and keep_bot_quote is not None
+                    and not keep_bot_quote(m)):
+                lines.append(f"{sender} (a responder ao bot): {text}")
+            elif quoted and parent_uid not in chunk_ids:
                 lines.append(f'{sender} (a responder a "{quoted}"): {text}')
             else:
                 lines.append(f"{sender}: {text}")
@@ -272,6 +282,25 @@ class Ingester:
             )
         return self._collection
 
+    def _bot_quote_filter(self) -> Callable[[Dict[str, Any]], bool]:
+        """Keep a quote of the bot only when its ledger entry allows it.
+
+        One read of each chat's ledger per pass, not one per message.
+        """
+        from src.chat.reply_review import ReplyLedger, keep_quote, reply_key
+
+        ledger = ReplyLedger((self.config.get("whatsapp", {}) or {}).get(
+            "replies_dir", "data/whatsapp_replies"))
+        cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        def keep(message: Dict[str, Any]) -> bool:
+            chat_id = message.get("chat_id", "")
+            if chat_id not in cache:
+                cache[chat_id] = ledger.entries(chat_id)
+            return keep_quote(cache[chat_id].get(reply_key(message.get("reply_to_text", ""))))
+
+        return keep
+
     # ── the work ─────────────────────────────────────────────────────────────
     def ingest_scope(self, scope: str) -> Dict[str, Any]:
         """Ingest everything logged for one scope since its watermark."""
@@ -281,7 +310,8 @@ class Ingester:
             return {"scope": scope, "messages": 0, "chunks": 0, "since": since}
 
         chunks, consumed_through = build_chunks(
-            messages, scope, settle_seconds=self.settle_seconds)
+            messages, scope, settle_seconds=self.settle_seconds,
+            keep_bot_quote=self._bot_quote_filter())
         if chunks:
             texts = [c["text"] for c in chunks]
             # Serialised against generation. This used to run unsynchronised on

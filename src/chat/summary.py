@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.chat import reply_review
 from src.chat.memory import _safe_key
 
 # European Portuguese, because that is what the group speaks and what the summary
@@ -47,6 +48,9 @@ _SYSTEM = (
     "Guarda o que interessa a longo prazo: decisões tomadas, planos, quem disse ou "
     "combinou o quê, factos sobre as pessoas, e assuntos por resolver. "
     "Ignora conversa fiada, cumprimentos e piadas sem consequência. "
+    "As linhas do Kaya Bot são o próprio bot a falar: o que ele diz sobre alguém "
+    "nunca é um facto sobre essa pessoa, a não ser que um membro o confirme, e as "
+    "marcadas como piada nunca entram no resumo como factos. "
     "Não inventes nada que não esteja nas mensagens. Não comentes a tarefa, "
     "responde apenas com o resumo."
 )
@@ -150,7 +154,8 @@ class SummaryWriter:
     """
 
     def __init__(self, config: Dict[str, Any], backend: Any,
-                 store: Optional[ChatSummaryStore] = None):
+                 store: Optional[ChatSummaryStore] = None,
+                 ledger: Optional[reply_review.ReplyLedger] = None):
         self.config = config
         self.backend = backend
         cfg = ((config.get("chat", {}) or {}).get("summary", {}) or {})
@@ -159,6 +164,11 @@ class SummaryWriter:
         self.max_words = int(cfg.get("max_words", 150))
         self.max_new_tokens = int(cfg.get("max_new_tokens", 220))
         self.lock_timeout = float(cfg.get("lock_timeout_seconds", 5))
+        # The bot's own replies, and what has been decided about them. Without a
+        # ledger its lines reach the summary unfiltered, as they always did.
+        self.ledger = ledger
+        self.review_enabled = bool(cfg.get("review_replies", True))
+        self.review_limit = int(cfg.get("review_max_replies", 20))
         wcfg = config.get("whatsapp", {}) or {}
         self.store = store or ChatSummaryStore(
             wcfg.get("summaries_dir", "data/whatsapp_summaries"))
@@ -222,8 +232,19 @@ class SummaryWriter:
         if not new_lines:
             return
         previous = (state.get("summary") or "").strip()
-        prompt = (_UPDATE.format(previous=previous, new_lines="\n".join(new_lines))
-                  if previous else _FIRST.format(new_lines="\n".join(new_lines)))
+        if not self._review(chat_id, new_lines):
+            print(f"⏳ summary for {chat_id} deferred — GPU busy")
+            return
+        # Filtered for the prompt only. The marker below is taken from the
+        # unfiltered history, or a dropped line at the end would never be found
+        # again and every later update would re-read the whole window.
+        prompt_lines = self._prompt_lines(chat_id, new_lines)
+        if not prompt_lines:
+            if previous:
+                self.store.save(chat_id, previous, history)
+            return
+        prompt = (_UPDATE.format(previous=previous, new_lines="\n".join(prompt_lines))
+                  if previous else _FIRST.format(new_lines="\n".join(prompt_lines)))
         messages = [
             {"role": "system", "content": _SYSTEM.format(max_words=self.max_words)},
             {"role": "user", "content": prompt},
@@ -246,3 +267,62 @@ class SummaryWriter:
         if not summary:
             return
         self.store.save(chat_id, summary, history)
+
+    # ── the bot's own lines ──────────────────────────────────────────────────
+    def _prompt_lines(self, chat_id: str, lines: List[str]) -> List[str]:
+        """The lines the summary writer sees: bad replies out, jokes labelled."""
+        if self.ledger is None:
+            return list(lines)
+        entries = self.ledger.entries(chat_id)
+        kept = []
+        for line in lines:
+            entry = (entries.get(reply_review.reply_key(line))
+                     if line.startswith(reply_review.BOT_PREFIX) else None)
+            shown = reply_review.summary_line(line, entry)
+            if shown is not None:
+                kept.append(shown)
+        return kept
+
+    def _review(self, chat_id: str, lines: List[str]) -> bool:
+        """Judge the bot's unjudged replies on the local model. False = GPU busy.
+
+        Its own lock acquisition, not a share of the summary's: each generation
+        holds the lock only as long as it runs, and a reply waiting for it is
+        dropped rather than queued. Any other failure returns True, and the
+        summary goes ahead with the verdicts it already has.
+        """
+        if self.ledger is None or not self.review_enabled:
+            return True
+        from src.chat.gpu_lock import GpuBusyError, gpu_section
+
+        targets = reply_review.review_targets(lines, self.ledger, chat_id,
+                                              self.review_limit)
+        if not targets:
+            return True
+        messages = [
+            {"role": "system", "content": reply_review.REVIEW_SYSTEM},
+            {"role": "user",
+             "content": reply_review.build_review_prompt(lines, targets)},
+        ]
+        try:
+            with gpu_section(self.config, timeout=self.lock_timeout):
+                raw = self.backend.generate(
+                    messages,
+                    max_new_tokens=40 * len(targets),
+                    sampling={"temperature": 0.0, "top_p": 1.0, "top_k": 0,
+                              "repetition_penalty": 1.0},
+                )
+        except GpuBusyError:
+            return False
+        except Exception as exc:  # noqa: BLE001 — a review is never worth a summary
+            print(f"⚠️  reply review failed for {chat_id}: {exc}")
+            return True
+        verdicts = reply_review.parse_review(raw, len(targets))
+        for number, (verdict, reason) in verdicts.items():
+            self.ledger.mark(chat_id, lines[targets[number - 1]], verdict, reason,
+                             source="review")
+        set_aside = sum(1 for verdict, _ in verdicts.values()
+                        if verdict in reply_review.BAD_VERDICTS)
+        print(f"🧾 reviewed {len(verdicts)}/{len(targets)} bot replies in {chat_id}, "
+              f"{set_aside} set aside")
+        return True

@@ -339,11 +339,16 @@ def _ingest_document(msg):
     return documents.describe_for_log(report)
 
 
+from src.chat.reply_review import ReplyLedger
 from src.chat.summary import SummaryWriter
 
+# The bot's own replies and the verdicts on them, shared by the adapter (which
+# records them) and the summary writer (which judges and filters them).
+_reply_ledger = ReplyLedger((config.get("whatsapp", {}) or {}).get(
+    "replies_dir", "data/whatsapp_replies"))
 # Rolling per-chat summary of what has scrolled out of the verbatim window.
 # Shares the engine's backend, so no second model is loaded.
-_summary_writer = SummaryWriter(config, engine.backend)
+_summary_writer = SummaryWriter(config, engine.backend, ledger=_reply_ledger)
 
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
@@ -351,7 +356,8 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           describe_image=_describe,
                           ingest_document=_ingest_document,
                           summary_writer=_summary_writer,
-                          sender_resolver=_sender_resolver)
+                          sender_resolver=_sender_resolver,
+                          reply_ledger=_reply_ledger)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
