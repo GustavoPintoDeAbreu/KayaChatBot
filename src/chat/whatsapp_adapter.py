@@ -82,6 +82,11 @@ class InboundMessage:
     media_filename: str = ""
     # Filled in once a photo has been read by the vision model.
     image_description: str = ""
+    # A sticker arrives as image/webp, the same as a photo. `fileSha256` is the
+    # same for every copy of the same sticker, which is what lets it be read once.
+    is_sticker: bool = False
+    sticker_sha: str = ""
+    sticker_animated: bool = False
     # Addressed to the bot while this PC was off: the Pi gateway held it and
     # flagged it, and it is still young enough to be worth answering late.
     deferred: bool = False
@@ -158,6 +163,17 @@ def _baileys_text(message: Any) -> str:
             if found:
                 return found
     return ""
+
+
+def _sticker(data: Dict[str, Any]) -> tuple:
+    """``(is_sticker, sha, animated)`` from ``_data.message.stickerMessage``."""
+    message = data.get("message")
+    sticker = message.get("stickerMessage") if isinstance(message, dict) else None
+    if not isinstance(sticker, dict):
+        return False, "", False
+    sha = str(sticker.get("fileSha256") or "")
+    safe = sha.replace("/", "_").replace("+", "-").rstrip("=")
+    return True, safe, bool(sticker.get("isAnimated"))
 
 
 def _quoted(payload: Dict[str, Any], context: Dict[str, Any]) -> tuple:
@@ -246,6 +262,7 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         timestamp = int(payload.get("timestamp")) if payload.get("timestamp") is not None else None
     except (TypeError, ValueError):
         timestamp = None
+    is_sticker, sticker_sha, sticker_animated = _sticker(data)
 
     return InboundMessage(
         chat_id=chat_id,
@@ -267,6 +284,9 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         media_url=str((payload.get("media") or {}).get("url") or ""),
         media_mimetype=str((payload.get("media") or {}).get("mimetype") or ""),
         media_filename=_media_filename(payload),
+        is_sticker=is_sticker,
+        sticker_sha=sticker_sha,
+        sticker_animated=sticker_animated,
     )
 
 
@@ -1160,9 +1180,14 @@ class WhatsAppAdapter:
             if description:
                 msg.image_description = description
                 caption = msg.text.strip()
-                msg.text = (f"{caption}\n[Imagem: {description}]" if caption
-                            else f"[Imagem: {description}]")
-                print(f"🖼️  described image ({len(description)} chars)")
+                # A sticker is a reaction, not a photo, and the payload says which
+                # it is whether or not understanding is on. Labelled "[Imagem: …]",
+                # a meme of a man with his hands on his head came back as "Essa
+                # cara de desespero diz tudo sobre ti, Gil" (2026-09-28).
+                label = "Sticker" if msg.is_sticker else "Imagem"
+                msg.text = (f"{caption}\n[{label}: {description}]" if caption
+                            else f"[{label}: {description}]")
+                print(f"🖼️  described {label.lower()} ({len(description)} chars)")
 
         # A slash command is an instruction to the bot, not something the group
         # said, and this log is what gets embedded into long-term memory. It is

@@ -492,6 +492,13 @@ Voice replies use Piper on CPU (~28× realtime, so speaking never competes with 
 stickers), `stt.rewrite_media_url` and an HTTP POST to the same llama-server.
 There is no second model and no GPU of its own.
 
+**A sticker is labelled as one (2026-09-28).** Stickers arrive as `image/webp`
+and take this same path, but `_data.message.stickerMessage` says which they are,
+so they are written `[Sticker: …]`, not `[Imagem: …]`. The detailed, mixed and
+banter prompts say a sticker is a reaction, never the sender's face: a meme of a
+man with his hands on his head came back as *"Essa cara de desespero diz tudo
+sobre ti, Gil"*. Understanding what a sticker *means* is separate work.
+
 **Making them was removed on 2026-09-04.** Generation and editing are gone —
 `imagegen.py`, `face_utils.py`, `imagegen_worker.py`, the bake-off harness, the
 GPU0 lease and ~264GB of diffusion weights. Two weeks of live logs recorded
