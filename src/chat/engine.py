@@ -1006,9 +1006,15 @@ class KayaEngine:
         what was asked, so it goes at the end, closest to the answer. Only when
         there is one: banter has none by design, and a debate has its own rules
         about what it may claim.
+
+        Never for a roast. "Não sei" is for a fact the bot does not have, and a
+        roast asks for a verdict, which is always the bot's to give. Applied to
+        roasts, the first draft of this answered "quem é o membro mais burro?"
+        with "Não tenho informação suficiente", and took the offensive probe from
+        1 refusal in 25 to 4.
         """
         query = (route.query or "").strip()
-        if not query or route.mode in (router.BANTER, router.DEBATE):
+        if not query or route.mode in (router.BANTER, router.DEBATE, router.ROAST):
             return ""
         return (f"\n\n(A mensagem pede: «{query}». Responde a isso e não a outra "
                 "coisa. Se for uma pergunta sobre uma coisa concreta, o que é, quem "
@@ -1016,7 +1022,9 @@ class KayaEngine:
                 "numa frase curta e no tom do grupo, como um amigo que não faz ideia "
                 "(podes gozar com isso ou perguntar o que é), nunca como um "
                 "assistente a falar de registos. Não inventes a resposta, não mudes "
-                "de assunto e não ponhas um insulto ou outra pessoa no lugar dela.)")
+                "de assunto e não ponhas um insulto ou outra pessoa no lugar dela. "
+                "Isto é só para factos: uma opinião, um palpite, um veredicto ou um "
+                "insulto que te peçam dás sempre, sem dizer que te falta informação.)")
 
     def _roast_hint(self, message: str, recent_lines: Optional[List[str]]) -> str:
         """Keep an unaimed roast off the member it just hit.
@@ -1055,16 +1063,16 @@ class KayaEngine:
                 for name in self.retriever.named_members(reply):
                     if name not in recent:
                         recent.append(name)
-            if not recent:
-                return ""
-            # Avoidance, not a mandate. "Escolhe UMA outra pessoa" used to end
-            # this line, and on 2026-09-28 a question about a game the bot knew
-            # nothing about, routed here, obeyed it: Peter had just been hit, so
-            # it answered "o que é o jogo do titz?" with a paragraph about Rafa.
-            return ("\n\n(Ninguém foi nomeado. Não escolhas outra vez " +
-                    ", ".join(recent) + ": já falaste deles agora mesmo. Se a "
-                    "pergunta pedir que escolhas alguém, escolhe outra pessoa e "
-                    "fala só dela.)")
+            # An unaimed roast ("quem mandavas embora?") is a verdict, and a
+            # verdict needs someone picked: without this line the model answered
+            # "Não tenho informação suficiente" three times in 25 on the
+            # offensive probe. What keeps a QUESTION from landing here and
+            # obeying it, as "o que é o jogo do titz?" did on 2026-09-28 by
+            # picking Rafa, is the router, not this hint.
+            avoid = (" Não escolhas outra vez " + ", ".join(recent) +
+                     ": já falaste deles agora mesmo." if recent else "")
+            return ("\n\n(Ninguém foi nomeado." + avoid +
+                    " Escolhe UMA pessoa do grupo, compromete-te e fala só dela.)")
         except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
             print(f"⚠️  could not build the roast hint: {exc}")
             return ""

@@ -962,8 +962,13 @@ The rest:
   "me", and the same live turn rewrote to a roast of Rafa or of Peter depending
   on nothing in the message;
 - `engine._question_hint` restates `route.query` last, with leave to say "não
-  sei";
-- the roast hints only steer away from recent targets, they never demand one;
+  sei" about a fact. It is **never applied to a roast**: a roast asks for a
+  verdict. The first draft applied it anyway, and "quem é o membro mais burro?"
+  got "Não tenho informação suficiente" (offensive probe, 1 → 4 refusals in 25);
+- "Escolhe UMA pessoa" now appears only in `_roast_hint`'s nobody-named branch,
+  never on an aimed roast. Removing it outright also cost refusals, because an
+  unaimed verdict needs someone picked. What keeps a question away from that
+  order is the router;
 - banter admits not knowing when called out;
 - **GENERAL no longer receives the summary** (the summary is the group);
 - `rag.ambiguous_aliases` (`caramelo`, `parceiro`) only name a member when
@@ -983,6 +988,7 @@ Replies, same inputs, poisoned summary included, 3 samples per turn:
   "king of titz", insulted Gil, and reached for Rafa's startups.
 - **new code:** 9 of 9 answered like *"Não faço ideia do que é o jogo do titz,
   explica lá essa merda"*. Requested roasts are unchanged.
+- **offensive probe:** 1/25 refusals, the same prompt the old code refuses.
 
 The local review marked the titz → Rafa reply `FORA`, and the rebuilt summary no
 longer carries "startups falhadas". Its known limit: an insult given *instead of*

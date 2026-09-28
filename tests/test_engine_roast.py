@@ -110,6 +110,7 @@ def test_a_fresh_conversation_needs_no_steering():
     make_engine(backend).respond("quem é o mais burro?", "Pedro", [], "sys")
 
     assert "Não escolhas outra vez" not in user_turn(backend)
+    assert "Escolhe UMA pessoa" in user_turn(backend), "a verdict needs someone picked"
 
 
 def test_only_roasts_are_steered():
@@ -470,8 +471,9 @@ def test_the_standalone_question_is_restated_last_with_leave_to_say_nao_sei():
     assert turn.rindex("«o que é o jogo do titz?»") > turn.rindex("Gil:")
 
 
-def test_banter_and_debate_get_no_question_hint():
-    for label in ("BANTER", "DEBATE\nQ: quem tem razão?"):
+def test_banter_debate_and_roast_get_no_question_hint():
+    """A roast is a verdict: leave to say "não sei" there reads as a refusal."""
+    for label in ("BANTER", "DEBATE\nQ: quem tem razão?", "ROAST\nQ: quem é o mais burro?"):
         backend = ScriptedBackend(label)
         make_engine(backend, debate={"enabled": False}).respond(
             "olha isto", "Gil", [], "sys")
@@ -486,15 +488,12 @@ def test_no_question_no_hint():
     assert "A mensagem pede" not in user_turn(backend)
 
 
-def test_an_unaimed_roast_is_steered_but_not_ordered_to_find_a_victim():
+def test_an_aimed_roast_is_never_told_to_pick():
     backend = ScriptedBackend("ROAST")
 
-    make_engine(backend).respond("quem é o mais engraçado?", "Gil",
-                                 HISTORY_ABOUT_GIL, "sys")
+    make_engine(backend).respond("diz mal do Gil", "Pedro", HISTORY_ABOUT_GIL, "sys")
 
-    turn = user_turn(backend)
-    assert "Não escolhas outra vez Gil" in turn
-    assert "Escolhe UMA outra pessoa" not in turn
+    assert "Escolhe UMA pessoa" not in user_turn(backend)
 
 
 def test_the_shipped_roast_prompt_no_longer_demands_a_person():
@@ -502,7 +501,7 @@ def test_the_shipped_roast_prompt_no_longer_demands_a_person():
 
     modes = load_config("config.yaml")["chat"]["modes"]
     assert "escolhe uma pessoa" not in modes["roast"]["mode_hint"].lower()
-    assert "diz que não sabes" in modes["roast"]["mode_hint"]
+    assert "não sabes" not in modes["roast"]["mode_hint"], "a roast is a verdict"
     assert "admite-o" in modes["banter"]["system_prompt"]
 
 

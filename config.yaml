@@ -396,7 +396,7 @@ chat:
       # against banter's 6-16, in a WhatsApp group. 120 is one roast.
       max_new_tokens: 120
       system_prompt: null
-      brevity_hint: "Responde em 1 a 3 frases, afiado e directo, sem preâmbulo, e se falares de alguém, de uma pessoa só."
+      brevity_hint: "Responde em 1 a 3 frases sobre UMA pessoa só, afiado e directo, sem preâmbulo."
       # mode_hint survives a request for detail ("justifica with everything
       # you've got"), unlike brevity_hint.
       #
@@ -411,12 +411,11 @@ chat:
       # a alucinar"). The varying clause now lives in engine._roast_hint, which
       # already computes the only condition under which it is safe: nobody named.
       #
-      # It also used to open "Escolhe UMA pessoa e compromete-te", which is the
-      # same order in another place. On 2026-09-28 "tu és tão burro que nem
-      # sabes o que é o jogo do titz, explica lá" routed here, and with nothing
-      # to say about the game it did as told and picked Rafa. The question
-      # itself decides whether a person has to be picked.
-      mode_hint: "Isto é um roast. Compromete-te, com humor negro e factos concretos do que sabes sobre quem foi pedido. Fala só de quem foi pedido: não acrescentes um parágrafo sobre outra pessoa, nem sequer no fim. Se a pergunta for sobre uma coisa concreta de que não tens registo, um jogo, um episódio, diz que não sabes em vez de gozares com alguém ao calhas. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
+      # It also used to open "Escolhe UMA pessoa e compromete-te", appended to
+      # aimed roasts too. Picking now lives in engine._roast_hint's nobody-named
+      # branch only. No "não sei" clause here: a roast is a verdict, and one
+      # cost 3 refusals in 25 on the offensive probe.
+      mode_hint: "Isto é um roast. Compromete-te, com humor negro e factos concretos do que sabes sobre quem foi pedido. Fala só de quem foi pedido: não acrescentes um parágrafo sobre outra pessoa, nem sequer no fim. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
 
     debate:
       # Arguing a position, or judging a running argument, WHEN ASKED. Added
