@@ -971,7 +971,7 @@ The rest:
   order is the router;
 - banter admits not knowing when called out;
 - **GENERAL no longer receives the summary** (the summary is the group);
-- `rag.ambiguous_aliases` (`caramelo`, `parceiro`) only name a member when
+- `rag.ambiguous_aliases` (`caramelo`, `parceiro`, `chamusca`) only name a member when
   capitalised or @-mentioned. "sundaes de morango e caramelo" was Daniel.
 
 Verified by re-routing the exact live inputs (the session window, quotes

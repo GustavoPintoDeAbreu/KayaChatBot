@@ -803,9 +803,9 @@ documents:
 # RAG Settings
 rag:
   enabled: true
-  # Member aliases that are also ordinary words. They name somebody only when
+  # Member aliases that are also ordinary words or places. They name somebody only when
   # capitalised or @-mentioned ("sundaes de morango e caramelo" is not Daniel).
-  ambiguous_aliases: ["caramelo", "parceiro"]
+  ambiguous_aliases: ["caramelo", "parceiro", "chamusca"]
   always_on: true  # Retrieve context for every message, not just detected questions
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
