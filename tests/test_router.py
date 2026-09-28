@@ -386,3 +386,29 @@ class TestDebateMode:
                                  ("DEBATE", router.DEBATE)):
             route = router.classify(StubBackend(output), _config(), "x")
             assert route.mode == expected, output
+
+
+# ── who "me" is (2026-09-28) ─────────────────────────────────────────────────
+# The router was shown only the words, so the same live "Do the same for me"
+# rewrote to a roast of Rafa or of Peter depending on nothing in the message.
+def test_the_router_is_told_who_is_writing():
+    backend = StubBackend("ROAST\nQ: faz um roast ao Rafa")
+
+    router.classify(backend, _config(), "Do the same for me", ["Peter: roast me"],
+                    speaker="Rafa")
+
+    assert "written by Rafa" in backend.calls[0]["messages"][-1]["content"]
+
+
+def test_no_speaker_keeps_the_old_prompt():
+    backend = StubBackend("BANTER")
+
+    router.classify(backend, _config(), "lol")
+
+    assert "Message to classify:\nlol" in backend.calls[0]["messages"][-1]["content"]
+
+
+def test_the_rubric_routes_a_question_wrapped_in_an_insult_by_the_question():
+    assert '"tu és tão burro que nem sabes o que é o jogo do titz, explica lá" -> FACTUAL' \
+        in router._ROUTER_SYSTEM
+    assert '"Kaya Bot" is the bot itself' in router._ROUTER_SYSTEM

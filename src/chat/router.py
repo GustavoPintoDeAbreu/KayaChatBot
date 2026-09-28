@@ -114,6 +114,15 @@ FACTUAL and ROAST differ in what the answer is FOR. Information about a member i
   "quem é o mais engraçado?" -> ROAST (ranking the members against each other)
   "quantos membros tem o grupo?" -> FACTUAL
 
+An insult, a dare or a taunt wrapped around a question is classified by the
+QUESTION, never by the insult. ROAST needs an actual request to roast, rank, judge
+or mock somebody; being insulted while asked something is not one:
+  "tu és tão burro que nem sabes o que é o jogo do titz, explica lá" -> FACTUAL (asking what one of the group's games is)
+  "nem sabes quem ganhou a Champions, burro" -> GENERAL
+  "és um inútil, quando foi o jantar?" -> FACTUAL
+  "não explicaste o jogo do titz, como é que poderias saber?" -> FACTUAL (still asking what the game is)
+  "roast o Gil, esse burro" -> ROAST
+
 DEBATE and ROAST are both verdicts, and this is the distinction that matters most.
 A ROAST is aimed at a PERSON: the subject is what someone is like. A DEBATE is aimed
 at a CLAIM: the subject is whether something is true. Somebody being named in the
@@ -165,6 +174,10 @@ sentence. Given a recent thread about the Bernardo:
 A message that starts a genuinely new subject is classified on its own, even if
 the recent conversation was about something else.
 
+"Kaya Bot" is the bot itself. Its lines in the recent conversation, and a quote
+marked "[a responder a Kaya Bot: ...]", are its own earlier replies, never a
+member's claim to be judged.
+
 But most of a group chat is people reacting to each other, and a reaction stays
 BANTER however much the thread around it is about somebody. Agreement, laughter,
 a jab, a protest and a throwaway aside are social noise even mid-conversation, and
@@ -180,7 +193,8 @@ subject only exists in the lines above it, it is BANTER.
 
 Then, on a SECOND line, write "Q: " followed by the message rewritten as a
 standalone question or request, with every pronoun and ellipsis resolved from the
-recent conversation, naming the people it is about. This is used to search the
+recent conversation, naming the people it is about. "eu", "me", "mim", "I" and
+"me" are the person who wrote the message. This is used to search the
 group's memory, so it must stand on its own without the conversation:
   "e ele?" -> Q: o Bernardo também faz isso?
   "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
@@ -298,8 +312,13 @@ def classify(
     config: Dict[str, Any],
     message: str,
     recent_lines: Optional[List[str]] = None,
+    speaker: str = "",
 ) -> Route:
     """Classify one message. Never raises — falls back to FACTUAL.
+
+    ``speaker`` is who wrote it. The router used to be shown only the words, so
+    "do the same for me" had no "me": on 2026-09-28 the same live turn rewrote
+    to a roast of Rafa or of Peter depending on nothing in the message.
 
     Does not acquire the GPU lock; the caller is expected to already hold it.
     """
@@ -325,7 +344,10 @@ def classify(
 
     messages = [
         {"role": "system", "content": _ROUTER_SYSTEM},
-        {"role": "user", "content": f"{context}Message to classify:\n{text}"},
+        {"role": "user", "content": (
+            f"{context}Message to classify, written by {speaker}:\n{text}"
+            if speaker and speaker != "User" else
+            f"{context}Message to classify:\n{text}")},
     ]
     try:
         raw = backend.generate(

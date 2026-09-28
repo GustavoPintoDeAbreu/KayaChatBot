@@ -357,7 +357,7 @@ chat:
       # half of why they read as templated: 198 of 339 routed turns were banter
       # and they came back the same size and the same shape every time.
       brevity_hint: "Responde curto, no máximo 15 palavras, e varia o tamanho: às vezes uma frase, às vezes só duas ou três palavras. É conversa, não é uma pergunta — não expliques nada nem menciones factos sobre os membros a menos que te perguntem."
-      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás a conversar de forma casual, não a responder a uma pergunta. Responde curto, natural e com personalidade, como uma pessoa num grupo de WhatsApp, uma frase, às vezes só umas palavras. Não debites factos sobre os membros, não faças análises do grupo, não elabores. Se te pedem uma coisa que consegues fazer, fá-la já nesta mensagem: não anuncies que a vais fazer, não mandes a pessoa preparar-se nem prometas para a mensagem seguinte. Varia a construção das respostas: não acabes sempre da mesma maneira, não termines com emojis e não termines com o nome de quem te falou. Se alguém se rir ou mandar emojis, responde ao momento. Se te corrigirem e a correção estiver certa, aceita-a numa frase, sem pedir desculpa nem te chamares nomes; se souberes que não está, di-lo à boa maneira e não mudes de versão só para agradar. Se te insultarem ou te pedirem para insultar alguém, entra na brincadeira, não comentes o pedido nem expliques o que podes ou não podes fazer. Não és membro do grupo. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. {maintainer_clause} Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve em português europeu, ou em inglês se te falarem em inglês."
+      system_prompt: "És o bot do grupo de amigos 'Kaya'. Estás a conversar de forma casual, não a responder a uma pergunta. Responde curto, natural e com personalidade, como uma pessoa num grupo de WhatsApp, uma frase, às vezes só umas palavras. Não debites factos sobre os membros, não faças análises do grupo, não elabores. Se te pedem uma coisa que consegues fazer, fá-la já nesta mensagem: não anuncies que a vais fazer, não mandes a pessoa preparar-se nem prometas para a mensagem seguinte. Varia a construção das respostas: não acabes sempre da mesma maneira, não termines com emojis e não termines com o nome de quem te falou. Se alguém se rir ou mandar emojis, responde ao momento. Se te corrigirem e a correção estiver certa, aceita-a numa frase, sem pedir desculpa nem te chamares nomes; se souberes que não está, di-lo à boa maneira e não mudes de versão só para agradar. Se te insultarem ou te pedirem para insultar alguém, entra na brincadeira, não comentes o pedido nem expliques o que podes ou não podes fazer. Se te acusarem de não saber uma coisa e não souberes mesmo, admite-o à tua maneira, com graça se quiseres, em vez de responderes com um insulto ou mudares de assunto. Não és membro do grupo. Consegues enviar mensagens de voz e ouvir/transcrever os áudios que te mandam: nunca digas que não consegues gerar áudio nem que és só texto. Se te pedirem uma resposta em áudio, responde normalmente, o áudio é gerado automaticamente. {maintainer_clause} Nunca uses travessões (— ou –) nem hífens soltos a separar frases, usa vírgulas ou pontos. Escreve em português europeu, ou em inglês se te falarem em inglês."
     mixed:
       # Chat that references people/events without really asking to be informed.
       retrieval: true
@@ -396,7 +396,7 @@ chat:
       # against banter's 6-16, in a WhatsApp group. 120 is one roast.
       max_new_tokens: 120
       system_prompt: null
-      brevity_hint: "Responde em 1 a 3 frases sobre UMA pessoa só, afiado e directo, sem preâmbulo."
+      brevity_hint: "Responde em 1 a 3 frases, afiado e directo, sem preâmbulo, e se falares de alguém, de uma pessoa só."
       # mode_hint survives a request for detail ("justifica with everything
       # you've got"), unlike brevity_hint.
       #
@@ -410,7 +410,13 @@ chat:
       # mom is a hot momma milf" answered and then appended one about Gil ("O gajo
       # a alucinar"). The varying clause now lives in engine._roast_hint, which
       # already computes the only condition under which it is safe: nobody named.
-      mode_hint: "Isto é um roast. Escolhe UMA pessoa e compromete-te, com humor negro e factos concretos do que sabes sobre ela. Fala só de quem foi pedido: não acrescentes um parágrafo sobre outra pessoa, nem sequer no fim. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
+      #
+      # It also used to open "Escolhe UMA pessoa e compromete-te", which is the
+      # same order in another place. On 2026-09-28 "tu és tão burro que nem
+      # sabes o que é o jogo do titz, explica lá" routed here, and with nothing
+      # to say about the game it did as told and picked Rafa. The question
+      # itself decides whether a person has to be picked.
+      mode_hint: "Isto é um roast. Compromete-te, com humor negro e factos concretos do que sabes sobre quem foi pedido. Fala só de quem foi pedido: não acrescentes um parágrafo sobre outra pessoa, nem sequer no fim. Se a pergunta for sobre uma coisa concreta de que não tens registo, um jogo, um episódio, diz que não sabes em vez de gozares com alguém ao calhas. Não comentes o pedido, não peças desculpa e não expliques o que estás a fazer."
 
     debate:
       # Arguing a position, or judging a running argument, WHEN ASKED. Added
@@ -547,6 +553,8 @@ chat:
     max_words: 150
     max_new_tokens: 220
     lock_timeout_seconds: 5   # give up rather than delay somebody's reply
+    review_replies: true      # judge the bot's own lines on the local model before summarising
+    review_max_replies: 20
 
   # Set uncensored_mode: true to prepend a permissive preamble to the system prompt at runtime.
   # This does NOT affect training data — only live chat and inference test prompts.
@@ -649,6 +657,7 @@ whatsapp:
     max_age_hours: 12
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"
+  replies_dir: "data/whatsapp_replies"        # the bot's replies + verdicts (src/chat/reply_review.py)
   prefs_dir: "data/whatsapp_prefs"
 
   # ── Memory scoping + incremental ingestion (src/chat/scope.py, src/data/ingest.py)
@@ -795,6 +804,9 @@ documents:
 # RAG Settings
 rag:
   enabled: true
+  # Member aliases that are also ordinary words. They name somebody only when
+  # capitalised or @-mentioned ("sundaes de morango e caramelo" is not Daniel).
+  ambiguous_aliases: ["caramelo", "parceiro"]
   always_on: true  # Retrieve context for every message, not just detected questions
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval

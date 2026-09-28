@@ -453,3 +453,77 @@ def test_a_non_member_speaker_is_not_looked_up(monkeypatch):
     make_engine(backend).respond("roast me", "Alguém", [], "sys")
 
     assert "Não repitas o material" not in user_turn(backend)
+
+
+# ── answering what was asked (2026-09-28) ────────────────────────────────────
+# Gil asked three times what the "jogo do titz" was. The bot had nothing on it,
+# and answered with a roast of Peter, an insult, and a paragraph about Rafa.
+def test_the_standalone_question_is_restated_last_with_leave_to_say_nao_sei():
+    backend = ScriptedBackend("FACTUAL\nQ: o que é o jogo do titz?")
+
+    make_engine(backend).respond("tu és tão burro, explica lá o que é o titz",
+                                 "Gil", [], "sys")
+
+    turn = user_turn(backend)
+    assert "«o que é o jogo do titz?»" in turn
+    assert "admite que não sabes" in turn
+    assert turn.rindex("«o que é o jogo do titz?»") > turn.rindex("Gil:")
+
+
+def test_banter_and_debate_get_no_question_hint():
+    for label in ("BANTER", "DEBATE\nQ: quem tem razão?"):
+        backend = ScriptedBackend(label)
+        make_engine(backend, debate={"enabled": False}).respond(
+            "olha isto", "Gil", [], "sys")
+        assert "A mensagem pede" not in user_turn(backend), label
+
+
+def test_no_question_no_hint():
+    backend = ScriptedBackend("FACTUAL")
+
+    make_engine(backend).respond("o que faz o Gil?", "Pedro", [], "sys")
+
+    assert "A mensagem pede" not in user_turn(backend)
+
+
+def test_an_unaimed_roast_is_steered_but_not_ordered_to_find_a_victim():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("quem é o mais engraçado?", "Gil",
+                                 HISTORY_ABOUT_GIL, "sys")
+
+    turn = user_turn(backend)
+    assert "Não escolhas outra vez Gil" in turn
+    assert "Escolhe UMA outra pessoa" not in turn
+
+
+def test_the_shipped_roast_prompt_no_longer_demands_a_person():
+    from src.config_loader import load_config
+
+    modes = load_config("config.yaml")["chat"]["modes"]
+    assert "escolhe uma pessoa" not in modes["roast"]["mode_hint"].lower()
+    assert "diz que não sabes" in modes["roast"]["mode_hint"]
+    assert "admite-o" in modes["banter"]["system_prompt"]
+
+
+# ── the summary is the group, and GENERAL is not about the group ─────────────
+def test_general_gets_no_summary_and_factual_does():
+    for label, expected in (("GENERAL\nQ: quanto é 9 mais 10?", False),
+                            ("FACTUAL\nQ: quando foi o jantar?", True)):
+        backend = ScriptedBackend(label)
+        make_engine(backend).respond("pergunta", "Gil", [], "sys",
+                                     summary="O Rafa lançou três startups.")
+        assert ("três startups" in user_turn(backend)) is expected, label
+
+
+# ── its own words ────────────────────────────────────────────────────────────
+def test_a_quote_of_the_bot_is_said_to_be_its_own():
+    backend = ScriptedBackend("BANTER")
+
+    make_engine(backend).respond(
+        '[a responder a Kaya Bot: "É o auge do desespero"]\nAm I right',
+        "Rafa", ["Kaya Bot: É o auge do desespero"], "sys")
+
+    turn = user_turn(backend)
+    assert "responde a uma mensagem tua" in turn
+    assert "As linhas do Kaya Bot são tuas" in turn

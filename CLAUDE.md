@@ -911,6 +911,83 @@ is left for the next pass, because a chunk closed mid-conversation is a chunk
 that can never be extended. The watermark is clamped to `consumed_through`, so an
 unsettled tail is not marked as read.
 
+### Its own words are not facts (2026-09-28)
+
+Gil asked three times what the "jogo do titz" was. The word appears once in the
+group's whole history, as a bare "Titz", so there was nothing to find. The bot
+answered with a roast of Peter, then an insult, then a paragraph about **Rafa's
+three failed startups**. Gustavo filed it as "alucinação de contexto", and that is
+what it was. Four causes, all fixed:
+
+- **The rolling summary brought the bot's own roasts back as facts.** At 17:08
+  the bot mocked Rafa's startups ("I finished them", he answered). At 17:25 the
+  summary was rewritten with *"O Rafa, empreendedor que lançou três startups
+  falhadas"*, and at 17:26 the reply repeated it almost word for word. The
+  summary writer read `Kaya Bot:` lines like anyone else's and was told to keep
+  "factos sobre as pessoas". The ingester had a second path: a member's reply
+  embeds its quoted parent, and the bot's messages are never in the log, so its
+  quoted roasts went into ChromaDB as things the group said.
+- **An insult around a question routed ROAST.** *"tu és tão burro que nem sabes o
+  que é o jogo do titz, explica lá"* was a question.
+- **ROAST ordered it to find a victim.** `mode_hint` opened *"Escolhe UMA pessoa"*,
+  and `_roast_hint`, seeing that Peter had just been roasted, added *"Escolhe UMA
+  outra pessoa"*.
+- **Nothing near the answer allowed "não sei".**
+
+**`src/chat/reply_review.py` is the fix for the first cause.** Gustavo wanted the
+bot's lines kept, since some of them are useful context. So every reply is
+recorded when it is sent (`ReplyLedger`, `data/whatsapp_replies/<chat>.json`, key
+= its first 12 normalised words, so a truncated WhatsApp quote finds it), and is
+judged three ways:
+
+- **by mode**: a roast or banter line is a joke;
+- **by `/bug`**: every bot line in its recent turns is `mau`;
+- **by the local model**: in the summary's background pass, before summarising,
+  each unjudged reply is shown between what prompted it and the next three lines,
+  and comes back `OK`, `FORA` (didn't answer, or dragged in someone) or
+  `INVENTADO` (the group contested it).
+
+The summary writer then drops bad lines and labels jokes *"(piada, não é
+facto)"*. The **marker is still taken from the unfiltered history**, or a dropped
+last line would make every later update re-read the whole window. The ingester
+keeps a quote of the bot only for a known reply that is neither a joke nor judged
+bad (`message_log` records `reply_to_bot`). The review is one extra generation per
+summary refresh, under its own `gpu_section`. A busy GPU defers the whole update;
+any other failure summarises with the verdicts already known.
+
+The rest:
+
+- the router gets an insult-around-a-question rule, is told Kaya Bot is itself,
+  and is now **told who is writing**. Without that, "do the same for me" had no
+  "me", and the same live turn rewrote to a roast of Rafa or of Peter depending
+  on nothing in the message;
+- `engine._question_hint` restates `route.query` last, with leave to say "não
+  sei";
+- the roast hints only steer away from recent targets, they never demand one;
+- banter admits not knowing when called out;
+- **GENERAL no longer receives the summary** (the summary is the group);
+- `rag.ambiguous_aliases` (`caramelo`, `parceiro`) only name a member when
+  capitalised or @-mentioned. "sundaes de morango e caramelo" was Daniel.
+
+Verified by re-routing the exact live inputs (the session window, quotes
+included) through old and new code with
+`KAYA_INFERENCE_BACKEND=ollama KAYA_OLLAMA_URL=http://127.0.0.1:8200/upstream/kaya`.
+The old code reproduces the live decisions exactly. The new code sends both titz
+questions to FACTUAL, and leaves every roast that was actually requested as ROAST.
+`scripts/replay_routing.py` alone is not enough here: it rebuilds history without
+the `[a responder a …]` quotes, and on this day that alone moved three turns.
+
+Replies, same inputs, poisoned summary included, 3 samples per turn:
+
+- **old code:** 0 of 12 titz replies admitted not knowing. They invented a
+  "king of titz", insulted Gil, and reached for Rafa's startups.
+- **new code:** 9 of 9 answered like *"Não faço ideia do que é o jogo do titz,
+  explica lá essa merda"*. Requested roasts are unchanged.
+
+The local review marked the titz → Rafa reply `FORA`, and the rebuilt summary no
+longer carries "startups falhadas". Its known limit: an insult given *instead of*
+an answer usually passes as `OK`, because the 12B reads it as a joke.
+
 ### Conversation simulator (`src/testing/persona_sim.py`, `scripts/run_conversation_sim.py`)
 
 The unit suite proves the wiring and `preflight_e2e.py` proves each capability in

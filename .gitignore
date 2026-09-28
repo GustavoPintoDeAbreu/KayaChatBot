@@ -168,6 +168,8 @@ data/whatsapp_contacts.json
 data/whatsapp_whitelist.json
 data/live_messages/
 data/whatsapp_prefs/
+data/whatsapp_summaries/
+data/whatsapp_replies/
 data/ingest_state.json
 data/whatsapp_shared_chats.json
 data/media_descriptions.json

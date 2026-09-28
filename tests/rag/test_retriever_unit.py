@@ -570,3 +570,22 @@ class TestTokenBudget:
         ctx = retriever.retrieve_all("Tell me about Peter", knowledge_approach="both")
         # Knowledge (~30 words ≈ 40 tokens) exceeds budget of 10, so it must be pruned
         assert "Conhecimento" not in ctx
+
+
+def test_an_alias_that_is_an_ordinary_word_needs_to_be_written_as_a_name(tmp_path):
+    """"sundaes de morango e caramelo" made Daniel the subject of an ice-cream turn."""
+    members_file = tmp_path / "members.json"
+    members_file.write_text(__import__("json").dumps({"members": [
+        {"name": "Daniel", "aliases": ["daniel", "caramelo"]},
+        {"name": "Gil", "aliases": ["gil"]},
+    ]}), encoding="utf-8")
+    r = ConversationRetriever({
+        "rag": {"ambiguous_aliases": ["caramelo"]},
+        "data": {"group_members_file": str(members_file)},
+    })
+
+    assert r.named_members("Eu gosto dos sundaes de morango e caramelo") == []
+    assert r.extract_query_persons("morango e caramelo") == []
+    assert r.named_members("o Caramelo não veio") == ["Daniel"]
+    assert r.named_members("@caramelo anda cá") == ["Daniel"]
+    assert r.named_members("o gil e o daniel") == ["Daniel", "Gil"]
