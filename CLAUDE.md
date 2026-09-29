@@ -308,6 +308,28 @@ Three things to know:
   `KAYA_INFERENCE_BACKEND=gguf` with
   `KAYA_PROD_LLAMA_URL=http://llm-broker:8080/upstream/kaya-llamacpp` goes back.
 
+### The group is a Community (2026-09-29)
+
+The Kaya group was turned into a WhatsApp Community. **The old group kept its
+JID** and is now a linked group named "general", so the message log, session
+window, summary, ChromaDB scope and `KAYA_BIRTHDAY_CHAT` all carried over
+untouched. The switch added a parent community JID and an announcements group
+(`announce: true`; the bot is not an admin, so it can read there but not post).
+
+Every new sub-group (trips, dinners) is Kaya too, and would otherwise be private
+`group:<hash>` scope until someone edited a file. `shared_communities` in
+`data/whatsapp_shared_chats.json` lists the parent. The adapter looks up a group
+it has not seen before once, through `WahaClient.group_info`, **before anything
+is logged**, because scope is fixed at log time. If the group's `linkedParent`
+is listed, the adapter adds it to `shared_chats` and writes it back to the file.
+A failed lookup keeps the group private and retries after
+`whatsapp.community_recheck_minutes`.
+
+On the day of the switch the bot looked asleep. Gil sent a bare `@Kaya Bot`, the
+mention was stripped to `""`, and `if not text: return None` dropped it. A bare
+mention in a group is now answered as `whatsapp.bare_mention_text`, with the
+recent lines as its context. The stand-in is never logged.
+
 ### GPU topology (2× RTX 3090, no NVLink)
 
 **The whole bot runs on ONE card (since 2026-09-04).** Prod is `NVIDIA_VISIBLE_DEVICES=1` +

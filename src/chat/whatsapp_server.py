@@ -118,16 +118,24 @@ except Exception as exc:  # noqa: BLE001 — fall back to the bridge's own match
 
 # Which chats count as GROUP-WIDE memory, from a gitignored local file (a chat id
 # is still an identifier, so it stays out of git like the contacts and whitelist).
-# Shape: {"shared_chats": ["1203...@g.us"]}. Without this the group's own history
-# is private to it — safe, but it loses the shared memory the bot exists for.
+# Shape: {"shared_chats": ["1203...@g.us"], "shared_communities": ["1203...@g.us"]}.
+# Without this the group's own history is private to it — safe, but it loses the
+# shared memory the bot exists for. The adapter writes community groups it
+# discovers back into the same file.
 _scopes_path = Path(config_path).parent / "data" / "whatsapp_shared_chats.json"
+_wcfg["shared_chats_file"] = str(_scopes_path)
 if _scopes_path.exists():
     try:
         _shared = _json.loads(_scopes_path.read_text(encoding="utf-8"))
         _wcfg["shared_chats"] = list(
             {*(_wcfg.get("shared_chats") or []), *(_shared.get("shared_chats") or [])}
         )
-        print(f"✓ Loaded {len(_wcfg['shared_chats'])} shared-memory chat id(s)")
+        _wcfg["shared_communities"] = list(
+            {*(_wcfg.get("shared_communities") or []),
+             *(_shared.get("shared_communities") or [])}
+        )
+        print(f"✓ Loaded {len(_wcfg['shared_chats'])} shared-memory chat id(s), "
+              f"{len(_wcfg['shared_communities'])} shared communit(y/ies)")
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️  Could not read {_scopes_path}: {exc}")
 

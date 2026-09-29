@@ -99,6 +99,12 @@ class WahaClient:
         except Exception as exc:  # noqa: BLE001 — presence is best-effort
             logger.debug("stopTyping failed: %s", exc)
 
+    def group_info(self, chat_id: str) -> Dict[str, Any]:
+        """A group's metadata, including ``linkedParent`` for a community's groups."""
+        resp = self._client.get(f"/api/{self.session}/groups/{chat_id}", timeout=5.0)
+        resp.raise_for_status()
+        return resp.json()
+
 
 class MockWahaClient:
     """Drop-in replacement that captures sends instead of calling WhatsApp.
@@ -147,3 +153,6 @@ class MockWahaClient:
 
     def stop_typing(self, chat_id: str) -> None:
         pass
+
+    def group_info(self, chat_id: str) -> Dict[str, Any]:
+        return {}

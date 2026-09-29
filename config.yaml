@@ -665,6 +665,18 @@ whatsapp:
   # group id here; leaving it empty makes the group's own history private to it,
   # which is safe but loses the shared memory the bot exists for.
   shared_chats: []
+  # Communities whose linked groups are shared memory too (2026-09-29, when Kaya
+  # became a Community). A group the bot meets is looked up once through WAHA;
+  # if its linkedParent is listed here it joins shared_chats and is written back
+  # to data/whatsapp_shared_chats.json. A failed lookup keeps it private and is
+  # retried after community_recheck_minutes. Real ids live in that gitignored file.
+  shared_communities: []
+  community_recheck_minutes: 60
+
+  # A bare "@Kaya" with nothing after it. It used to be dropped as empty text, so
+  # being summoned looked like being asleep. It is answered as this question,
+  # with the recent lines as its context.
+  bare_mention_text: "Então, o que achas disto?"
 
   # Every message the bot SEES is logged (not just ones it replies to) and folded
   # into the vector store on a schedule. Never at message time — embedding while
