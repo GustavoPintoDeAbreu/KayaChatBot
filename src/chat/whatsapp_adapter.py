@@ -509,6 +509,14 @@ class WhatsAppAdapter:
         # Chat ids whose content is group-wide memory (the Kaya group). Everything
         # else is private to its own chat — see src/chat/scope.py.
         self.shared_chats = set(wcfg.get("shared_chats", []) or [])
+        # Since 2026-09-29 Kaya is a WhatsApp Community: the old group is one of
+        # its linked groups, and every new sub-group (trips, dinners) is Kaya
+        # too. Such a group is recognised by its linkedParent, asked of WAHA once.
+        self.shared_communities = set(wcfg.get("shared_communities", []) or [])
+        self.community_recheck_seconds = 60 * float(wcfg.get("community_recheck_minutes", 60))
+        self._community_checked: Dict[str, float] = {}
+        self._shared_chats_path = wcfg.get("shared_chats_file")
+        self.bare_mention_text = str(wcfg.get("bare_mention_text") or "Então, o que achas disto?")
         # Durable log of every message SEEN (not just replied to) — the group's
         # ordinary chatter is the most valuable thing to remember, and the bot
         # only replies when addressed. Consumed by src/data/ingest.py.
@@ -1061,6 +1069,55 @@ class WhatsAppAdapter:
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                 "command": command, "logged": True}
 
+    def _register_community_group(self, chat_id: str) -> bool:
+        """Make a group linked to a shared community shared memory. Returns whether it did.
+
+        Asked of WAHA once per group, not per message. A failed lookup, or a
+        group linked to some other community, keeps the private scope: the safe
+        default is the one that stays private. Failures are retried after
+        ``community_recheck_minutes``, so a WAHA blip does not decide it forever.
+        The result is written back to the shared-chats file, so a restart, the
+        ingester and the unregistered-groups warning at startup all agree.
+        """
+        if not self.shared_communities or not chat_id.endswith("@g.us") \
+                or chat_id in self.shared_chats:
+            return False
+        checked_at = self._community_checked.get(chat_id)
+        if checked_at is not None and time.time() - checked_at < self.community_recheck_seconds:
+            return False
+        self._community_checked[chat_id] = time.time()
+        group_info = getattr(self.waha_client, "group_info", None)
+        if group_info is None:
+            return False
+        try:
+            info = group_info(chat_id) or {}
+        except Exception as exc:  # noqa: BLE001 — unknown stays private
+            logger.warning("could not look up group %s: %s", chat_id, exc)
+            return False
+        if chat_id not in self.shared_communities \
+                and info.get("linkedParent") not in self.shared_communities:
+            return False
+        self.shared_chats.add(chat_id)
+        print(f"✓ community group {chat_id} ({info.get('subject', '')}) is now shared memory")
+        self._persist_shared_chats()
+        return True
+
+    def _persist_shared_chats(self) -> None:
+        """Rewrite the gitignored shared-chats file with the current set, keeping its other keys."""
+        if not self._shared_chats_path:
+            return
+        path = Path(self._shared_chats_path)
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            existing["shared_chats"] = sorted(
+                {*(existing.get("shared_chats") or []), *self.shared_chats})
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception as exc:  # noqa: BLE001 — in memory it is already shared
+            logger.warning("could not save %s: %s", path, exc)
+
     # ── main entry ─────────────────────────────────────────────────────────────
     def handle_event(self, event: Dict[str, Any], system_prompt: str = "") -> Optional[Dict[str, Any]]:
         """Process one webhook event end-to-end. Returns a result dict or ``None``.
@@ -1127,6 +1184,10 @@ class WhatsAppAdapter:
             self._processed_ids[msg.message_id] = True
             while len(self._processed_ids) > self._answered_max:
                 self._processed_ids.popitem(last=False)
+
+        # Before anything is written under a scope: the log line and a shared
+        # document both take theirs from shared_chats.
+        self._register_community_group(msg.chat_id)
 
         # A shared document is read BEFORE the audio branch, because the two used
         # to be the same branch: transcription was gated on "not an image", so a
@@ -1260,6 +1321,11 @@ class WhatsAppAdapter:
         if not self.should_respond(msg):
             return None
 
+        # "@Kaya" and nothing else is a summons, not an empty message. Dropping
+        # it is how the bot looked asleep the day the group became a Community.
+        # The stand-in is never logged: the log already has the mention itself.
+        if not text and msg.is_group and not msg.media_url:
+            text = self.bare_mention_text
         if not text:
             return None
 
