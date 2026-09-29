@@ -64,11 +64,19 @@ hostname's "MS-7C91" is not the board). Under **Settings → Platform Power**:
 |---|---|---|
 | **ErP** | **Disabled** | When enabled, it disables Resume by Alarm, Wake on LAN and every other wake source (manual, Platform Power) |
 | **Wake on LAN** | **Enabled** | Default. The onboard NIC is an Intel I211 (`igb`), which supports magic-packet wake |
-| **Resume by Alarm** | **Enabled**, any time | `rtcwake` rewrites the alarm at each shutdown; some Gigabyte boards ignore an OS-set alarm while this is off |
+| **Resume by Alarm** | **Enabled**, every day, **06:55:00** | The board's own alarm time wins over `rtcwake`, and the RTC keeps UTC: 06:55 UTC is 07:55 in summer and 06:55 in winter, never before the Pi's packet |
 | AC BACK | Memory (optional) | After a power cut, the PC returns to the state it was in |
 
 The RTC alarm does not survive removing AC power (manual), so it is only the
 backup. The Pi's magic packet is the primary wake.
+
+**The BIOS alarm time is what fires, not the OS one.** With Resume by Alarm left
+at 0:00:00, the PC shut down at 23:32 on 2026-09-28 and powered itself on at
+01:00 (00:00 UTC). `/proc/driver/rtc` read `alrm_time 00:00:00` although
+`rtcwake` had set 06:00 UTC. Shutdowns after 01:00 (Friday and Saturday nights)
+hide it, because that day's alarm has already passed. labwatch flags a boot
+before 06:50 that follows a scheduled poweroff ("PC woke outside its schedule")
+and sends a WhatsApp.
 
 `install.sh` also makes Wake-on-LAN persistent in NetworkManager
 (`802-3-ethernet.wake-on-lan magic`).
