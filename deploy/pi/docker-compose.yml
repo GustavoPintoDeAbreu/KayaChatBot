@@ -24,6 +24,11 @@ services:
       - KAYA_WAHA_URL=http://waha:3000
       - KAYA_WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
+      # The owner's /idea DMs go to idea-pipeline's inbox (src/gateway/idea_tap.py).
+      # Empty IDEA_INBOX_URL turns the tap off. idea-inbox joins pi_default.
+      - IDEA_INBOX_URL=${IDEA_INBOX_URL:-}
+      - IDEA_INBOX_TOKEN=${IDEA_INBOX_TOKEN:-}
+      - IDEA_OWNER_NUMBERS=${IDEA_OWNER_NUMBERS:-}
     volumes:
       - ./data/gateway:/data
       - ./data/runtime:/config:ro

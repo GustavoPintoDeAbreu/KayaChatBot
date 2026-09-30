@@ -24,6 +24,11 @@ They are switched on during the cutover and never run in two places at once.
 ## What happens to a message
 
 1. WAHA posts the event to `gateway:8088/waha/webhook`.
+   - **Ideas skip everything below.** The owner's DMs starting with `/idea`, and
+     replies quoting a `💡[idea-N]` message, go to idea-pipeline's inbox
+     (`src/gateway/idea_tap.py`, on when `IDEA_INBOX_URL` is set). They are not
+     journaled, not sent to the PC and never become Kaya's memory. The pipeline's
+     own `💡[idea-` messages are dropped when WAHA echoes them back.
 2. The gateway journals it. The UNIQUE key is event type plus message id, which
    also absorbs WAHA's habit of delivering every event twice.
 3. It downloads any media, and decides whether the message is **addressed** to

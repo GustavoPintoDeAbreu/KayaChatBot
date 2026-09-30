@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from src.chat.stt import rewrite_media_url
 from src.chat.whatsapp_adapter import (
+    InboundMessage,
     _normalize_jid,
     _phone_from_alt,
     is_addressed,
@@ -43,6 +44,7 @@ from src.chat.whatsapp_adapter import (
 )
 from src.gateway.autoreply import OfflineResponder
 from src.gateway.forwarder import Forwarder
+from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.gateway.journal import Journal
 from src.gateway.monitor import PcMonitor, PcState
 from src.gateway.schedule import PowerSchedule
@@ -103,8 +105,10 @@ class Gateway:
                  monitor: Optional[PcMonitor] = None,
                  send_text: Optional[Callable[[str, str, Optional[str]], Any]] = None,
                  fetch_media: Optional[Callable[[str], Awaitable[Tuple[bytes, str]]]] = None,
+                 idea_tap: Optional[IdeaTap] = None,
                  now: Callable[[], float] = time.time) -> None:
         self.settings = settings
+        self.idea_tap = idea_tap
         self._now = now
         with open(settings.config_path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
@@ -187,6 +191,9 @@ class Gateway:
             msg = parse_waha_message(event)
             if msg is None:
                 return {"ignored": "unparseable"}
+            routed = await self._route_idea(msg)
+            if routed is not None:
+                return routed
             chat_id, sender_id, wa_ts = msg.chat_id, msg.sender_id, msg.timestamp
             addressed = is_addressed(msg, self._bot_jids, self._respond_on_mention,
                                      self._respond_on_reply, self._whitelist_enabled,
@@ -220,6 +227,19 @@ class Gateway:
             await asyncio.to_thread(self.responder.maybe_reply, entry)
         self.forwarder.wake()
         return {"seq": seq, "addressed": addressed}
+
+    async def _route_idea(self, msg: InboundMessage) -> Optional[Dict[str, Any]]:
+        """Hand an idea-pipeline message to its inbox; None leaves it to Kaya."""
+        kind = self.idea_tap.classify(msg) if self.idea_tap else None
+        if kind is None:
+            return None
+        if kind == "echo":
+            return {"idea": "echo"}
+        if await self.idea_tap.forward(msg):
+            return {"idea": "forwarded"}
+        if self.idea_tap.should_warn(msg):
+            await asyncio.to_thread(self._send_text, msg.chat_id, IDEA_OFFLINE_TEXT, msg.message_id)
+        return {"idea": "inbox-offline"}
 
     def status(self) -> Dict[str, Any]:
         """PC state, the schedule, and the journal's size."""
@@ -331,7 +351,7 @@ def main() -> None:
     """Entry point for the container."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(Gateway(GatewaySettings.from_env()).serve())
+    asyncio.run(Gateway(GatewaySettings.from_env(), idea_tap=IdeaTap.from_env(os.environ)).serve())
 
 
 if __name__ == "__main__":
