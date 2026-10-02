@@ -60,6 +60,26 @@ def test_broker_evicts_borrowers_then_loads(tmp_path, monkeypatch):
     assert gets[-1] == "http://b:8080/upstream/kaya/health"
 
 
+def test_borrower_patterns_cover_every_gpu1_model(tmp_path, monkeypatch):
+    monkeypatch.delenv("KAYA_LLAMA_URL", raising=False)
+    posts = []
+    running = ["kaya", "qwen-impl", "qwen-uncensored-g1", "qwen-impl-g1"]
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/running"):
+            return _Resp({"running": [{"model": m, "state": "ready"} for m in running]})
+        return _Resp()
+
+    config = _config(tmp_path, "http://b:8080/upstream/kaya")
+    config["inference"]["broker"]["evict_before_use"] = ["big", "qwen-long", "*-g1"]
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(requests, "post", lambda url, **k: posts.append(url) or _Resp())
+    ensure_model_loaded(config)
+    # Both GPU1 borrowers go; the GPU0 coder and Kaya herself stay.
+    assert posts == ["http://b:8080/api/models/unload/qwen-impl-g1",
+                     "http://b:8080/api/models/unload/qwen-uncensored-g1"]
+
+
 def test_broker_failure_never_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("KAYA_LLAMA_URL", raising=False)
 

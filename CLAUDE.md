@@ -270,10 +270,11 @@ undo by accident:
 inside it for Kaya). `KAYA_INFERENCE_BACKEND=ollama` plus
 `KAYA_OLLAMA_URL=http://llm-broker:8080/upstream/kaya` makes the backend, vision
 and documents load Kaya on demand. Kaya has priority on GPU1 and **no idle timer**: it is evicted only when
-something borrows GPU1 (`qwen-impl-g1`, or `big` across both cards), which
+something borrows GPU1 (any `*-g1` model, or `big`/`qwen-long` across both cards), which
 `llm-use-g1`/`llm-use-big` allow only after Kaya has been quiet for 15 min
 (`data/kaya_last_active`). `inference_backend.ensure_model_loaded` runs before
-every GPU turn, outside the GPU lock: it unloads those borrowers explicitly,
+every GPU turn, outside the GPU lock: it unloads those borrowers explicitly
+(`inference.broker.evict_before_use`, fnmatch patterns),
 because llama-swap waits for their in-flight requests before evicting and a long
 agent turn would otherwise hold a WhatsApp reply for minutes. Whisper is loaded
 lazily and freed after `chat.audio.whisper_idle_unload_minutes`;

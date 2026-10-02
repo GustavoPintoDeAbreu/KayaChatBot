@@ -268,7 +268,9 @@ inference:
   broker:
     # Models that borrow GPU1 while Kaya is idle. Unloaded explicitly before
     # Kaya's GPU work, because llama-swap waits for their in-flight requests.
-    evict_before_use: ["big", "qwen-impl-g1"]
+    # fnmatch patterns: every broker model named *-g1 borrows GPU1, and big /
+    # qwen-long span both cards.
+    evict_before_use: ["big", "qwen-long", "*-g1"]
     load_timeout: 300
     # Written on every GPU turn; the broker's llm-use-g1/llm-use-big read it and
     # lend GPU1 only after Kaya has been quiet for a while.
