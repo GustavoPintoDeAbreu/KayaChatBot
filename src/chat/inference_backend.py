@@ -16,6 +16,7 @@ the migration on is a one-line config flip and ``hf`` stays the current path.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
@@ -134,8 +135,11 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
     try:
         running = requests.get(f"{base}/running", timeout=5).json().get("running", []) or []
         loaded = {entry.get("model") for entry in running if isinstance(entry, dict)}
-        for borrower in bcfg.get("evict_before_use", []) or []:
-            if borrower in loaded:
+        # Entries are fnmatch patterns ("*-g1"), so a new borrower named by the
+        # broker's convention is covered without a config change here.
+        patterns = bcfg.get("evict_before_use", []) or []
+        for borrower in sorted(name for name in loaded if name):
+            if borrower != model and any(fnmatch.fnmatchcase(borrower, p) for p in patterns):
                 logger.info("unloading %s to take GPU1 back", borrower)
                 requests.post(f"{base}/api/models/unload/{borrower}", timeout=60)
         load_timeout = float(bcfg.get("load_timeout", 300))
