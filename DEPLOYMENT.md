@@ -239,7 +239,7 @@ the live site, and lets you keep editing without affecting it.
 ```bash
 git clone git@github.com:GustavoPintoDeAbreu/KayaChatBot.git ~/kaya-prod
 ln -s ~/Desktop/KayaChatBot/models ~/kaya-prod/models   # share the 42GB models (symlink, no copy)
-cp  ~/Desktop/KayaChatBot/.env     ~/kaya-prod/.env     # or let CI write it from prod secrets
+cp  ~/Desktop/KayaChatBot/.env     ~/kaya-prod/.env     # then add KAYA_EDGE/KAYA_TUNNEL and the rest by hand
 sudo systemctl enable snap.docker.dockerd                # so prod auto-starts after a reboot
 
 # Prod's data/ is its OWN directory, seeded once from dev. Copy, do not link.
@@ -275,7 +275,9 @@ nothing. Check with `systemctl is-enabled snap.docker.dockerd`.
 |---|---|---|---|
 | Test | PR to `main` | `ci.yml` | Builds the image, runs `pytest` in `kaya-test`. Merge gate. |
 | Validate | merge to `main` | `validate-main.yml` | Rebuilds + runs the test suite so main is known-deployable. No container start. |
-| Deploy prod | manual (`workflow_dispatch`) | `deploy-prod.yml` | Pauses for `prod` approval, writes `.env` from `prod` secrets into `~/kaya-prod`, then runs `scripts/deploy_prod.sh` → **rebuilds and restarts the live prod container** on the chosen ref. |
+| Deploy prod | manual (`workflow_dispatch`) | `deploy-prod.yml` | Pauses for `prod` approval, **updates** `~/kaya-prod/.env` in place from any `prod` secrets that are set (`scripts/prod_env.sh update`: never truncates, an unset secret keeps the existing value), refuses to go on if `.env` could not run prod (`scripts/prod_env.sh check`), then runs `scripts/deploy_prod.sh` → **rebuilds and restarts the live prod container** on the chosen ref. |
+
+**Why the workflow no longer writes `.env` (2026-10-04).** It used to rewrite the file wholesale from `prod` secrets, and none were ever set. Every value came out empty, and the settings kept only in that file (`KAYA_EDGE=pi`, the broker URL, the relay token) were lost. The deploy then defaulted to edge=local: it started a second WAHA on the PC that took Kaya's WhatsApp session from the Pi's, a cloudflared with no token, and the old `kaya-llama`. `scripts/prod_env.sh check` (also run by `deploy_prod.sh` before it touches anything) now requires `KAYA_WEB_USER`, `KAYA_WEB_PASS` and an explicit `KAYA_EDGE`; with `KAYA_EDGE=pi` it also requires `KAYA_PROD_WAHA_URL` and `KAYA_RELAY_TOKEN`, a local tunnel needs `CLOUDFLARE_TUNNEL_TOKEN`, and an ollama backend needs `KAYA_PROD_OLLAMA_URL`.
 
 Flow: open PR → CI + review → merge → `main` validated automatically → run
 **Deploy (prod)** → approve the gate → the live site is now on that commit.

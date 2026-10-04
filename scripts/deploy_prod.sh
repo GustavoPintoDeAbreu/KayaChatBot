@@ -31,6 +31,7 @@
 set -euo pipefail
 
 REF="${1:-main}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROD_DIR="${KAYA_PROD_DIR:-$HOME/kaya-prod}"
 
 if [[ ! -d "$PROD_DIR/.git" ]]; then
@@ -43,6 +44,9 @@ if [[ ! -f .env ]]; then
   echo "❌ $PROD_DIR/.env missing (needs KAYA_WEB_USER/PASS + CLOUDFLARE_TUNNEL_TOKEN)." >&2
   exit 1
 fi
+# Refuse before touching anything when .env could not run prod (empty values, no
+# KAYA_EDGE). The checker sits next to this script, so it is the deploying copy's.
+"$SCRIPT_DIR/prod_env.sh" check "$PROD_DIR/.env"
 
 echo "📥 Fetching and checking out '$REF' in $PROD_DIR ..."
 git fetch origin --prune --tags
