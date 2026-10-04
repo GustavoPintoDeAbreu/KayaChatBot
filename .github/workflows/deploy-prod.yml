@@ -28,18 +28,23 @@ jobs:
       - name: Checkout (for the deploy script)
         uses: actions/checkout@v4
 
-      - name: Write prod .env from secrets
+      # Never rewrite .env wholesale: it also holds settings that exist nowhere else
+      # (KAYA_EDGE, the broker URL, the relay token). A secret that is set updates its
+      # own line; an unset one leaves the existing value alone. Then refuse to go on
+      # if prod could not run on the result (2026-10-04: empty secrets blanked .env,
+      # and the deploy started a second WAHA that took Kaya's WhatsApp session).
+      - name: Update prod .env from secrets (never truncates)
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          AZURE_OPENAI_API_KEY_gpt_41_mini: ${{ secrets.AZURE_OPENAI_API_KEY_gpt_41_mini }}
+          AZURE_OPENAI_API_KEY_gpt_53_chat: ${{ secrets.AZURE_OPENAI_API_KEY_gpt_53_chat }}
+          KAYA_WEB_USER: ${{ secrets.KAYA_WEB_USER }}
+          KAYA_WEB_PASS: ${{ secrets.KAYA_WEB_PASS }}
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           PROD_DIR="${KAYA_PROD_DIR:-$HOME/kaya-prod}"
-          mkdir -p "$PROD_DIR"
-          cat > "$PROD_DIR/.env" <<EOF
-          XAI_API_KEY=${{ secrets.XAI_API_KEY }}
-          AZURE_OPENAI_API_KEY_gpt_41_mini=${{ secrets.AZURE_OPENAI_API_KEY_gpt_41_mini }}
-          AZURE_OPENAI_API_KEY_gpt_53_chat=${{ secrets.AZURE_OPENAI_API_KEY_gpt_53_chat }}
-          KAYA_WEB_USER=${{ secrets.KAYA_WEB_USER }}
-          KAYA_WEB_PASS=${{ secrets.KAYA_WEB_PASS }}
-          CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-          EOF
+          ./scripts/prod_env.sh update "$PROD_DIR/.env"
+          ./scripts/prod_env.sh check "$PROD_DIR/.env"
 
       - name: Deploy to prod (build + restart live container)
         run: ./scripts/deploy_prod.sh "${{ inputs.ref }}"
