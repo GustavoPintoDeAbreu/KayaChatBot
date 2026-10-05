@@ -145,6 +145,27 @@ class TestNaiveInput:
         assert nxt.tzinfo == TZ
 
 
+# ── no automatic shutdown ────────────────────────────────────────────────
+
+class TestManualOff:
+    def _manual(self) -> PowerSchedule:
+        return PowerSchedule.from_config({**_POWER, "shutdown": {}})
+
+    def test_no_oncalendar_lines(self):
+        assert self._manual().shutdown_oncalendar() == []
+
+    def test_next_wake_still_daily(self):
+        nxt = self._manual().next_wake(_naive(2026, 10, 4, 23, 30))
+        assert nxt == datetime.datetime(2026, 10, 5, 7, 0, tzinfo=TZ)
+
+    def test_always_scheduled_on(self):
+        assert self._manual().is_scheduled_on(_naive(2026, 10, 4, 3, 0))
+
+    def test_next_shutdown_raises(self):
+        with pytest.raises(ValueError):
+            self._manual().next_shutdown(_naive(2026, 10, 4, 12, 0))
+
+
 # ── CLI smoke ────────────────────────────────────────────────────────────
 
 class TestCLISmoke:
@@ -159,8 +180,7 @@ class TestCLISmoke:
             cwd=str(Path(__file__).parent.parent.parent),
         )
         assert result.returncode == 0
-        lines = result.stdout.strip().splitlines()
-        assert lines == ["Sat,Sun 02:00", "Mon..Thu,Sun 23:00"]
+        assert result.stdout.strip() == ""
 
     def test_oncalendar_wake(self):
         result = subprocess.run(

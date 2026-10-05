@@ -1,0 +1,16 @@
+[Unit]
+Description=Tell the Pi gateway the GPU PC is powering off, and set the wake alarm
+Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
+# Stopped before these at shutdown, so the network and the app are still up.
+Wants=network-online.target
+After=network-online.target snap.docker.dockerd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/kaya-going-down.sh
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -154,7 +154,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
 scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
-sudo deploy/power/install.sh    # the PC's scheduled shutdown; `python3 -m src.gateway.schedule is-on` for the schedule
+sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check (no shutdown timer while power.shutdown is empty)
 pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
 ~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
@@ -231,9 +231,13 @@ Every failure returns the semantic results unchanged.
 
 ### Always on, and on demand (2026-09-24)
 
-The PC stopped being always on: it runs 07:00-23:00, to 02:00 after Friday and
-Saturday nights (`config.yaml` → `power`, the one source for the PC's shutdown
-timer, the Pi's Wake-on-LAN timer and the offline reply). Two things follow.
+The PC stopped being always on. It wakes at 07:00 (the Pi's Wake-on-LAN, the BIOS
+alarm as backup) and, since 2026-10-05, is turned off by hand: Gustavo decides
+when, so there is no automatic shutdown. `kaya-going-down.service` tells the Pi at
+every poweroff, which keeps the offline reply on "volto às 07:00" rather than
+"estou em baixo" (`config.yaml` → `power`, the one source for the Pi's
+Wake-on-LAN timer, the offline reply, and a shutdown timer if `power.shutdown`
+ever lists times again; `deploy/power/README.md`). Two things follow.
 
 **WhatsApp enters through the Pi** (`src/gateway/`, `deploy/pi/`). WAHA and the
 Cloudflare tunnel run there; the gateway journals every event in SQLite, downloads

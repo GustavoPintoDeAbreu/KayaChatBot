@@ -7,6 +7,8 @@ derives what it needs from here rather than restating the times.
 ``shutdown`` is keyed by the EVENING it belongs to. A time before noon means
 after midnight, so ``fri: "02:00"`` fires early on Saturday. That is how people
 describe it ("Friday we stay up until two"), and it keeps a late night one entry.
+An empty ``shutdown`` means no automatic shutdown: the PC only wakes on schedule
+and is turned off by hand.
 
     python -m src.gateway.schedule [--config config.yaml] ACTION
     ACTION: oncalendar-shutdown | oncalendar-wake | next-wake-epoch | next-shutdown | is-on
@@ -119,11 +121,13 @@ def schedule_sentence(schedule: PowerSchedule) -> str:
     """The hours in words, for a WhatsApp reply: "das 07:00 às 23:00, e até às 02:00 às sextas e sábados".
 
     The most common shutdown time is the rule and the others are named as
-    exceptions, by the evening they belong to (as people say it).
+    exceptions, by the evening they belong to (as people say it). Without
+    shutdown times the PC is turned off by hand, so there are no hours to give
+    and this is empty.
     """
     wake = schedule.wake_time.strftime("%H:%M")
     if not schedule.shutdown:
-        return f"sempre ligado a partir das {wake}"
+        return ""
     by_time: Dict[str, List[int]] = {}
     for evening, at in sorted(schedule.shutdown.items()):
         by_time.setdefault(at.strftime("%H:%M"), []).append(evening)

@@ -17,6 +17,7 @@ LISBON = ZoneInfo("Europe/Lisbon")
 POWER = {"timezone": "Europe/Lisbon", "wake_time": "07:00", "wol_lead_minutes": 5,
          "shutdown": {"sun": "23:00", "mon": "23:00", "tue": "23:00", "wed": "23:00",
                       "thu": "23:00", "fri": "02:00", "sat": "02:00"}}
+MANUAL_OFF = {**POWER, "shutdown": {}}
 # Dashes as clause separators; a hyphen inside a word ("respondo-te") is Portuguese.
 DASHES = (" - ", "\u2013", "\u2014")
 
@@ -40,7 +41,7 @@ class Clock:
 
 @pytest.fixture
 def rig(tmp_path):
-    def build(start: float):
+    def build(start: float, power=POWER):
         clock = Clock(start)
         monitor = PcMonitor("http://pc:7860", now=clock, probe=lambda: PcState.ONLINE)
         monitor.observe(PcState.ONLINE)
@@ -48,7 +49,7 @@ def rig(tmp_path):
         sent = []
         responder = OfflineResponder(
             journal, lambda chat, text, reply_to=None: sent.append((chat, text, reply_to)),
-            PowerSchedule.from_config(POWER), monitor, now=clock)
+            PowerSchedule.from_config(power), monitor, now=clock)
         return clock, monitor, journal, responder, sent
     return build
 
@@ -104,6 +105,27 @@ def test_offline_at_night_gives_the_schedule(rig):
     assert responder.outage() == SCHEDULED
     assert responder.maybe_reply(_entry(journal, "m1"))
     assert "O meu horário é das 07:00 às 23:00" in sent[0][1] and "amanhã às 07:00" in sent[0][1]
+
+
+def test_schedule_sentence_is_empty_without_shutdowns():
+    assert schedule_sentence(PowerSchedule.from_config(MANUAL_OFF)) == ""
+
+
+def test_manual_off_announced_gives_the_wake_without_hours(rig):
+    clock, monitor, journal, responder, sent = rig(NIGHT, MANUAL_OFF)
+    monitor.announce_going_down()
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 600
+    assert responder.outage() == SCHEDULED
+    assert responder.maybe_reply(_entry(journal, "m1"))
+    assert sent[0][1] == "Estou desligado agora. Volto amanhã às 07:00 e respondo-te nessa altura."
+
+
+def test_manual_off_unannounced_is_a_fault(rig):
+    clock, monitor, journal, responder, sent = rig(NIGHT, MANUAL_OFF)
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 120
+    assert responder.outage() == FAULT
 
 
 def test_offline_during_the_day_is_a_fault(rig):
