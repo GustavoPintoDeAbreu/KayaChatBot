@@ -135,3 +135,18 @@ def test_ollama_keep_alive_is_sent_as_a_number():
 
     assert OllamaBackend(None, "http://o", "m", keep_alive="-1").keep_alive == -1
     assert OllamaBackend(None, "http://o", "m", keep_alive="30m").keep_alive == "30m"
+
+
+def test_broker_calls_name_kaya_in_the_user_agent(tmp_path, monkeypatch):
+    """labwatch attributes broker traffic by User-Agent; a bare python-requests is anonymous."""
+    monkeypatch.delenv("KAYA_LLAMA_URL", raising=False)
+    seen = []
+
+    def fake(url, **kwargs):
+        seen.append((kwargs.get("headers") or {}).get("User-Agent"))
+        return _Resp({"running": []})
+
+    monkeypatch.setattr(requests, "get", fake)
+    monkeypatch.setattr(requests, "post", fake)
+    ensure_model_loaded(_config(tmp_path, "http://b:8080/upstream/kaya"))
+    assert seen and set(seen) == {"kaya"}
