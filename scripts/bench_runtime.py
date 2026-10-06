@@ -44,6 +44,9 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+# Benchmark traffic is not Kaya's: labwatch books it to kaya-dev by this User-Agent.
+_UA = {"User-Agent": "kaya-bench"}
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -475,7 +478,7 @@ def _wait_healthy(arm_def: Dict[str, Any]) -> bool:
             continue
         # Check health endpoint
         try:
-            resp = requests.get(health_url, timeout=10)
+            resp = requests.get(health_url, headers=_UA, timeout=10)
             if resp.status_code == expected:
                 _log(f"  {container_name} healthy at {health_url}")
                 return True
@@ -516,7 +519,7 @@ def complete(
             "temperature": 0,
         }
         url = f"{base_url}/completion"
-        with requests.post(url, json=payload, timeout=request_timeout, stream=True) as resp:
+        with requests.post(url, json=payload, headers=_UA, timeout=request_timeout, stream=True) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data:"):
@@ -553,7 +556,7 @@ def complete(
             },
         }
         url = f"{base_url}/api/generate"
-        with requests.post(url, json=payload, timeout=request_timeout, stream=True) as resp:
+        with requests.post(url, json=payload, headers=_UA, timeout=request_timeout, stream=True) as resp:
             resp.raise_for_status()
             last_eval = 0
             last_prompt = 0
@@ -588,20 +591,20 @@ def unload(arm: str) -> None:
     if arm_def["type"] == "llama" and arm_def["server"] == "llama-swap proxy":
         # Unload the model behind llama-swap
         proxy_url = "http://127.0.0.1:8091"
-        requests.post(f"{proxy_url}/api/models/unload", json={"name": "kaya"}, timeout=30)
+        requests.post(f"{proxy_url}/api/models/unload", json={"name": "kaya"}, headers=_UA, timeout=30)
     elif arm_def["type"] == "ollama":
         model = arm_def["model"]
         # Send keep_alive=0 to unload
         requests.post(
             f"{arm_def['base_url']}/api/generate",
             json={"model": model, "keep_alive": 0},
-            timeout=30,
+            headers=_UA, timeout=30,
         )
         # Poll /api/ps until model is gone
         deadline = time.time() + 60
         while time.time() < deadline:
             try:
-                resp = requests.get(f"{arm_def['base_url']}/api/ps", timeout=5)
+                resp = requests.get(f"{arm_def['base_url']}/api/ps", headers=_UA, timeout=5)
                 data = resp.json()
                 models = data.get("models", []) or []
                 if not any(model in m.get("model", "") for m in models):
@@ -1077,7 +1080,7 @@ def cmd_vision(arm: str) -> Dict:
                     "max_tokens": 120,
                     "temperature": 0,
                 }
-                resp = requests.post(url, json=payload, timeout=_timeout_for_arm(arm))
+                resp = requests.post(url, json=payload, headers=_UA, timeout=_timeout_for_arm(arm))
                 resp.raise_for_status()
                 response_text = resp.json()["choices"][0]["message"]["content"]
             elif arm_def["type"] == "ollama":
@@ -1099,7 +1102,7 @@ def cmd_vision(arm: str) -> Dict:
                         "num_predict": 120,
                     },
                 }
-                resp = requests.post(url, json=payload, timeout=_timeout_for_arm(arm))
+                resp = requests.post(url, json=payload, headers=_UA, timeout=_timeout_for_arm(arm))
                 resp.raise_for_status()
                 response_text = resp.json()["message"]["content"]
         except Exception as exc:

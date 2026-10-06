@@ -31,6 +31,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# Names Kaya to the GPU broker, so labwatch books her tokens to her (a bare
+# python-requests is unattributable). Override with KAYA_USER_AGENT.
+_UA = {"User-Agent": os.environ.get("KAYA_USER_AGENT", "kaya")}
+
 # ``http://llm-broker:8080/upstream/kaya``: the shared llama-swap broker, which
 # starts the named model on first request (see ~/llm-broker/README.md).
 _BROKER_UPSTREAM = re.compile(r"^(?P<base>.+)/upstream/(?P<model>[^/]+)/?$")
@@ -133,7 +137,7 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
     base, model = target
     ollama = resolve_backend(config) == "ollama"
     try:
-        running = requests.get(f"{base}/running", timeout=5).json().get("running", []) or []
+        running = requests.get(f"{base}/running", headers=_UA, timeout=5).json().get("running", []) or []
         loaded = {entry.get("model") for entry in running if isinstance(entry, dict)}
         # Entries are fnmatch patterns ("*-g1"), so a new borrower named by the
         # broker's convention is covered without a config change here.
@@ -141,17 +145,17 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
         for borrower in sorted(name for name in loaded if name):
             if borrower != model and any(fnmatch.fnmatchcase(borrower, p) for p in patterns):
                 logger.info("unloading %s to take GPU1 back", borrower)
-                requests.post(f"{base}/api/models/unload/{borrower}", timeout=60)
+                requests.post(f"{base}/api/models/unload/{borrower}", headers=_UA, timeout=60)
         load_timeout = float(bcfg.get("load_timeout", 300))
         if ollama:
             # A generate with no prompt loads the model and returns; /api/version
             # would only start the server process, leaving the load to the reply.
             requests.post(f"{base}/upstream/{model}/api/generate",
                           json={"model": resolve_ollama_model(config)},
-                          timeout=load_timeout).raise_for_status()
+                          headers=_UA, timeout=load_timeout).raise_for_status()
         else:
             requests.get(f"{base}/upstream/{model}/health",
-                         timeout=load_timeout).raise_for_status()
+                         headers=_UA, timeout=load_timeout).raise_for_status()
     except (requests.RequestException, ValueError) as exc:
         logger.warning("broker preparation failed (%s); generating anyway", exc)
 
@@ -269,7 +273,7 @@ class LlamaCppBackend(InferenceBackend):
         resp = requests.post(
             f"{self.server_url}/completion",
             json=self._payload(messages, max_new_tokens, sampling, False),
-            timeout=self.timeout,
+            headers=_UA, timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json().get("content", "")
@@ -278,7 +282,7 @@ class LlamaCppBackend(InferenceBackend):
         with requests.post(
             f"{self.server_url}/completion",
             json=self._payload(messages, max_new_tokens, sampling, True),
-            timeout=self.timeout,
+            headers=_UA, timeout=self.timeout,
             stream=True,
         ) as resp:
             resp.raise_for_status()
@@ -343,7 +347,7 @@ class OllamaBackend(InferenceBackend):
         resp = requests.post(
             f"{self.server_url}/api/generate",
             json=self._payload(messages, max_new_tokens, sampling, False),
-            timeout=self.timeout,
+            headers=_UA, timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json().get("response", "")
@@ -352,7 +356,7 @@ class OllamaBackend(InferenceBackend):
         with requests.post(
             f"{self.server_url}/api/generate",
             json=self._payload(messages, max_new_tokens, sampling, True),
-            timeout=self.timeout,
+            headers=_UA, timeout=self.timeout,
             stream=True,
         ) as resp:
             resp.raise_for_status()
