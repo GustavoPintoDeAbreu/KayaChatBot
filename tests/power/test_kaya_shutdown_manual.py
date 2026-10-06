@@ -62,7 +62,7 @@ def _write_fakes(tmp_path):
     (bin_dir / "curl").write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\t%s\\n\' curl "$*" >> "${FAKE_LOG:?}"\n'
         'if [[ "$*" == *"relay/status"* ]]; then\n'
-        '  status=${FAKE_RELAY_STATUS:-\'{"pending_replies": 0}\'\n'
+        '  status=${FAKE_RELAY_STATUS:-\'{"pending_replies": 0}\'}\n'
         '  printf "%s" "$status"\n'
         'fi\n')
     (bin_dir / "curl").chmod(0o755)
@@ -215,14 +215,16 @@ def test_manual_cancel_while_waiting(rig):
     proc = subprocess.Popen([BASH, str(SCRIPT), "--manual"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 10
-    phase = tmp_path / "state" / "phase"
     while time.time() < deadline:
-        if phase.exists() and phase.read_text().strip() == "waiting":
+        # The phase file is written before the first "Waiting for:" update, so
+        # waiting on it would cancel before the script ever sent one. Wait on the
+        # update itself, which is the state the test is actually trying to cancel.
+        if any("Waiting for:" in update["text"] for update in _updates(tmp_path)):
             break
         time.sleep(0.05)
     else:
         proc.kill()
-        raise AssertionError("the script never reached the waiting phase")
+        raise AssertionError("the script never sent a 'Waiting for:' update")
     (tmp_path / "state" / "cancel").write_text("cancel")
     proc.wait(timeout=15)
     assert proc.returncode == 0
