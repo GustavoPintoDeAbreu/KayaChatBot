@@ -1,5 +1,4 @@
 """The manual shutdown: what /homelaboff starts on the PC, run against fake tools."""
-import getpass
 import json
 import os
 import shutil
@@ -84,7 +83,9 @@ def rig(tmp_path):
     env = {
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
         "KAYA_POWER_ENV": str(env_file),
-        "POWER_USER": getpass.getuser(),
+        # A user every passwd file has: CI runs the suite as a uid with no passwd entry.
+        # The sudo fake drops -u, so nothing runs as this user.
+        "POWER_USER": "root",
         "POWER_STAY_ON_FILE": str(tmp_path / "stay-on"),
         "DOCKER_BIN": str(tmp_path / "bin" / "docker"),
         "POWER_BOOT_DIR": str(boot),
