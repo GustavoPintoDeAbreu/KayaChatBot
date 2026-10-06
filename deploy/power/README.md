@@ -10,6 +10,8 @@ What acts on it is generated from that block, never edited by hand:
 |---|---|---|
 | PC | `kaya-going-down.service` → `/usr/local/sbin/kaya-going-down.sh` at every poweroff | `sudo deploy/power/install.sh` |
 | PC | `kaya-shutdown.timer`, **only if `power.shutdown` lists times** (none today) | `sudo deploy/power/install.sh` |
+| PC | `kaya-power-listener.service` → `/usr/local/sbin/kaya-power-listener` on port 8099 (the Pi's `/homelaboff` trigger) | `sudo deploy/power/install.sh` |
+| PC | `kaya-shutdown-manual.service` → `kaya-shutdown.sh --manual`, started by the listener | `sudo deploy/power/install.sh` |
 | Pi | `pc-wake.timer` (Wake-on-LAN, 5 min before wake time) | `scripts/deploy_pi.sh` |
 | Pi | the gateway's offline reply ("volto às 07:00") | read at gateway start |
 
@@ -38,6 +40,34 @@ minute. Every run is in the journal of the boot that ended:
 **Never add `docker stop` to this.** A container stopped explicitly stays stopped
 after the reboot, so the stack would not come back at 07:00. A stop started by the
 daemon during poweroff does come back, and so does `restart: unless-stopped`.
+
+## Turning it off from WhatsApp (`/homelaboff`)
+
+The owner DMs the bot `/homelaboff` (and `/homelabon` to wake it). The gateway
+(`src/gateway/homelab.py`) handles the DM and never lets it reach Kaya; it talks
+to a listener on the PC. The flow:
+
+1. The gateway asks the listener `GET /power/status`, which runs
+   `kaya-shutdown.sh --report`: what is running (CI job, Qwen run, job container,
+   idea-pipeline container, busy GPU) plus notes (a kernel without its nvidia
+   module, `.stay-on`, Kaya's in-flight replies).
+2. It shows that to the owner and asks for confirmation. `yes` starts
+   `kaya-shutdown-manual.service`; `no` and a 5-minute expiry keep the PC on.
+3. The manual mode waits until the PC is idle, sending a WhatsApp update every
+   30 minutes and giving up after 12 hours (`POWER_MANUAL_MAX_WAIT_MINUTES`).
+   It uses the same busy checks as the scheduled mode, except `.stay-on` is
+   ignored — he asked for it — and a busy GPU counts as Kaya's while she is
+   finishing a reply.
+4. When idle it warns on the desktop, waits `POWER_WARN_SECONDS`, then does the
+   shared last steps: Kaya's replies, the going-down notice, the RTC alarm, and a
+   plain `systemctl poweroff`. No `docker stop`.
+
+`cancel` (DM or the listener's `POST /power/cancel`) stops the wait while it is
+still waiting; once it has switched to "stopping" it is too late. The listener
+authenticates the Pi by IP allowlist (`POWER_ALLOWED_IPS`) and the relay token,
+and its only job is to start `kaya-shutdown-manual.service` — it never powers
+anything off itself. Logs:
+`journalctl -u kaya-power-listener -u kaya-shutdown-manual`.
 
 ## Bringing a shutdown schedule back
 

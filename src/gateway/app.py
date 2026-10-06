@@ -44,6 +44,7 @@ from src.chat.whatsapp_adapter import (
 )
 from src.gateway.autoreply import OfflineResponder
 from src.gateway.forwarder import Forwarder
+from src.gateway.homelab import HomelabPower
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.gateway.journal import Journal
 from src.gateway.monitor import PcMonitor, PcState
@@ -106,9 +107,11 @@ class Gateway:
                  send_text: Optional[Callable[[str, str, Optional[str]], Any]] = None,
                  fetch_media: Optional[Callable[[str], Awaitable[Tuple[bytes, str]]]] = None,
                  idea_tap: Optional[IdeaTap] = None,
+                 homelab: Optional[HomelabPower] = None,
                  now: Callable[[], float] = time.time) -> None:
         self.settings = settings
         self.idea_tap = idea_tap
+        self.homelab = homelab
         self._now = now
         with open(settings.config_path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
@@ -131,6 +134,9 @@ class Gateway:
                                    media_base_url=settings.media_base_url, now=now)
         self.responder = OfflineResponder(self.journal, self._send_text, self.schedule,
                                           self.monitor, now=now)
+        if homelab:
+            homelab.attach(journal=self.journal, monitor=self.monitor, send_text=self._send_text,
+                           data_dir=settings.data_dir, now=now)
         self._bot_jids: Set[str] = set(json.loads(self.journal.get_meta("bot_jids", "[]")))
         self._stop = asyncio.Event()
         self._tasks: list = []
@@ -194,6 +200,9 @@ class Gateway:
             routed = await self._route_idea(msg)
             if routed is not None:
                 return routed
+            routed = await self._route_homelab(msg)
+            if routed is not None:
+                return routed
             chat_id, sender_id, wa_ts = msg.chat_id, msg.sender_id, msg.timestamp
             addressed = is_addressed(msg, self._bot_jids, self._respond_on_mention,
                                      self._respond_on_reply, self._whitelist_enabled,
@@ -241,6 +250,13 @@ class Gateway:
             await asyncio.to_thread(self._send_text, msg.chat_id, IDEA_OFFLINE_TEXT, msg.message_id)
         return {"idea": "inbox-offline"}
 
+    async def _route_homelab(self, msg: InboundMessage) -> Optional[Dict[str, Any]]:
+        """The owner's /homelaboff and /homelabon, and their replies; None leaves it to Kaya."""
+        kind = self.homelab.classify(msg) if self.homelab else None
+        if kind is None:
+            return None
+        return await self.homelab.handle(msg, kind)
+
     def status(self) -> Dict[str, Any]:
         """PC state, the schedule, and the journal's size."""
         now = datetime.datetime.fromtimestamp(self._now(), self.schedule.timezone)
@@ -274,7 +290,8 @@ class Gateway:
         return app
 
     def _build_internal_app(self) -> FastAPI:
-        """What the LAN sees: WAHA's webhook, media for the PC, the shutdown notice."""
+        """What the LAN sees: WAHA's webhook, media for the PC, the shutdown notice,
+        and the power updates the PC's shutdown script posts while it waits."""
         app = FastAPI(title="Kaya gateway", docs_url=None, redoc_url=None, openapi_url=None)
         settings = self.settings
 
@@ -308,6 +325,19 @@ class Gateway:
             self.monitor.mark_degraded()
             return {"ok": True}
 
+        @app.post("/pc/power/update")
+        async def power_update(request: Request, x_relay_token: str = Header(default="")):
+            if not settings.relay_token or x_relay_token != settings.relay_token:
+                raise HTTPException(status_code=401, detail="invalid relay token")
+            if self.homelab is None:
+                raise HTTPException(status_code=404)
+            body = await request.json()
+            text = str(body.get("text") or "").strip()
+            if not text:
+                raise HTTPException(status_code=400)
+            sent = await asyncio.to_thread(self.homelab.relay_update, text, bool(body.get("final")))
+            return {"ok": True, "sent": sent}
+
         @app.get("/status")
         def internal_status():
             return self.status()
@@ -319,10 +349,12 @@ class Gateway:
         return app
 
     async def start_background(self) -> None:
-        """Start the PC monitor and the forwarder."""
+        """Start the PC monitor, the forwarder, and the homelab watcher."""
         self._stop.clear()
         self._tasks = [asyncio.create_task(self.monitor.run(self._stop)),
                        asyncio.create_task(self.forwarder.run(self._stop))]
+        if self.homelab:
+            self._tasks.append(asyncio.create_task(self.homelab.watch(self._stop)))
 
     async def stop_background(self) -> None:
         """Stop them and wait."""
@@ -351,7 +383,8 @@ def main() -> None:
     """Entry point for the container."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(Gateway(GatewaySettings.from_env(), idea_tap=IdeaTap.from_env(os.environ)).serve())
+    asyncio.run(Gateway(GatewaySettings.from_env(), idea_tap=IdeaTap.from_env(os.environ),
+                        homelab=HomelabPower.from_env(os.environ)).serve())
 
 
 if __name__ == "__main__":
