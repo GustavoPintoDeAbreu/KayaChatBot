@@ -40,6 +40,8 @@ USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 IDLE_MINUTES="${POWER_IDLE_MINUTES:-15}"
 WARN_SECONDS="${POWER_WARN_SECONDS:-120}"
 GPU_BUSY_PERCENT="${POWER_GPU_BUSY_PERCENT:-30}"
+# The dev card (GPU0), by UUID because indices change across boots. GPU1 is Kaya's.
+DEV_GPU_UUID="${POWER_DEV_GPU_UUID:-GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d}"
 PC_APP_URL="${POWER_PC_APP_URL:-http://127.0.0.1:7860}"
 GATEWAY_URL="${POWER_GATEWAY_URL:-}"
 RELAY_TOKEN="${KAYA_RELAY_TOKEN:-}"
@@ -72,6 +74,13 @@ idle_ms() {
     | sed -n 's/^(uint64 \([0-9]*\),)$/\1/p'
 }
 
+# The highest GPU utilization (an integer), or nothing. With a UUID, only that GPU's.
+gpu_util() {
+  nvidia-smi --query-gpu=uuid,utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+    | awk -F', *' -v only="${1:-}" '(only == "" || $1 == only) && $2 ~ /^[0-9]+$/ { print $2 }' \
+    | sort -n | tail -1
+}
+
 # The replies the bot has accepted and is still generating. The integer, or
 # nothing when there is no token or the app is unreachable.
 pending_replies() {
@@ -99,17 +108,20 @@ busy_reasons() {
   if [ -n "$("$DOCKER" ps -q --filter label=idea-pipeline.idea 2>/dev/null | head -1)" ]; then
     echo "an idea-pipeline build or test container is running"
   fi
-  local util
-  util="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -n | tail -1)"
-  if [ -n "$util" ] && [ "$util" -ge "$GPU_BUSY_PERCENT" ]; then
-    if [ "$mode" = manual ]; then
-      local pending; pending="$(pending_replies)"
-      if [ -n "$pending" ] && [ "$pending" -gt 0 ]; then
-        return 0
-      fi
+  # Manual mode: while Kaya is finishing replies, GPU load counts as hers, except on the dev
+  # card, where a bench or a qcode session is never hers.
+  local only=""
+  if [ "$mode" = manual ]; then
+    local pending; pending="$(pending_replies)"
+    if [ -n "$pending" ] && [ "$pending" -gt 0 ]; then
+      only="$DEV_GPU_UUID"
     fi
+  fi
+  local util
+  util="$(gpu_util "$only")"
+  if [ -n "$util" ] && [ "$util" -ge "$GPU_BUSY_PERCENT" ]; then
     sleep "$GPU_RECHECK_SECONDS"
-    util="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -n | tail -1)"
+    util="$(gpu_util "$only")"
     [ -n "$util" ] && [ "$util" -ge "$GPU_BUSY_PERCENT" ] && echo "a GPU is ${util}% busy"
   fi
 }
@@ -209,7 +221,7 @@ enter_stopping() {
 }
 
 report() {
-  local problem kernel_note
+  local problem
   problem="$(kernel_problem)"
   if [ -n "$problem" ]; then
     printf 'note\tkernel %s has no nvidia module: a shutdown would be refused\n' "$problem"

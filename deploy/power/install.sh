@@ -76,11 +76,18 @@ POWER_PC_APP_URL=http://127.0.0.1:7860
 POWER_GATEWAY_URL=http://192.168.1.238:8088
 POWER_LISTEN_PORT=8099
 POWER_ALLOWED_IPS=192.168.1.238
+POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d
 KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:-}
 ENV
   chmod 600 /etc/kaya-power.env
   [ -n "${KAYA_RELAY_TOKEN:-}" ] && echo "wrote /etc/kaya-power.env" \
     || echo "wrote /etc/kaya-power.env: set KAYA_RELAY_TOKEN there"
+else
+  # An older file: add the keys later releases introduced, leaving every existing line alone.
+  for line in POWER_LISTEN_PORT=8099 POWER_ALLOWED_IPS=192.168.1.238 \
+              POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d; do
+    grep -q "^${line%%=*}=" /etc/kaya-power.env || { echo "$line" >> /etc/kaya-power.env; echo "added $line"; }
+  done
 fi
 
 # Wake-on-LAN must survive reboots; NetworkManager resets the NIC otherwise.

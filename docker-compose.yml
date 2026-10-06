@@ -539,6 +539,8 @@ services:
       # source, which is a genuinely confusing way to lose an afternoon.
       - ./tests:/app/tests:ro
       - ./scripts:/app/scripts:ro
+      # tests/power runs the real deploy/power scripts against fake binaries.
+      - ./deploy:/app/deploy:ro
       - ./configs:/app/configs:ro
       - ./config.yaml:/app/config.yaml:ro
       # Kept for parity with kaya-base: `env_file` already puts these in the

@@ -69,6 +69,11 @@ and its only job is to start `kaya-shutdown-manual.service` — it never powers
 anything off itself. Logs:
 `journalctl -u kaya-power-listener -u kaya-shutdown-manual`.
 
+While Kaya has replies in flight, GPU load counts as hers and does not hold the
+shutdown, except on the dev card (`POWER_DEV_GPU_UUID`, GPU0 by UUID): a bench or a
+`qcode` session there still does. `install.sh` adds keys a newer release introduced
+to an existing `/etc/kaya-power.env` and leaves the other lines alone.
+
 ## Bringing a shutdown schedule back
 
 List the evenings in `power.shutdown` (`sun: "23:00"`, `fri: "02:00"`: a time

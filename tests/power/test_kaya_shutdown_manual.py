@@ -57,7 +57,9 @@ def _write_fakes(tmp_path):
     (bin_dir / "docker").chmod(0o755)
     (bin_dir / "nvidia-smi").write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\t%s\\n\' nvidia-smi "$*" >> "${FAKE_LOG:?}"\n'
-        'printf "%s\\n" "${FAKE_GPU_UTIL:-0}"\n')
+        # "uuid, util" per GPU, as --query-gpu=uuid,utilization.gpu prints it. FAKE_GPU_UTIL is
+        # Kaya's card (GPU1); FAKE_DEV_GPU_UTIL the dev card (GPU0, POWER_DEV_GPU_UUID below).
+        'printf "GPU-kaya, %s\\nGPU-dev, %s\\n" "${FAKE_GPU_UTIL:-0}" "${FAKE_DEV_GPU_UTIL:-0}"\n')
     (bin_dir / "nvidia-smi").chmod(0o755)
     (bin_dir / "curl").write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\t%s\\n\' curl "$*" >> "${FAKE_LOG:?}"\n'
@@ -91,6 +93,7 @@ def rig(tmp_path):
         "POWER_REPO": str(REPO),
         "POWER_PYTHON": sys.executable,
         "POWER_GPU_RECHECK_SECONDS": "0",
+        "POWER_DEV_GPU_UUID": "GPU-dev",
         "POWER_WARN_SECONDS": "0",
         "POWER_MANUAL_CHECK_SECONDS": "1",
         "POWER_GATEWAY_URL": "http://gw.test:8088",
@@ -181,6 +184,19 @@ def test_gpu_is_kayas_while_she_is_replying(rig):
     result = _run_script(env, "--report")
     assert result.returncode == 0
     assert "a GPU is 90% busy" in result.stdout
+
+
+def test_the_dev_gpu_still_counts_while_kaya_is_replying(rig):
+    # A bench or a qcode session on GPU0 is not Kaya's, even while she has replies in flight.
+    env, tmp_path = rig
+    env["FAKE_GPU_UTIL"] = "90"
+    env["FAKE_DEV_GPU_UTIL"] = "85"
+    env["FAKE_RELAY_STATUS"] = '{"pending_replies": 1}'
+    result = _run_script(env, "--report")
+    assert result.returncode == 0
+    assert "a GPU is 85% busy" in result.stdout
+    assert "a GPU is 90% busy" not in result.stdout
+    assert "Kaya is finishing 1 reply" in result.stdout
 
 
 def test_manual_idle_powers_off_in_order(rig):
