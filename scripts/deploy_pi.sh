@@ -79,6 +79,26 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 UNIT
+ssh "$PI" "sudo tee /etc/systemd/system/pc-wake-request.path >/dev/null" <<UNIT
+[Unit]
+Description=Wake the GPU PC when the gateway asks (/homelabon)
+
+[Path]
+PathExists=/home/gustavo/$REMOTE_DIR/deploy/pi/data/gateway/pc-wake.request
+Unit=pc-wake-request.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ssh "$PI" "sudo tee /etc/systemd/system/pc-wake-request.service >/dev/null" <<UNIT
+[Unit]
+Description=Wake the GPU PC on the gateway's request
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f /home/gustavo/$REMOTE_DIR/deploy/pi/data/gateway/pc-wake.request
+ExecStart=/home/gustavo/$REMOTE_DIR/deploy/pi/pc-wake.sh
+UNIT
 ssh "$PI" "sudo tee /etc/systemd/system/kaya-firewall.service >/dev/null" <<UNIT
 [Unit]
 Description=Restrict the Pi's WAHA and gateway ports to the GPU PC
@@ -93,7 +113,7 @@ ExecStart=/home/gustavo/$REMOTE_DIR/deploy/pi/kaya-firewall.sh
 [Install]
 WantedBy=multi-user.target
 UNIT
-ssh "$PI" "sudo systemctl daemon-reload && sudo systemctl enable --now pc-wake.timer >/dev/null && sudo systemctl enable --now kaya-firewall.service >/dev/null"
+ssh "$PI" "sudo systemctl daemon-reload && sudo systemctl enable --now pc-wake.timer >/dev/null && sudo systemctl enable --now pc-wake-request.path >/dev/null && sudo systemctl enable --now kaya-firewall.service >/dev/null"
 
 ssh "$PI" "test -f $REMOTE_DIR/deploy/pi/.env" \
   || { echo "❌ $REMOTE_DIR/deploy/pi/.env missing: run with --init-env" >&2; exit 1; }

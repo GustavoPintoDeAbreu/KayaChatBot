@@ -64,9 +64,15 @@ scripts/deploy_pi.sh --init-env   # first time: writes the Pi's .env from ~/kaya
 scripts/deploy_pi.sh              # afterwards: sync code, rebuild, restart
 ```
 
-The script also installs two units on the Pi:
+`/homelaboff` and `/homelabon` are on when `HOMELAB_OWNER_NUMBERS` is set in the
+Pi's `.env` (the owner's number(s), comma-separated, digits only). `--init-env`
+does not copy it, so on an existing Pi add it by hand and restart the gateway.
+
+The script also installs three units on the Pi:
 
 - `pc-wake.timer`: Wake-on-LAN at `power.wake_time` minus `wol_lead_minutes`.
+- `pc-wake-request.path`/`.service`: runs the same `pc-wake.sh` when the gateway
+  drops `data/gateway/pc-wake.request` — that is what `/homelabon` does.
 - `kaya-firewall.service`: ports 3000 and 8088 accept the PC only (`DOCKER-USER`,
   since Docker-published ports skip `INPUT`).
 

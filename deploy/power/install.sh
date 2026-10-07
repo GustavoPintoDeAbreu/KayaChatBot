@@ -12,10 +12,13 @@ PY="${POWER_PYTHON:-python3}"
 
 if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now kaya-shutdown.timer kaya-boot-check.service 2>/dev/null || true
+  systemctl disable --now kaya-power-listener.service 2>/dev/null || true
   systemctl disable kaya-going-down.service 2>/dev/null || true
   rm -f /etc/systemd/system/kaya-shutdown.{timer,service} /usr/local/sbin/kaya-shutdown.sh \
         /etc/systemd/system/kaya-going-down.service /usr/local/sbin/kaya-going-down.sh \
         /etc/systemd/system/kaya-boot-check.service /usr/local/sbin/kaya-boot-check.sh \
+        /usr/local/sbin/kaya-power-listener /etc/systemd/system/kaya-power-listener.service \
+        /etc/systemd/system/kaya-shutdown-manual.service \
         /etc/apt/apt.conf.d/51kaya-no-kernel
   systemctl daemon-reload
   echo "removed"; exit 0
@@ -25,6 +28,11 @@ install -m 0755 "$REPO/deploy/power/kaya-going-down.sh" /usr/local/sbin/kaya-goi
 install -m 0644 "$REPO/deploy/power/kaya-going-down.service" /etc/systemd/system/kaya-going-down.service
 install -m 0755 "$REPO/deploy/power/kaya-boot-check.sh" /usr/local/sbin/kaya-boot-check.sh
 install -m 0644 "$REPO/deploy/power/kaya-boot-check.service" /etc/systemd/system/kaya-boot-check.service
+# The manual mode needs the script even without a schedule.
+install -m 0755 "$REPO/deploy/power/kaya-shutdown.sh" /usr/local/sbin/kaya-shutdown.sh
+install -m 0755 "$REPO/deploy/power/kaya_power_listener.py" /usr/local/sbin/kaya-power-listener
+install -m 0644 "$REPO/deploy/power/kaya-power-listener.service" /etc/systemd/system/kaya-power-listener.service
+install -m 0644 "$REPO/deploy/power/kaya-shutdown-manual.service" /etc/systemd/system/kaya-shutdown-manual.service
 
 # Kernels are upgraded by hand, never by unattended-upgrades: it upgraded the
 # kernel and held back the matching nvidia module on 2026-09-25, and the next
@@ -39,7 +47,6 @@ APT
 
 oncalendar="$(cd "$REPO" && "$PY" -m src.gateway.schedule --config config.yaml oncalendar-shutdown)"
 if [ -n "$oncalendar" ]; then
-  install -m 0755 "$REPO/deploy/power/kaya-shutdown.sh" /usr/local/sbin/kaya-shutdown.sh
   install -m 0644 "$REPO/deploy/power/kaya-shutdown.service" /etc/systemd/system/kaya-shutdown.service
   {
     echo "[Unit]"
@@ -55,7 +62,7 @@ if [ -n "$oncalendar" ]; then
   } > /etc/systemd/system/kaya-shutdown.timer
 else
   systemctl disable --now kaya-shutdown.timer 2>/dev/null || true
-  rm -f /etc/systemd/system/kaya-shutdown.{timer,service} /usr/local/sbin/kaya-shutdown.sh
+  rm -f /etc/systemd/system/kaya-shutdown.{timer,service}
   echo "no shutdown times in config.yaml: no shutdown timer, the PC is turned off by hand"
 fi
 
@@ -67,11 +74,20 @@ POWER_REPO=/home/gustavo/kaya-prod
 POWER_PYTHON=python3
 POWER_PC_APP_URL=http://127.0.0.1:7860
 POWER_GATEWAY_URL=http://192.168.1.238:8088
+POWER_LISTEN_PORT=8099
+POWER_ALLOWED_IPS=192.168.1.238
+POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d
 KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:-}
 ENV
   chmod 600 /etc/kaya-power.env
   [ -n "${KAYA_RELAY_TOKEN:-}" ] && echo "wrote /etc/kaya-power.env" \
     || echo "wrote /etc/kaya-power.env: set KAYA_RELAY_TOKEN there"
+else
+  # An older file: add the keys later releases introduced, leaving every existing line alone.
+  for line in POWER_LISTEN_PORT=8099 POWER_ALLOWED_IPS=192.168.1.238 \
+              POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d; do
+    grep -q "^${line%%=*}=" /etc/kaya-power.env || { echo "$line" >> /etc/kaya-power.env; echo "added $line"; }
+  done
 fi
 
 # Wake-on-LAN must survive reboots; NetworkManager resets the NIC otherwise.
@@ -85,5 +101,7 @@ systemctl daemon-reload
 [ -n "$oncalendar" ] && systemctl enable --now kaya-shutdown.timer
 systemctl enable kaya-boot-check.service
 systemctl enable --now kaya-going-down.service
+systemctl enable --now kaya-power-listener.service
+systemctl restart kaya-power-listener.service
 [ -n "$oncalendar" ] && systemctl list-timers kaya-shutdown.timer --no-pager
 systemctl --no-pager --lines=0 status kaya-going-down.service

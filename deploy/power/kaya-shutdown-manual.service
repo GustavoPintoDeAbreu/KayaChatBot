@@ -1,0 +1,8 @@
+[Unit]
+Description=Shut the GPU PC down on request (/homelaboff): other jobs first, then Kaya, then poweroff
+Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kaya-shutdown.sh --manual
+TimeoutStartSec=infinity

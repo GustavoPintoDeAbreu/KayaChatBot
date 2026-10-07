@@ -1,0 +1,14 @@
+[Unit]
+Description=Authenticated LAN trigger for /homelaboff (the Pi gateway only)
+Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/sbin/kaya-power-listener
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=multi-user.target
