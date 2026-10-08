@@ -1,5 +1,5 @@
-"""The owner's ``/homelaboff`` and ``/homelabon`` DMs go to the PC's power
-listener, not to Kaya.
+"""The owner's ``/homelaboff``, ``/homelabon`` and ``/homelabrc`` DMs go to the
+PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
 makes that possible from the phone, from anywhere. The gateway is the only
@@ -10,8 +10,10 @@ answered by Kaya.
 
 It claims, in DMs only:
 
-- the owner's ``/homelaboff`` (ask what is running, then confirm) and
-  ``/homelabon`` (ask the Pi to send Wake-on-LAN);
+- the owner's ``/homelaboff`` (ask what is running, then confirm),
+  ``/homelabon`` (ask the Pi to send Wake-on-LAN) and ``/homelabrc [desk]`` /
+  ``/homelabrc stop [desk]`` (start or end a Claude Remote Control session on
+  the PC, in ``~`` or ``~/Desktop``);
 - the owner's ``yes``/``no`` replies to a pending shutdown question, and his
   ``cancel`` while a shutdown is waiting;
 - the tool's own ``🖥️[homelab]`` echoes coming back as ``from_me``, which are
@@ -68,6 +70,15 @@ ALREADY_ON = "The PC is already on."
 WAKE_FAILED = "Couldn't ask the Pi to send Wake-on-LAN ({error})."
 PC_ONLINE = "The PC is on and Kaya is answering."
 WAKE_TIMEOUT = "The PC isn't up after 15 min. Check the power and the BIOS Wake-on-LAN setting."
+RC_STARTED = "Claude session {name} is up: {url}"
+RC_STARTED_NO_LINK = "Claude session {name} is starting. Open it from the Claude app → Code."
+RC_ALREADY = "{name} is already running. /homelabrc stop{suffix} ends it."
+RC_STOPPED = "{name} stopped."
+RC_NOT_RUNNING = "No {name} session is running."
+RC_FAILED = "Couldn't start {name} ({error})."
+RC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
+RC_DIRS = {"": "home", "home": "home", "~": "home", "desk": "desktop", "desktop": "desktop"}
+RC_USAGE = "Usage: /homelabrc [desk] to start, /homelabrc stop [desk] to end. No argument means ~."
 
 Call = Callable[[str, str, Dict[str, str]], Awaitable[Tuple[int, Dict[str, Any]]]]
 
@@ -147,7 +158,7 @@ class HomelabPower:
         return f"{sorted(self.owner_numbers)[0]}@c.us"
 
     def classify(self, msg: InboundMessage) -> Optional[str]:
-        """``"off"``/``"on"``/``"confirm"``/``"decline"``/``"cancel"``/``"echo"``,
+        """``"off"``/``"on"``/``"rc"``/``"confirm"``/``"decline"``/``"cancel"``/``"echo"``,
         or None to leave the message to Kaya."""
         if msg.is_group:
             return None
@@ -161,6 +172,8 @@ class HomelabPower:
             return "off"
         if first == "/homelabon":
             return "on"
+        if first == "/homelabrc":
+            return "rc"
         word = _normalize_word(msg.text)
         asked = self._pending.get(msg.chat_id)
         if asked is not None and self._now() - asked <= CONFIRM_TTL_SECONDS:
@@ -192,6 +205,8 @@ class HomelabPower:
             return await self._cancel(msg)
         if kind == "on":
             return await self._on(msg)
+        if kind == "rc":
+            return await self._rc(msg)
         return {"homelab": "ignored"}
 
     def _say(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> bool:
@@ -303,6 +318,46 @@ class HomelabPower:
         self._waking[msg.chat_id] = self._now()
         await asyncio.to_thread(self._say, msg.chat_id, WAKE_SENT, msg.message_id)
         return {"homelab": "on-requested"}
+
+    async def _rc(self, msg: InboundMessage) -> Dict[str, Any]:
+        words = (msg.text or "").strip().lower().split()[1:]
+        stop = bool(words) and words[0] == "stop"
+        if stop:
+            words = words[1:]
+        target = RC_DIRS.get(words[0] if words else "")
+        if target is None or len(words) > 1:
+            await asyncio.to_thread(self._say, msg.chat_id, RC_USAGE, msg.message_id)
+            return {"homelab": "rc-usage"}
+        name = f"homelab-{target}"
+        action = "stop" if stop else "start"
+        try:
+            status, body = await self._request("POST", f"/rc/{action}?dir={target}")
+        except (httpx.HTTPError, OSError) as exc:
+            if self._monitor.state in (PcState.OFFLINE, PcState.GOING_DOWN):
+                await asyncio.to_thread(self._say, msg.chat_id, RC_PC_OFF, msg.message_id)
+                return {"homelab": "rc-pc-off"}
+            await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "rc-unreachable"}
+        if stop:
+            if status == 200:
+                text, result = RC_STOPPED.format(name=name), "rc-stopped"
+            elif status == 404:
+                text, result = RC_NOT_RUNNING.format(name=name), "rc-not-running"
+            else:
+                text, result = UNREACHABLE.format(error=f"HTTP {status}"), "rc-failed"
+        elif status == 200 and body.get("url"):
+            text, result = RC_STARTED.format(name=name, url=body["url"]), "rc-started"
+        elif status == 200:
+            text, result = RC_STARTED_NO_LINK.format(name=name), "rc-started"
+        elif status == 409:
+            suffix = " desk" if target == "desktop" else ""
+            text, result = RC_ALREADY.format(name=name, suffix=suffix), "rc-already"
+        else:
+            error = body.get("error") or f"HTTP {status}"
+            text, result = RC_FAILED.format(name=name, error=error), "rc-failed"
+        await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
+        return {"homelab": result}
 
     def relay_update(self, text: str, final: bool) -> bool:
         """Deliver one update from the PC's shutdown script to the owner's chat."""

@@ -74,6 +74,29 @@ shutdown, except on the dev card (`POWER_DEV_GPU_UUID`, GPU0 by UUID): a bench o
 `qcode` session there still does. `install.sh` adds keys a newer release introduced
 to an existing `/etc/kaya-power.env` and leaves the other lines alone.
 
+## A Claude session from WhatsApp (`/homelabrc`)
+
+The owner DMs `/homelabrc` (a session in `~`) or `/homelabrc desk` (in `~/Desktop`);
+`/homelabrc stop [desk]` ends it. The gateway calls the same listener, with the same
+IP and token checks:
+
+- `POST /rc/start?dir=home|desktop` runs, as `POWER_USER` and inside that user's
+  systemd manager (linger keeps it up), never as root:
+  `systemd-run --machine=gustavo@ --user --unit=claude-rc-<dir> --collect
+  claude remote-control --spawn=session --name homelab-<dir>`.
+  It reads the unit's journal for up to 20 s and answers with the
+  `https://claude.ai/code/session_…` link, which the gateway sends back.
+  The directory is fixed by `dir`; a path is never taken from the request.
+- One session per directory: a second start gets 409 ("already running").
+  `--spawn=session` exits when that session ends, and nothing restarts it or
+  starts one at boot.
+- `POST /rc/stop?dir=…` stops the unit; `GET /rc/status` lists what is running.
+- `POWER_RC_CLAUDE` overrides the claude binary (default `~/.local/bin/claude`).
+- The directory must already be trusted by Claude Code (run `claude` there once):
+  with no terminal there is nobody to answer the trust prompt, and the session dies.
+
+Logs: `journalctl --user -u claude-rc-home -u claude-rc-desktop`.
+
 ## Bringing a shutdown schedule back
 
 List the evenings in `power.shutdown` (`sun: "23:00"`, `fri: "02:00"`: a time
