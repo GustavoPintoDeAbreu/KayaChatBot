@@ -1,5 +1,5 @@
 [Unit]
-Description=Authenticated LAN trigger for /homelaboff (the Pi gateway only)
+Description=Authenticated LAN trigger for /homelaboff and /homelabrc (the Pi gateway only)
 Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
 Wants=network-online.target
 After=network-online.target

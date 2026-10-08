@@ -154,7 +154,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
 scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
-sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check, kaya-power-listener (:8099, /homelaboff) (no shutdown timer while power.shutdown is empty)
+sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check, kaya-power-listener (:8099, /homelaboff, /homelabrc) (no shutdown timer while power.shutdown is empty)
 pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
 ~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
@@ -236,7 +236,8 @@ alarm as backup) and, since 2026-10-05, is turned off by hand: Gustavo decides
 when, so there is no automatic shutdown. He can also do it from WhatsApp: `/homelaboff` in
 his DM (gateway `src/gateway/homelab.py`, never reaches Kaya) asks what is running, and on
 `yes` the PC's `kaya-power-listener` starts `kaya-shutdown.sh --manual`, which waits for jobs
-and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN (`deploy/power/README.md`). `kaya-going-down.service` tells the Pi at
+and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN; `/homelabrc [desk]` starts a Claude Remote Control
+session on the PC in `~` or `~/Desktop` and replies with its link (`deploy/power/README.md`). `kaya-going-down.service` tells the Pi at
 every poweroff, which keeps the offline reply on "volto às 07:00" rather than
 "estou em baixo" (`config.yaml` → `power`, the one source for the Pi's
 Wake-on-LAN timer, the offline reply, and a shutdown timer if `power.shutdown`

@@ -15,7 +15,8 @@ from src.gateway.app import Gateway, GatewaySettings
 from src.gateway.homelab import (
     ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
-    STARTED, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
+    RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
+    RC_USAGE, STARTED, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
 )
 from src.gateway.monitor import PcMonitor, PcState
@@ -25,6 +26,7 @@ OWNER = "351922222222@c.us"
 OWNER_LID = "64622145081581@lid"
 ALICE = "351911111111@c.us"
 GROUP = "120363000000000000@g.us"
+RC_URL = "https://claude.ai/code/session_01QfLguPaAQUGmXdHNVgK5pw"
 
 
 class Clock:
@@ -44,6 +46,8 @@ class FakePc:
             "/power/status": (200, {"busy": [], "notes": [], "manual": "idle"}),
             "/power/off": (202, {"started": True}),
             "/power/cancel": (200, {"cancelled": True}),
+            "/rc/start": (200, {"started": True, "name": "homelab-home", "url": RC_URL}),
+            "/rc/stop": (200, {"stopped": True}),
         }
         self.raises = False
 
@@ -366,3 +370,79 @@ def test_background_tasks_include_the_watcher(rig):
         await asyncio.wait_for(gateway.stop_background(), timeout=10)
 
     asyncio.run(cycle())
+
+
+def test_homelabrc_starts_a_session_in_home(rig):
+    gateway, _, _, sent, pc, _ = rig
+    assert _post(gateway, _message("r1", "/homelabrc")) == {"homelab": "rc-started"}
+    method, url, headers = pc.calls[0]
+    assert method == "POST" and url == "http://192.168.1.149:8099/rc/start?dir=home"
+    assert headers == {"X-Relay-Token": "relay"}
+    assert sent == [(OWNER, f"{HOMELAB_TAG} " + RC_STARTED.format(name="homelab-home", url=RC_URL), "r1")]
+    assert gateway.journal.pending_count() == 0
+
+
+@pytest.mark.parametrize("text", ["/homelabrc desk", "/homelabrc Desktop", "/HomelabRC desk"])
+def test_homelabrc_desk_starts_in_desktop(rig, text):
+    gateway, _, _, _, pc, _ = rig
+    assert _post(gateway, _message("r2", text)) == {"homelab": "rc-started"}
+    assert pc.calls[0][1].endswith("/rc/start?dir=desktop")
+
+
+def test_homelabrc_without_a_link_still_names_the_session(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/rc/start"] = (200, {"started": True, "name": "homelab-desktop", "url": None})
+    assert _post(gateway, _message("r3", "/homelabrc desk")) == {"homelab": "rc-started"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_STARTED_NO_LINK.format(name="homelab-desktop")
+
+
+def test_homelabrc_already_running(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/rc/start"] = (409, {"started": False, "name": "homelab-desktop"})
+    assert _post(gateway, _message("r4", "/homelabrc desk")) == {"homelab": "rc-already"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_ALREADY.format(name="homelab-desktop", suffix=" desk")
+
+
+def test_homelabrc_failure_carries_the_error(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/rc/start"] = (500, {"started": False, "error": "workspace not trusted"})
+    assert _post(gateway, _message("r5", "/homelabrc")) == {"homelab": "rc-failed"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_FAILED.format(name="homelab-home",
+                                                              error="workspace not trusted")
+
+
+def test_homelabrc_stop(rig):
+    gateway, _, _, sent, pc, _ = rig
+    assert _post(gateway, _message("r6", "/homelabrc stop desk")) == {"homelab": "rc-stopped"}
+    assert pc.calls[0][0] == "POST" and pc.calls[0][1].endswith("/rc/stop?dir=desktop")
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_STOPPED.format(name="homelab-desktop")
+    pc.status_by_path["/rc/stop"] = (404, {"stopped": False})
+    assert _post(gateway, _message("r7", "/homelabrc stop")) == {"homelab": "rc-not-running"}
+    assert pc.calls[1][1].endswith("/rc/stop?dir=home")
+    assert sent[1][1] == f"{HOMELAB_TAG} " + RC_NOT_RUNNING.format(name="homelab-home")
+
+
+@pytest.mark.parametrize("text", ["/homelabrc /etc", "/homelabrc desk extra", "/homelabrc stop nowhere"])
+def test_homelabrc_bad_arguments_get_usage_and_touch_nothing(rig, text):
+    gateway, _, _, sent, pc, _ = rig
+    assert _post(gateway, _message("r8", text)) == {"homelab": "rc-usage"}
+    assert pc.calls == []
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_USAGE
+
+
+def test_homelabrc_when_the_pc_is_off_or_unreachable(rig):
+    gateway, _, monitor, sent, pc, _ = rig
+    pc.raises = True
+    assert _post(gateway, _message("r9", "/homelabrc")) == {"homelab": "rc-unreachable"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + UNREACHABLE.format(error="ConnectError")
+    monitor.observe(PcState.OFFLINE)
+    assert _post(gateway, _message("r10", "/homelabrc")) == {"homelab": "rc-pc-off"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + RC_PC_OFF
+
+
+def test_homelabrc_from_anyone_else_goes_to_kaya(rig):
+    gateway, _, _, sent, pc, _ = rig
+    result = _post(gateway, _message("r11", "/homelabrc", chat=ALICE))
+    assert "seq" in result and pc.calls == [] and sent == []
+    result = _post(gateway, _message("r12", "/homelabrc", chat=GROUP, sender=OWNER))
+    assert "seq" in result and pc.calls == []
