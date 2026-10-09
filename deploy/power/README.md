@@ -111,7 +111,8 @@ WhatsApp before it asks for a password. `install.sh` installs
 2. It posts the command line, its directory and the processes that started it
    (`bash ← claude`) to the gateway's `POST /pc/sudo/request`, with the relay token.
 3. The gateway DMs the owner the command and a 4-digit code. `yes 1234` allows that one
-   sudo, and `no 1234` refuses it. The request expires after 2 minutes.
+   sudo, and `no 1234` refuses it. A plain `yes` or `no` sent as a reply quoting the
+   request works too. The request expires after 2 minutes.
 4. The script polls `GET /pc/sudo/<id>` and exits 0 only on `approved`.
 
 `default=ignore` means anything else falls through to the normal password (askpass/zenity
