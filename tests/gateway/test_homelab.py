@@ -16,7 +16,7 @@ from src.gateway.homelab import (
     ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
-    RC_USAGE, STARTED, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
+    RC_USAGE, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
 )
 from src.gateway.monitor import PcMonitor, PcState
@@ -372,21 +372,23 @@ def test_background_tasks_include_the_watcher(rig):
     asyncio.run(cycle())
 
 
-def test_homelabrc_starts_a_session_in_home(rig):
+def test_homelabrc_starts_a_session_in_desktop_by_default(rig):
     gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/rc/start"] = (200, {"started": True, "name": "homelab-desktop", "url": RC_URL})
     assert _post(gateway, _message("r1", "/homelabrc")) == {"homelab": "rc-started"}
     method, url, headers = pc.calls[0]
-    assert method == "POST" and url == "http://192.168.1.149:8099/rc/start?dir=home"
+    assert method == "POST" and url == "http://192.168.1.149:8099/rc/start?dir=desktop"
     assert headers == {"X-Relay-Token": "relay"}
-    assert sent == [(OWNER, f"{HOMELAB_TAG} " + RC_STARTED.format(name="homelab-home", url=RC_URL), "r1")]
+    assert sent == [(OWNER, f"{HOMELAB_TAG} " + RC_STARTED.format(name="homelab-desktop", url=RC_URL), "r1")]
     assert gateway.journal.pending_count() == 0
 
 
-@pytest.mark.parametrize("text", ["/homelabrc desk", "/homelabrc Desktop", "/HomelabRC desk"])
-def test_homelabrc_desk_starts_in_desktop(rig, text):
+@pytest.mark.parametrize("text,target", [("/homelabrc desk", "desktop"), ("/homelabrc Desktop", "desktop"),
+                                         ("/HomelabRC home", "home"), ("/homelabrc ~", "home")])
+def test_homelabrc_picks_the_directory(rig, text, target):
     gateway, _, _, _, pc, _ = rig
     assert _post(gateway, _message("r2", text)) == {"homelab": "rc-started"}
-    assert pc.calls[0][1].endswith("/rc/start?dir=desktop")
+    assert pc.calls[0][1].endswith(f"/rc/start?dir={target}")
 
 
 def test_homelabrc_without_a_link_still_names_the_session(rig):
@@ -399,25 +401,28 @@ def test_homelabrc_without_a_link_still_names_the_session(rig):
 def test_homelabrc_already_running(rig):
     gateway, _, _, sent, pc, _ = rig
     pc.status_by_path["/rc/start"] = (409, {"started": False, "name": "homelab-desktop"})
-    assert _post(gateway, _message("r4", "/homelabrc desk")) == {"homelab": "rc-already"}
-    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_ALREADY.format(name="homelab-desktop", suffix=" desk")
+    assert _post(gateway, _message("r4", "/homelabrc")) == {"homelab": "rc-already"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + RC_ALREADY.format(name="homelab-desktop", suffix="")
+    pc.status_by_path["/rc/start"] = (409, {"started": False, "name": "homelab-home"})
+    assert _post(gateway, _message("r4b", "/homelabrc home")) == {"homelab": "rc-already"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + RC_ALREADY.format(name="homelab-home", suffix=" home")
 
 
 def test_homelabrc_failure_carries_the_error(rig):
     gateway, _, _, sent, pc, _ = rig
     pc.status_by_path["/rc/start"] = (500, {"started": False, "error": "workspace not trusted"})
-    assert _post(gateway, _message("r5", "/homelabrc")) == {"homelab": "rc-failed"}
+    assert _post(gateway, _message("r5", "/homelabrc home")) == {"homelab": "rc-failed"}
     assert sent[0][1] == f"{HOMELAB_TAG} " + RC_FAILED.format(name="homelab-home",
                                                               error="workspace not trusted")
 
 
 def test_homelabrc_stop(rig):
     gateway, _, _, sent, pc, _ = rig
-    assert _post(gateway, _message("r6", "/homelabrc stop desk")) == {"homelab": "rc-stopped"}
+    assert _post(gateway, _message("r6", "/homelabrc stop")) == {"homelab": "rc-stopped"}
     assert pc.calls[0][0] == "POST" and pc.calls[0][1].endswith("/rc/stop?dir=desktop")
     assert sent[0][1] == f"{HOMELAB_TAG} " + RC_STOPPED.format(name="homelab-desktop")
     pc.status_by_path["/rc/stop"] = (404, {"stopped": False})
-    assert _post(gateway, _message("r7", "/homelabrc stop")) == {"homelab": "rc-not-running"}
+    assert _post(gateway, _message("r7", "/homelabrc stop home")) == {"homelab": "rc-not-running"}
     assert pc.calls[1][1].endswith("/rc/stop?dir=home")
     assert sent[1][1] == f"{HOMELAB_TAG} " + RC_NOT_RUNNING.format(name="homelab-home")
 
@@ -446,3 +451,74 @@ def test_homelabrc_from_anyone_else_goes_to_kaya(rig):
     assert "seq" in result and pc.calls == [] and sent == []
     result = _post(gateway, _message("r12", "/homelabrc", chat=GROUP, sender=OWNER))
     assert "seq" in result and pc.calls == []
+
+
+def _sudo_request(gateway, token="relay", **body):
+    payload = {"command": "sudo -A deploy/power/install.sh", "cwd": "/home/gustavo/Desktop/KayaChatBot",
+               "origin": "bash ← claude"}
+    payload.update(body)
+    return TestClient(gateway.internal_app).post("/pc/sudo/request", json=payload,
+                                                 headers={"X-Relay-Token": token})
+
+
+def _sudo_status(gateway, key, token="relay"):
+    return TestClient(gateway.internal_app).get(f"/pc/sudo/{key}", headers={"X-Relay-Token": token})
+
+
+def _code(text):
+    return text.split('"yes ')[1].split('"')[0]
+
+
+def test_sudo_request_needs_the_token(rig):
+    gateway, _, _, sent, _, _ = rig
+    assert _sudo_request(gateway, token="wrong").status_code == 401
+    assert _sudo_request(gateway, command="").status_code == 400
+    assert _sudo_status(gateway, "nope").status_code == 404
+    assert sent == []
+
+
+def test_sudo_yes_with_the_code_approves_it(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    chat, text, _ = sent[0]
+    code = _code(text)
+    assert chat == OWNER and text == f"{HOMELAB_TAG} " + SUDO_ASK.format(
+        command="sudo -A deploy/power/install.sh", cwd="/home/gustavo/Desktop/KayaChatBot",
+        origin="bash ← claude", code=code)
+    assert _sudo_status(gateway, key).json() == {"status": "pending"}
+    assert _post(gateway, _message("s1", f"Yes {code}")) == {"homelab": "sudo-approved"}
+    assert _sudo_status(gateway, key).json() == {"status": "approved"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + SUDO_ALLOWED.format(command="sudo -A deploy/power/install.sh")
+    assert gateway.journal.pending_count() == 0
+
+
+def test_sudo_no_refuses_and_a_wrong_code_goes_to_kaya(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    code = _code(sent[0][1])
+    wrong = "0000" if code != "0000" else "1111"
+    assert "seq" in _post(gateway, _message("s2", f"yes {wrong}"))
+    assert _sudo_status(gateway, key).json() == {"status": "pending"}
+    assert _post(gateway, _message("s3", f"no {code}")) == {"homelab": "sudo-denied"}
+    assert _sudo_status(gateway, key).json() == {"status": "denied"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + SUDO_REFUSED.format(command="sudo -A deploy/power/install.sh")
+    assert "seq" in _post(gateway, _message("s4", f"yes {code}"))
+
+
+def test_sudo_only_the_owner_can_answer(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    code = _code(sent[0][1])
+    assert "seq" in _post(gateway, _message("s5", f"yes {code}", chat=ALICE))
+    assert "seq" in _post(gateway, _message("s6", f"yes {code}", chat=GROUP, sender=OWNER))
+    assert _sudo_status(gateway, key).json() == {"status": "pending"}
+
+
+def test_sudo_request_expires(rig):
+    gateway, clock, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    code = _code(sent[0][1])
+    clock.value += SUDO_TTL_SECONDS + 1
+    assert _sudo_status(gateway, key).json() == {"status": "expired"}
+    assert "seq" in _post(gateway, _message("s7", f"yes {code}", timestamp=int(clock.value)))
+    assert _sudo_status(gateway, key).json() == {"status": "expired"}
