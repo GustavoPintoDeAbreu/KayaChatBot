@@ -86,7 +86,8 @@ SUDO_ASK = ("sudo on the PC:\n{command}\nin {cwd}, from {origin}\n\n"
             'Reply "yes {code}" to allow it, "no {code}" to refuse (2 min).')
 SUDO_ALLOWED = "Allowed: {command}"
 SUDO_REFUSED = "Refused: {command}"
-SUDO_REPLY = re.compile(r"^(yes|y|sim|s|ok|no|n|não|nao)\s+(\d{4})$")
+SUDO_REPLY = re.compile(r"^(yes|y|sim|s|ok|no|n|não|nao)(?:\s+(\d{4}))?$")
+SUDO_QUOTED_CODE = re.compile(r'sudo on the PC:.*"yes (\d{4})"', re.DOTALL)
 SUDO_YES = frozenset({"yes", "y", "sim", "s", "ok"})
 RC_DIRS = {"": "desktop", "desk": "desktop", "desktop": "desktop", "home": "home", "~": "home"}
 RC_USAGE = "Usage: /homelabrc [home] to start, /homelabrc stop [home] to end. No argument means ~/Desktop."
@@ -186,7 +187,7 @@ class HomelabPower:
             return "on"
         if first == "/homelabrc":
             return "rc"
-        if self._sudo_match(text) is not None:
+        if self._sudo_match(msg) is not None:
             return "sudo"
         word = _normalize_word(msg.text)
         asked = self._pending.get(msg.chat_id)
@@ -384,14 +385,20 @@ class HomelabPower:
         for key in done:
             del self._sudo[key]
 
-    def _sudo_match(self, text: str) -> Optional[Tuple[str, bool]]:
-        """(request id, allowed) for a reply naming a pending request's code."""
-        match = SUDO_REPLY.match(_normalize_word(text))
+    def _sudo_match(self, msg: InboundMessage) -> Optional[Tuple[str, bool]]:
+        """(request id, allowed) for "yes 1234", or a bare "yes" quoting the request."""
+        match = SUDO_REPLY.match(_normalize_word(msg.text))
         if not match:
             return None
+        code = match.group(2)
+        if code is None:
+            quoted = SUDO_QUOTED_CODE.search(msg.quoted_text or "")
+            if not quoted or HOMELAB_TAG not in msg.quoted_text:
+                return None
+            code = quoted.group(1)
         self._expire_sudo()
         for key, request in self._sudo.items():
-            if request["status"] == "pending" and request["code"] == match.group(2):
+            if request["status"] == "pending" and request["code"] == code:
                 return key, match.group(1) in SUDO_YES
         return None
 
@@ -414,7 +421,7 @@ class HomelabPower:
         return request["status"] if request else None
 
     async def _sudo_answer(self, msg: InboundMessage) -> Dict[str, Any]:
-        found = self._sudo_match(msg.text)
+        found = self._sudo_match(msg)
         if found is None:
             return {"homelab": "sudo-unknown"}
         key, allowed = found

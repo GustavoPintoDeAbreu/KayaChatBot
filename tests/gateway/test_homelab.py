@@ -92,9 +92,12 @@ def rig(tmp_path):
     return gateway, clock, monitor, sent, pc, homelab
 
 
-def _message(message_id, body, *, chat=OWNER, sender=None, from_me=False, timestamp=1_790_000_000, alt=None):
+def _message(message_id, body, *, chat=OWNER, sender=None, from_me=False, timestamp=1_790_000_000, alt=None,
+             quoting=None):
     payload = {"id": message_id, "from": chat, "body": body, "timestamp": timestamp,
                "fromMe": from_me, "notifyName": "Gustavo"}
+    if quoting is not None:
+        payload["replyTo"] = {"id": "q1", "participant": BOT, "body": quoting}
     if chat.endswith("@g.us"):
         payload["participant"] = sender or OWNER
     if alt:
@@ -522,3 +525,27 @@ def test_sudo_request_expires(rig):
     assert _sudo_status(gateway, key).json() == {"status": "expired"}
     assert "seq" in _post(gateway, _message("s7", f"yes {code}", timestamp=int(clock.value)))
     assert _sudo_status(gateway, key).json() == {"status": "expired"}
+
+
+def test_sudo_bare_yes_quoting_the_request_approves_it(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    asked = sent[0][1]
+    assert _post(gateway, _message("q2", "Yes", quoting=asked)) == {"homelab": "sudo-approved"}
+    assert _sudo_status(gateway, key).json() == {"status": "approved"}
+
+
+def test_sudo_bare_no_quoting_the_request_refuses_it(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    assert _post(gateway, _message("q3", "não", quoting=sent[0][1])) == {"homelab": "sudo-denied"}
+    assert _sudo_status(gateway, key).json() == {"status": "denied"}
+
+
+def test_a_bare_yes_without_a_quote_or_quoting_something_else_is_not_sudo(rig):
+    gateway, _, _, sent, _, _ = rig
+    key = _sudo_request(gateway).json()["id"]
+    code = _code(sent[0][1])
+    assert "seq" in _post(gateway, _message("q4", "yes"))
+    assert "seq" in _post(gateway, _message("q5", "yes", quoting=f'sudo on the PC: "yes {code}"'))
+    assert _sudo_status(gateway, key).json() == {"status": "pending"}
