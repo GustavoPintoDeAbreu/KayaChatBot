@@ -3,6 +3,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 from pathlib import Path
 
@@ -95,15 +96,22 @@ def test_a_poll_error_keeps_waiting():
 
 
 def test_describe_reads_the_sudo_process(tmp_path):
-    child = subprocess.Popen(["sleep", "5"], cwd=tmp_path)
+    shell = subprocess.Popen(["sh", "-c", "sleep 5; true"], cwd=tmp_path)
     try:
-        info = approver.describe(child.pid)
+        sleeper = 0
+        for _ in range(100):
+            children = Path(f"/proc/{shell.pid}/task/{shell.pid}/children").read_text().split()
+            if children:
+                sleeper = int(children[0])
+                break
+            time.sleep(0.02)
+        info = approver.describe(sleeper)
     finally:
-        child.kill()
-        child.wait()
+        shell.kill()
+        shell.wait()
     assert info["command"] == "sleep 5"
     assert info["cwd"] == str(tmp_path)
-    assert info["origin"].split(" ← ")[0] == Path(f"/proc/{os.getpid()}/comm").read_text().strip()
+    assert info["origin"].split(" ← ")[0] == "sh"
 
 
 def test_terminal_detection():
