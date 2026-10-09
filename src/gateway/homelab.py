@@ -11,9 +11,11 @@ answered by Kaya.
 It claims, in DMs only:
 
 - the owner's ``/homelaboff`` (ask what is running, then confirm),
-  ``/homelabon`` (ask the Pi to send Wake-on-LAN) and ``/homelabrc [desk]`` /
-  ``/homelabrc stop [desk]`` (start or end a Claude Remote Control session on
-  the PC, in ``~`` or ``~/Desktop``);
+  ``/homelabon`` (ask the Pi to send Wake-on-LAN) and ``/homelabrc [home]`` /
+  ``/homelabrc stop [home]`` (start or end a Claude Remote Control session on
+  the PC, in ``~/Desktop`` or ``~``);
+- the owner's ``yes 1234`` / ``no 1234`` to a sudo request the PC posted
+  (``/pc/sudo/request``): a sudo with no terminal waits for that answer;
 - the owner's ``yes``/``no`` replies to a pending shutdown question, and his
   ``cancel`` while a shutdown is waiting;
 - the tool's own ``🖥️[homelab]`` echoes coming back as ``from_me``, which are
@@ -27,6 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,8 +81,15 @@ RC_STOPPED = "{name} stopped."
 RC_NOT_RUNNING = "No {name} session is running."
 RC_FAILED = "Couldn't start {name} ({error})."
 RC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
-RC_DIRS = {"": "home", "home": "home", "~": "home", "desk": "desktop", "desktop": "desktop"}
-RC_USAGE = "Usage: /homelabrc [desk] to start, /homelabrc stop [desk] to end. No argument means ~."
+SUDO_TTL_SECONDS = 120.0
+SUDO_ASK = ("sudo on the PC:\n{command}\nin {cwd}, from {origin}\n\n"
+            'Reply "yes {code}" to allow it, "no {code}" to refuse (2 min).')
+SUDO_ALLOWED = "Allowed: {command}"
+SUDO_REFUSED = "Refused: {command}"
+SUDO_REPLY = re.compile(r"^(yes|y|sim|s|ok|no|n|não|nao)\s+(\d{4})$")
+SUDO_YES = frozenset({"yes", "y", "sim", "s", "ok"})
+RC_DIRS = {"": "desktop", "desk": "desktop", "desktop": "desktop", "home": "home", "~": "home"}
+RC_USAGE = "Usage: /homelabrc [home] to start, /homelabrc stop [home] to end. No argument means ~/Desktop."
 
 Call = Callable[[str, str, Dict[str, str]], Awaitable[Tuple[int, Dict[str, Any]]]]
 
@@ -117,6 +128,7 @@ class HomelabPower:
     _send: Optional[Callable[[str, str, Optional[str]], Any]] = None
     _wake_request: Optional[Path] = None
     _now: Callable[[], float] = time.time
+    _sudo: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # request id -> request
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Optional["HomelabPower"]:
@@ -158,7 +170,7 @@ class HomelabPower:
         return f"{sorted(self.owner_numbers)[0]}@c.us"
 
     def classify(self, msg: InboundMessage) -> Optional[str]:
-        """``"off"``/``"on"``/``"rc"``/``"confirm"``/``"decline"``/``"cancel"``/``"echo"``,
+        """``"off"``/``"on"``/``"rc"``/``"sudo"``/``"confirm"``/``"decline"``/``"cancel"``/``"echo"``,
         or None to leave the message to Kaya."""
         if msg.is_group:
             return None
@@ -174,6 +186,8 @@ class HomelabPower:
             return "on"
         if first == "/homelabrc":
             return "rc"
+        if self._sudo_match(text) is not None:
+            return "sudo"
         word = _normalize_word(msg.text)
         asked = self._pending.get(msg.chat_id)
         if asked is not None and self._now() - asked <= CONFIRM_TTL_SECONDS:
@@ -207,6 +221,8 @@ class HomelabPower:
             return await self._on(msg)
         if kind == "rc":
             return await self._rc(msg)
+        if kind == "sudo":
+            return await self._sudo_answer(msg)
         return {"homelab": "ignored"}
 
     def _say(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> bool:
@@ -351,13 +367,63 @@ class HomelabPower:
         elif status == 200:
             text, result = RC_STARTED_NO_LINK.format(name=name), "rc-started"
         elif status == 409:
-            suffix = " desk" if target == "desktop" else ""
+            suffix = " home" if target == "home" else ""
             text, result = RC_ALREADY.format(name=name, suffix=suffix), "rc-already"
         else:
             error = body.get("error") or f"HTTP {status}"
             text, result = RC_FAILED.format(name=name, error=error), "rc-failed"
         await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
         return {"homelab": result}
+
+    def _expire_sudo(self) -> None:
+        for request in self._sudo.values():
+            if request["status"] == "pending" and self._now() - request["asked"] > SUDO_TTL_SECONDS:
+                request["status"] = "expired"
+        done = [key for key, request in self._sudo.items()
+                if self._now() - request["asked"] > 4 * SUDO_TTL_SECONDS]
+        for key in done:
+            del self._sudo[key]
+
+    def _sudo_match(self, text: str) -> Optional[Tuple[str, bool]]:
+        """(request id, allowed) for a reply naming a pending request's code."""
+        match = SUDO_REPLY.match(_normalize_word(text))
+        if not match:
+            return None
+        self._expire_sudo()
+        for key, request in self._sudo.items():
+            if request["status"] == "pending" and request["code"] == match.group(2):
+                return key, match.group(1) in SUDO_YES
+        return None
+
+    def sudo_request(self, command: str, cwd: str, origin: str) -> str:
+        """Ask the owner to allow one sudo; returns the id the PC polls."""
+        self._expire_sudo()
+        pending = {request["code"] for request in self._sudo.values() if request["status"] == "pending"}
+        code = f"{secrets.randbelow(9000) + 1000}"
+        while code in pending:
+            code = f"{secrets.randbelow(9000) + 1000}"
+        key = secrets.token_urlsafe(12)
+        self._sudo[key] = {"code": code, "command": command, "status": "pending", "asked": self._now()}
+        self._say(self.default_chat(), SUDO_ASK.format(command=command, cwd=cwd or "?",
+                                                         origin=origin or "?", code=code))
+        return key
+
+    def sudo_status(self, key: str) -> Optional[str]:
+        self._expire_sudo()
+        request = self._sudo.get(key)
+        return request["status"] if request else None
+
+    async def _sudo_answer(self, msg: InboundMessage) -> Dict[str, Any]:
+        found = self._sudo_match(msg.text)
+        if found is None:
+            return {"homelab": "sudo-unknown"}
+        key, allowed = found
+        request = self._sudo[key]
+        request["status"] = "approved" if allowed else "denied"
+        template = SUDO_ALLOWED if allowed else SUDO_REFUSED
+        await asyncio.to_thread(self._say, msg.chat_id, template.format(command=request["command"]),
+                                msg.message_id)
+        return {"homelab": "sudo-approved" if allowed else "sudo-denied"}
 
     def relay_update(self, text: str, final: bool) -> bool:
         """Deliver one update from the PC's shutdown script to the owner's chat."""

@@ -76,8 +76,8 @@ to an existing `/etc/kaya-power.env` and leaves the other lines alone.
 
 ## A Claude session from WhatsApp (`/homelabrc`)
 
-The owner DMs `/homelabrc` (a session in `~`) or `/homelabrc desk` (in `~/Desktop`);
-`/homelabrc stop [desk]` ends it. The gateway calls the same listener, with the same
+The owner DMs `/homelabrc` (a session in `~/Desktop`) or `/homelabrc home` (in `~`);
+`/homelabrc stop [home]` ends it. The gateway calls the same listener, with the same
 IP and token checks:
 
 - `POST /rc/start?dir=home|desktop` runs, as `POWER_USER` and inside that user's
@@ -96,6 +96,29 @@ IP and token checks:
   with no terminal there is nobody to answer the trust prompt, and the session dies.
 
 Logs: `journalctl --user -u claude-rc-home -u claude-rc-desktop`.
+
+## Approving sudo from the phone
+
+A sudo with no terminal (a Claude Code or Remote Control session) asks the owner on
+WhatsApp before it asks for a password. `install.sh` installs
+`/usr/local/sbin/kaya-sudo-approve` (`kaya_sudo_approve.py`) and puts this line before
+`@include common-auth` in `/etc/pam.d/sudo`:
+
+    auth [success=done default=ignore] pam_exec.so quiet /usr/local/sbin/kaya-sudo-approve
+
+1. The script runs as root, only for `POWER_USER`, only for sudo, and only when
+   `PAM_TTY` is not a terminal. At the keyboard, sudo asks for the password as before.
+2. It posts the command line, its directory and the processes that started it
+   (`bash ← claude`) to the gateway's `POST /pc/sudo/request`, with the relay token.
+3. The gateway DMs the owner the command and a 4-digit code. `yes 1234` allows that one
+   sudo, and `no 1234` refuses it. The request expires after 2 minutes.
+4. The script polls `GET /pc/sudo/<id>` and exits 0 only on `approved`.
+
+`default=ignore` means anything else falls through to the normal password (askpass/zenity
+or nothing). That includes a refusal, a timeout, an unreachable Pi, or a missing script, so
+a broken approval path can never lock sudo out. Your password is never stored anywhere.
+Each approval covers one sudo call, plus sudo's own 15-minute cache for the same parent
+process, so batch root steps into one command. `install.sh --uninstall` removes the line.
 
 ## Bringing a shutdown schedule back
 

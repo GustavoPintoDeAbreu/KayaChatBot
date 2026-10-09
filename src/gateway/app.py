@@ -338,6 +338,29 @@ class Gateway:
             sent = await asyncio.to_thread(self.homelab.relay_update, text, bool(body.get("final")))
             return {"ok": True, "sent": sent}
 
+        @app.post("/pc/sudo/request")
+        async def sudo_request(request: Request, x_relay_token: str = Header(default="")):
+            if not settings.relay_token or x_relay_token != settings.relay_token:
+                raise HTTPException(status_code=401, detail="invalid relay token")
+            if self.homelab is None:
+                raise HTTPException(status_code=404)
+            body = await request.json()
+            command = str(body.get("command") or "").strip()[:400]
+            if not command:
+                raise HTTPException(status_code=400)
+            key = await asyncio.to_thread(self.homelab.sudo_request, command,
+                                          str(body.get("cwd") or "")[:200], str(body.get("origin") or "")[:200])
+            return {"id": key}
+
+        @app.get("/pc/sudo/{key}")
+        def sudo_status(key: str, x_relay_token: str = Header(default="")):
+            if not settings.relay_token or x_relay_token != settings.relay_token:
+                raise HTTPException(status_code=401, detail="invalid relay token")
+            status = self.homelab.sudo_status(key) if self.homelab else None
+            if status is None:
+                raise HTTPException(status_code=404)
+            return {"status": status}
+
         @app.get("/status")
         def internal_status():
             return self.status()

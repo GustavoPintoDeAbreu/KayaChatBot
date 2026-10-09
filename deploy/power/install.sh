@@ -19,7 +19,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         /etc/systemd/system/kaya-boot-check.service /usr/local/sbin/kaya-boot-check.sh \
         /usr/local/sbin/kaya-power-listener /etc/systemd/system/kaya-power-listener.service \
         /etc/systemd/system/kaya-shutdown-manual.service \
-        /etc/apt/apt.conf.d/51kaya-no-kernel
+        /etc/apt/apt.conf.d/51kaya-no-kernel /usr/local/sbin/kaya-sudo-approve
+  sed -i '/kaya-sudo-approve/d' /etc/pam.d/sudo
   systemctl daemon-reload
   echo "removed"; exit 0
 fi
@@ -33,6 +34,17 @@ install -m 0755 "$REPO/deploy/power/kaya-shutdown.sh" /usr/local/sbin/kaya-shutd
 install -m 0755 "$REPO/deploy/power/kaya_power_listener.py" /usr/local/sbin/kaya-power-listener
 install -m 0644 "$REPO/deploy/power/kaya-power-listener.service" /etc/systemd/system/kaya-power-listener.service
 install -m 0644 "$REPO/deploy/power/kaya-shutdown-manual.service" /etc/systemd/system/kaya-shutdown-manual.service
+
+# A sudo with no terminal (Claude sessions, Remote Control) asks the owner on
+# WhatsApp first (kaya_sudo_approve.py). default=ignore: if the script is missing,
+# fails or times out, sudo falls through to the password as before.
+install -m 0755 "$REPO/deploy/power/kaya_sudo_approve.py" /usr/local/sbin/kaya-sudo-approve
+pam_line="auth [success=done default=ignore] pam_exec.so quiet /usr/local/sbin/kaya-sudo-approve"
+if ! grep -qF "$pam_line" /etc/pam.d/sudo; then
+  sed -i '/kaya-sudo-approve/d' /etc/pam.d/sudo
+  sed -i "0,/^@include common-auth/s||$pam_line\n@include common-auth|" /etc/pam.d/sudo
+  grep -qF "$pam_line" /etc/pam.d/sudo && echo "sudo: phone approval enabled for terminal-less sudo"
+fi
 
 # Kernels are upgraded by hand, never by unattended-upgrades: it upgraded the
 # kernel and held back the matching nvidia module on 2026-09-25, and the next
