@@ -1,6 +1,7 @@
 """The PAM hook that lets the owner approve a terminal-less sudo from WhatsApp."""
 import importlib.util
 import os
+import subprocess
 import sys
 import urllib.error
 from pathlib import Path
@@ -93,11 +94,16 @@ def test_a_poll_error_keeps_waiting():
     assert _approve(Flaky(["approved"])) == 0
 
 
-def test_describe_reads_the_sudo_process():
-    info = approver.describe(os.getpid())
-    assert "pytest" in info["command"] or "python" in info["command"]
-    assert info["cwd"] == os.getcwd()
-    assert info["origin"]
+def test_describe_reads_the_sudo_process(tmp_path):
+    child = subprocess.Popen(["sleep", "5"], cwd=tmp_path)
+    try:
+        info = approver.describe(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+    assert info["command"] == "sleep 5"
+    assert info["cwd"] == str(tmp_path)
+    assert info["origin"].split(" ← ")[0] == Path(f"/proc/{os.getpid()}/comm").read_text().strip()
 
 
 def test_terminal_detection():
