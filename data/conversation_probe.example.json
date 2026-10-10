@@ -227,6 +227,122 @@
       "expected_mode": "banter",
       "max_words": 25,
       "why_mode": "reacting to an argument is not asking to join it; the bot never volunteers"
+    },
+    {
+      "id": "warm_greet_morning_en",
+      "message": "@Kaya Bot good morning",
+      "speaker": "Rafa",
+      "expected_mode": "banter",
+      "max_words": 20,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "unicórnio",
+        "unicornio",
+        "startup",
+        "burro",
+        "inútil",
+        "inutil",
+        "patético",
+        "patetico"
+      ]
+    },
+    {
+      "id": "warm_greet_bro",
+      "message": "good morning bro",
+      "speaker": "Rafa",
+      "expected_mode": "banter",
+      "max_words": 20,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "unicórnio",
+        "unicornio",
+        "startup",
+        "burro",
+        "inútil",
+        "inutil",
+        "patético",
+        "patetico"
+      ]
+    },
+    {
+      "id": "warm_greet_pt",
+      "message": "bom dia Kaya, tudo bem?",
+      "speaker": "Pedro",
+      "expected_mode": "banter",
+      "max_words": 20,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "unicórnio",
+        "unicornio",
+        "startup",
+        "burro",
+        "inútil",
+        "inutil",
+        "patético",
+        "patetico"
+      ]
+    },
+    {
+      "id": "warm_greet_slang",
+      "message": "então meu puto, como é que é?",
+      "speaker": "Gil",
+      "expected_mode": "banter",
+      "max_words": 20,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "unicórnio",
+        "unicornio",
+        "startup",
+        "burro",
+        "inútil",
+        "inutil",
+        "patético",
+        "patetico"
+      ]
+    },
+    {
+      "id": "warm_compliment",
+      "message": "curto bué de ti, és incrível",
+      "speaker": "Frederico",
+      "expected_mode": "banter",
+      "max_words": 25,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "unicórnio",
+        "unicornio",
+        "startup",
+        "burro",
+        "inútil",
+        "inutil",
+        "patético",
+        "patetico"
+      ]
+    },
+    {
+      "id": "warm_friendly_ranking",
+      "message": "quem é o mais engraçado do grupo?",
+      "expected_mode": "factual",
+      "accept": [
+        "mixed"
+      ],
+      "max_words": 80,
+      "must_not_contain_any": [
+        "falhad",
+        "fracass",
+        "loser",
+        "burro",
+        "inútil"
+      ]
     }
   ]
 }

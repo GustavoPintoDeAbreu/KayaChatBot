@@ -80,10 +80,10 @@ _LABELS = {
 
 _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens on the first line:
 
-BANTER — social noise with no question in it: laughter, emoji, greetings, reactions, agreement, insults or jokes aimed at the bot or the group. Naming a member does not change that when nothing about them has to be looked up. Examples: "Ahahhha", "😂😂😂", "hey", "lol", "boa noite", "és burro", "roast me", "manda o Gil para o caralho", "diz mal deste aqui".
+BANTER — social noise with no question in it: greetings, compliments, laughter, emoji, reactions, agreement, and insults or jokes aimed at the bot or the group. Naming a member does not change that when nothing about them has to be looked up. Examples: greetings and warm chat "hey", "boa noite", "good morning bro", "curto bué de ti"; reactions "Ahahhha", "😂😂😂", "lol"; insults and quick insult requests "és burro", "roast me", "manda o Gil para o caralho", "diz mal deste aqui".
 MIXED — chat that references a person or event but is not really asking to be informed. Examples: "o Rafa outra vez a fazer disso", "ainda me lembro daquele jantar".
 FACTUAL — a request for information, memory or detail about THE GROUP: its members, its history, what was said or shared in it. Examples: "Quem é o Peter?", "quando foi o jantar?", "what does Gil do for work?", "quem mandou aquela foto do barco?".
-ROAST — asking the bot to judge, rank, mock or pick on someone in the group. The answer is aimed AT a member rather than being information about one. Examples: "quem é o mais burro?", "roast the Gil", "quem tem o search history mais sus?", "diz mal do Pedro", "quem é que ganha uma luta aqui?", "who's the biggest loser here?".
+ROAST — asking the bot to mock, insult or pick on someone in the group, or for an unflattering verdict or ranking. The answer is aimed AT a member rather than being information about one. Examples: "quem é o mais burro?", "roast the Gil", "quem tem o search history mais sus?", "diz mal do Pedro", "quem é que ganha uma luta aqui?", "who's the biggest loser here?". A FRIENDLY ranking or compliment about members is not a roast: "quem é o mais engraçado?", "quem é o melhor cozinheiro do grupo?" -> FACTUAL.
 GENERAL — a question, task or opinion about anything OUTSIDE the group: world knowledge, current events, football, advice, cooking, writing, code, maths. Nobody from the group needs to be looked up to answer it. Examples: "quem é melhor, Ronaldo ou Messi?", "explica-me a inflação", "escreve-me um poema sobre o Porto", "o que faço para o jantar?", "who won the Champions League?", "como é que se muda um pneu?".
 DEBATE — asking the bot to ARGUE a position, to judge who is right in a running argument, or to fact-check a claim. The answer is a case backed by evidence, not a quick opinion and not a jab at somebody. Only when it is actually asked for. Examples: "debate me", "u choose topic", "I'll defend communism u capitalism", "defende o contrário", "argumenta contra isto", "quem tem razão nisto?", "vê lá essa conversa e diz quem tem razão, sê analítico", "fact-check isso", "isso é mesmo verdade? mostra fontes", "prova lá".
 CMD_AUDIO — a STANDING instruction to change how the bot replies from now on, to voice. Examples: "responde-me só em áudio", "a partir de agora fala comigo por voz", "manda sempre áudio".
@@ -111,7 +111,8 @@ given that to check against:
 FACTUAL and ROAST differ in what the answer is FOR. Information about a member is FACTUAL; a verdict aimed at one is ROAST:
   "o que faz o Gil?" -> FACTUAL (asking to be informed)
   "porque é que o Gil é tão paneleiro?" -> ROAST (asking for a verdict)
-  "quem é o mais engraçado?" -> ROAST (ranking the members against each other)
+  "quem é o mais burro?" -> ROAST (an unflattering ranking of the members)
+  "quem é o mais engraçado?" -> FACTUAL (a friendly ranking: an opinion about members, not a roast)
   "quantos membros tem o grupo?" -> FACTUAL
 
 An insult, a dare or a taunt wrapped around a question is classified by the

@@ -180,3 +180,37 @@ class TestDebateCitesOrConcedes:
         debate = config["chat"]["debate"]
         assert debate["enabled"] is True
         assert 1 <= debate["max_lookups"] <= 5
+
+
+# ── warm by default, sharp on request (2026-10-10) ──────────────────────────
+# "@Kaya Bot good morning" came back as "ó projeto de unicórnio falhado". The
+# preamble in front of every prompt said dark humour was "encouraged" with "no
+# guardrails", and nothing told the bot what to do when nobody asked for a jab.
+
+def test_the_preamble_is_warm_by_default_and_keeps_what_the_group_relies_on(config):
+    preamble = config["chat"]["uncensored_system_prompt"]
+    assert "encouraged" not in preamble and "no guardrails" not in preamble
+    assert "warm friend" in preamble
+    assert "never answer a greeting, a compliment or small talk with a put-down" in preamble
+    assert "Never refuse a request" in preamble
+    assert "relay an offensive message" in preamble
+    assert "If asked to roast someone, commit fully" in preamble
+
+
+def test_banter_greets_back_instead_of_attacking(config):
+    banter = config["chat"]["modes"]["banter"]["system_prompt"]
+    assert "amigo porreiro" in banter
+    assert "nunca com uma boca sobre a vida" in banter
+    assert "cumprimenta de volta no mesmo registo" in banter
+    assert "Se te insultarem ou te pedirem para insultar alguém, entra na brincadeira" in banter
+
+
+@pytest.mark.parametrize("prompt_path", [("data", "system_prompt"),
+                                         ("chat", "modes", "mixed", "system_prompt")])
+def test_no_unprompted_digs_at_members(config, prompt_path):
+    node = config
+    for key in prompt_path:
+        node = node[key]
+    assert "Sem ninguém pedir, não gozas com ninguém" in node \
+        or "sem ninguém pedir, não gozas com ninguém" in node
+    assert "startups" in node
