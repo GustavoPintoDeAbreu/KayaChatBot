@@ -218,7 +218,7 @@ engine.system_prompt_factory = _prompt_for_turn
 
 
 def _responder(message: str, speaker: str, recent_lines, scope=None,
-               exclude_from=None, summary: str = ""):
+               exclude_from=None, summary: str = "", link_context: str = ""):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
@@ -233,6 +233,7 @@ def _responder(message: str, speaker: str, recent_lines, scope=None,
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,
         scope=scope, exclude_from=exclude_from, summary=summary,
+        link_context=link_context,
     )
 
 
@@ -347,6 +348,47 @@ def _ingest_document(msg):
     return documents.describe_for_log(report)
 
 
+def _read_links(text: str, preview):
+    """``[(line, excerpt)]`` for the links in a message, or ``[]`` when links are off.
+
+    Runs before the relay acks the event, like a document read, so every fetch is
+    capped by ``chat.links.timeout`` and a repeat is served from the cache.
+    """
+    from src.chat import links
+
+    if not links.is_enabled(config):
+        return []
+    lcfg = links.settings(config)
+    found = []
+    urls = links.extract_urls(text, int(lcfg["max_per_message"]))
+    for url in urls:
+        # WhatsApp previews one link per message, and its `matchedText` is not
+        # always byte-identical to what the regex pulled out.
+        same_link = preview if preview and (
+            len(urls) == 1 or preview.get("url", "").rstrip("/") == url.rstrip("/")) else None
+        content = links.read(url, config, preview=same_link)
+        if content.ok:
+            found.append((links.render(content),
+                          links.excerpt(content, int(lcfg["max_words_context"]))))
+    return found
+
+
+def _archive_sticker(msg):
+    """Keep a sticker's bytes under its hash, once."""
+    from src.chat import documents, stickers
+
+    if stickers.is_archived(config, msg.sticker_sha):
+        return
+    payload = documents.download(
+        msg.media_url,
+        api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
+        waha_base_url=os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""),
+        max_bytes=2 * 1024 * 1024,
+    )
+    if payload:
+        stickers.archive(payload, msg.sticker_sha, config)
+
+
 from src.chat.reply_review import ReplyLedger
 from src.chat.summary import SummaryWriter
 
@@ -363,6 +405,8 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           transcribe=_stt,
                           describe_image=_describe,
                           ingest_document=_ingest_document,
+                          read_links=_read_links,
+                          archive_sticker=_archive_sticker,
                           summary_writer=_summary_writer,
                           sender_resolver=_sender_resolver,
                           reply_ledger=_reply_ledger)
@@ -535,6 +579,69 @@ def _start_bio_scheduler() -> None:
           f"proposals only — review with scripts/review_bios.py)")
 
 
+def _start_birthday_scheduler() -> None:
+    """Notice birthdays nobody has confirmed, and tell the maintainer.
+
+    The greeting itself is sent by the Pi gateway (src/gateway/birthdays.py),
+    which is on at midnight when this PC may not be. Prod only: dev and the
+    simulator run this same module, and a DM from either is a real message.
+    """
+    from datetime import date, datetime as _datetime
+
+    from src.chat import birthdays
+
+    bcfg = birthdays.settings(config)
+    if not bcfg["enabled"] or not _report_to:
+        return
+    if os.environ.get("KAYA_ENV") != "prod":
+        return
+
+    def _path(value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else Path(config_path).parent / path
+
+    state = birthdays.GreetingState(_path(bcfg["state"]))
+
+    def _notice() -> None:
+        """A burst today for somebody with no date: tell the maintainer, once."""
+        log = Path(_wcfg.get("message_log_dir", "data/live_messages"))
+        log = log if log.is_absolute() else Path(config_path).parent / log
+        rows = []
+        try:
+            for line in (log / "shared.jsonl").read_text(encoding="utf-8").splitlines()[-600:]:
+                row = _json.loads(line)
+                when = _datetime.fromtimestamp(int(row.get("timestamp") or 0))
+                if when.date() == date.today():
+                    rows.append((when, row.get("sender", ""), row.get("text", "")))
+        except (OSError, ValueError):
+            return
+        members = _json.loads(Path(_path(config["data"]["group_members_file"])).read_text(
+            encoding="utf-8"))
+        aliases = {m["name"]: list(m.get("aliases") or []) for m in members.get("members", [])}
+        known = birthdays.load_dates(config, Path(config_path).parent)
+        for candidate in birthdays.mine(rows, aliases):
+            key = f"noticed-{candidate.month_day}"
+            if candidate.member in known or state.sent(date.today().year, f"{key}:{candidate.member}"):
+                continue
+            adapter.waha_client.send_text(_report_to, (
+                f"Parece que hoje foi o aniversário do {candidate.member} "
+                f"({candidate.senders} pessoas deram os parabéns). Para confirmar: "
+                f"scripts/mine_birthdays.py --accept {candidate.member}={candidate.month_day}"))
+            state.mark(date.today().year, f"{key}:{candidate.member}", "noticed")
+
+    def _loop() -> None:
+        while True:
+            try:
+                if _datetime.now().hour >= 22:
+                    _notice()
+            except Exception as exc:  # noqa: BLE001 — must never take the bot down
+                print(f"⚠️  birthday check failed: {exc}")
+            time.sleep(300)
+
+    threading.Thread(target=_loop, name="kaya-birthdays", daemon=True).start()
+    print("✓ Birthday notices scheduled (after 22:00, to the maintainer)")
+
+
 def _start_ingest_scheduler() -> None:
     """Catch up on what was missed while down, then keep folding in new messages.
 
@@ -617,6 +724,7 @@ if not MOCK_MODE:
         _preload_audio_models()
     _start_ingest_scheduler()
     _start_bio_scheduler()
+    _start_birthday_scheduler()
 
 
 @app.post("/whatsapp/webhook")

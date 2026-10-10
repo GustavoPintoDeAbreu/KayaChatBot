@@ -82,12 +82,18 @@ def _chat_fields(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def flatten_animation(image: bytes, mimetype: str) -> tuple:
-    """An animated sticker as a single still frame. ``(bytes, mimetype)``.
+    """A WebP (a sticker, usually) as a PNG still. ``(bytes, mimetype)``.
 
     WhatsApp stickers arrive as ``image/webp`` and are often animated, which the
     projector cannot decode — so the model was handed something it could not see
     and answered that it had received no image. One frame is all a description
-    needs, and a static sticker passes through untouched.
+    needs.
+
+    Static WebP is re-encoded too. It used to pass through untouched, and since
+    the move to Ollama some of it answers 500: 6 of 44 static stickers in the
+    2026-09-27 sticker eval came back with no description at all, and the same
+    files described fine as PNG. A message whose description fails is logged
+    with no text, i.e. not at all.
 
     Returns the input unchanged if anything goes wrong: the describer failing is
     better than the message being dropped.
@@ -100,11 +106,9 @@ def flatten_animation(image: bytes, mimetype: str) -> tuple:
         from PIL import Image
 
         with Image.open(io.BytesIO(image)) as sticker:
-            if not getattr(sticker, "is_animated", False):
-                return image, mimetype
             sticker.seek(0)
             buffer = io.BytesIO()
-            sticker.convert("RGB").save(buffer, format="PNG")
+            sticker.convert("RGBA").save(buffer, format="PNG")
         return buffer.getvalue(), "image/png"
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not flatten an animated sticker (%s)", exc)

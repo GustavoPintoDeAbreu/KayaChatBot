@@ -198,3 +198,11 @@ reports/landing/
 # The Pi gateway runtime state lives on the Pi, never in git.
 deploy/pi/data/
 data/kaya_last_active
+
+# Shared content: the group's stickers, the pages it linked, and the review
+# pages that rate them. All of it is group data and stays on this box.
+data/stickers/
+data/link_cache/
+reports/links/
+reports/stickers/
+reports/birthdays/

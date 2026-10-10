@@ -534,6 +534,54 @@ chat:
     max_tokens: 160
     timeout: 120
 
+  # ── Shared links (src/chat/links.py) ────────────────────────────────────────
+  # A link becomes "[Link: título (site) — sinopse]" in the message, the way a
+  # photo becomes "[Imagem: …]", so the log, the ingester and retrieval see what
+  # was shared. Only the URL leaves the box (fxtwitter reads X posts); the
+  # synopsis is written by the local model. OFF until scripts/eval_links.py
+  # passes: ≥90% of synopses rated right, none invented.
+  links:
+    enabled: false
+    max_per_message: 2
+    timeout: 8
+    max_words_context: 600
+    fxtwitter: true
+    cache_dir: data/link_cache
+
+  # ── Stickers (src/chat/stickers.py) ─────────────────────────────────────────
+  # The archive is always on: bytes kept once per fileSha256. Understanding them
+  # (`enabled`) stays off until scripts/eval_stickers.py shows ≥80% read right
+  # with no invented member names; until then a sticker is still "[Imagem: …]".
+  stickers:
+    enabled: false
+    archive_dir: data/stickers
+
+  # ── Birthdays (src/chat/birthdays.py, sent by src/gateway/birthdays.py) ────
+  # Dates from /aniversario, a `birthday` profile field, or a parabéns burst a
+  # person confirmed (scripts/mine_birthdays.py). `enabled` puts them in the
+  # profiles and "Hoje faz anos: X" in the prompt. The Pi sends fixed text, no
+  # model, to GATEWAY_BIRTHDAY_CHAT: a midnight line, and a noon nudge only if
+  # nobody has said parabéns by then. {tag} is the @mention (or the name, when
+  # the member's WhatsApp id is unknown). A window's end is the catch-up limit.
+  birthdays:
+    enabled: true
+    store: data/birthdays.json
+    state: data/birthday_state.json
+    windows:
+      midnight: ["00:00", "11:00"]
+      noon: ["12:00", "18:00"]
+    messages:
+      midnight:
+        - "Parabéns {tag}! 🎂 Muitos anos de vida, grande abraço do Kaya."
+        - "Hoje é dia do {tag} 🥳 Parabéns, que seja um ano em grande!"
+        - "Meia-noite e já cá estou: parabéns {tag}! 🎉🎂"
+        - "Parabéns {tag}! 🍾 Que este ano te traga tudo e mais alguma coisa."
+        - "Happy birthday {tag}! 🎂 Muitos anos de vida, mano."
+      noon:
+        - "Já é meio-dia e ainda ninguém deu os parabéns ao {tag}? 👀🎂"
+        - "Malta, hoje faz anos o {tag} e isto está muito calado 👀 Parabéns!"
+        - "Lembrete amigo: o {tag} faz anos hoje 🎂 Toca a dar os parabéns!"
+
   # ── Rolling per-chat summary (src/chat/summary.py) ──────────────────────────
   # 60 lines of verbatim history covers an evening, not a month. What scrolls
   # past it is condensed here so the THREAD of a long exchange survives — who

@@ -138,6 +138,9 @@ scripts/fetch_bakeoff_models.sh                          # download candidate GG
 kaya_chatbot_env/bin/python scripts/run_conversation_probe.py   # routing/brevity/restraint/in-voice/no-dash/compliance (cases may carry `history` and `accept`)
 kaya_chatbot_env/bin/python scripts/replay_routing.py --date YYYY-MM-DD  # re-route a logged session against the history it really had
 kaya_chatbot_env/bin/python scripts/run_offensive_probe.py      # refusal rate; the group wants 0%
+kaya_chatbot_env/bin/python scripts/eval_links.py --run|--serve|--score     # the gate for chat.links (≥90% right, none invented)
+kaya_chatbot_env/bin/python scripts/eval_stickers.py --run|--serve|--score  # the gate for chat.stickers (≥80% right, no names)
+kaya_chatbot_env/bin/python scripts/mine_birthdays.py [--accept Pedro=07-15 | --set X=MM-DD | --show]
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
@@ -322,7 +325,7 @@ Three things to know:
 
 The Kaya group was turned into a WhatsApp Community. **The old group kept its
 JID** and is now a linked group named "general", so the message log, session
-window, summary, ChromaDB scope and `KAYA_BIRTHDAY_CHAT` all carried over
+window, summary, ChromaDB scope and `GATEWAY_BIRTHDAY_CHAT` all carried over
 untouched. The switch added a parent community JID and an announcements group
 (`announce: true`; the bot is not an admin, so it can read there but not post).
 
@@ -779,6 +782,84 @@ corpus without writing anything.
 NOWEB store is disabled here, so `GET /api/{session}/chats/{id}/messages` answers
 *"Enable NOWEB store"*. `scripts/ingest_documents.py --export ... --media ...`
 is the route in, mirroring `scripts/ingest_media.py`.
+
+### Links, birthdays and stickers (2026-09-27)
+
+Three features, and **none goes live because the code works**. Each has a gate
+that a person scores on a local page (`src/testing/review_page.py`, bound to
+127.0.0.1): the items are group data, so no cloud judge can score them.
+
+**Links** (`src/chat/links.py`, `chat.links`, **off** until `scripts/eval_links.py`
+passes at ≥90% right with nothing invented). The group shares about one a day:
+Portuguese news first, then X and Reddit. A link becomes
+`[Link: título (site) — sinopse]` inside the message, the same pattern as
+`[Imagem: …]`, and a reply asking about it gets the article excerpt through
+`respond(link_context=…)`, including when the question quotes the link. X posts
+are read through `api.fxtwitter.com`, Reddit through `.json`, news through
+trafilatura. If all of that fails, WhatsApp's own preview in
+`extendedTextMessage` (parsed into `InboundMessage.link_preview`) is the
+fallback. Only the URL leaves the box; the synopsis is local.
+
+**`links._get` is the only way the module touches the network, and it checks
+the host on every hop.** The PC is on a LAN where the Pi's WAHA and gateway
+accept it, so a link to `192.168.1.238:3000`, or a public page redirecting there,
+must never be fetched. The first local draft of this module had handlers opening
+their own httpx clients, which skipped the check entirely. `tests/test_links.py`
+pins both the first hop and the redirect. Residual risk: DNS rebinding between
+the check and the connect.
+
+**Birthdays** (`src/chat/birthdays.py`, `data/birthdays.json`). Dates come from
+four sources, most trusted first:
+
+1. `self`: `/aniversario 8/9`, accepted from members only.
+2. `profile`: a `birthday` field in `group_members.json`.
+3. `about`: the member's WhatsApp About. **Not wired**: WAHA 2026.8.2 answers
+   `GET /api/contacts/about` with 501 on NOWEB (probed 2026-09-27). The source
+   name stays reserved in `birthdays.SOURCES` in case the engine changes.
+4. `mined`: used only after `scripts/mine_birthdays.py --accept`.
+
+Mining finds days with ≥3 senders saying parabéns, but those bursts also mean
+births, new jobs and weddings, which is why Manuel has two candidate dates.
+
+Confirmed dates put "Faz anos a …" on the member's profile line and
+`Hoje faz anos: X.` next to `Hoje é …`. The **greeting** is the first thing the
+bot says unprompted, and it is **fixed text sent by the Pi**, not generated
+(decided 2026-10-10). The Pi is on at midnight; the PC may not be, and a
+"parabéns" is not worth a model call that could come back as a roast.
+
+- `src/gateway/birthdays.py` sends one line from `chat.birthdays.messages.midnight`
+  at 00:00 (catch-up until 11:00), tagging the member;
+- at 12:00 (catch-up until 18:00) it sends a nudge from `messages.noon`
+  **only if nobody has said parabéns** about that member since midnight, read
+  from the gateway journal;
+- each slot once per member per year, in the Pi's `birthday_state.json`;
+- the target is `GATEWAY_BIRTHDAY_CHAT` in the Pi's `.env`, the general group.
+  An env var because the Community has several shared chats and the target
+  must not be guessed;
+- the PC owns the dates. The Pi pulls `GET /whatsapp/relay/birthdays` (the
+  `birthdays.roster`: date, aliases, and the id to tag) whenever the PC is up,
+  and keeps the last copy, so a birthday still goes out with the PC off.
+
+After 22:00 a thread on the PC DMs the maintainer about any burst for a member with
+no date, so next year's birthday is caught from the live log.
+
+**Stickers** (`src/chat/stickers.py`). They arrive as `image/webp` and took the
+photo path. The frog the group sends to say "que seca" was logged as
+`[Imagem: uma figura tridimensional de um sapo verde…]`: described, not
+understood, and remembered as a photo.
+
+- **The archive is always on.** Bytes are kept once per `stickerMessage.fileSha256`
+  in `data/stickers/`. The Pi purges media after 7 days, and sending stickers
+  later would need this.
+- **Understanding (`chat.stickers.enabled`) is off** until `scripts/eval_stickers.py`
+  passes: ≥80% right with no member named. It scores three variants blind: the
+  photo prompt, a sticker prompt with three frames of an animation, and the same
+  prompt plus the preceding messages.
+- **The label is always right, even with understanding off.** A sticker is
+  written as `[Sticker: …]`, not `[Imagem: …]`. The payload says which it is, so
+  this needs no eval. The detailed, mixed and banter prompts say a sticker is a
+  reaction and never the sender's face: on 2026-09-28 a meme of a man with his
+  hands on his head came back as *"Essa cara de desespero diz tudo sobre ti, Gil"*.
 
 ### A roast is about one person (2026-09-04)
 

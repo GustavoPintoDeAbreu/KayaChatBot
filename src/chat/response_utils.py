@@ -6,7 +6,7 @@ model stack, and reused by every chat entry point (chat.py, web_app.py).
 
 import random
 import re
-from typing import Optional
+from typing import Dict, Optional
 
 # Cues that a question is asking for an elaborate answer rather than a quick reply.
 # Used to raise the generation length budget only when warranted (see
@@ -383,7 +383,8 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
 
 
 def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
-                               max_facts: int = 0, sample_facts: bool = False) -> str:
+                               max_facts: int = 0, sample_facts: bool = False,
+                               birthdays: Optional[Dict[str, str]] = None) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -410,6 +411,9 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
     the same facts every turn produce the same joke every turn. A factual answer
     must never sample: "o que faz o Gil?" cannot depend on whether his job
     survived the draw.
+
+    ``birthdays`` maps a member to a confirmed ``MM-DD``. It is added outside the
+    facts, so no sampling can drop it: "quando faz anos o Pedro?" is factual.
     """
     members = list(members_data.get("members", []))
     if shuffle:
@@ -442,6 +446,10 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
             sentences = [s.strip() for s in notes.split(".") if s.strip()]
             if sentences:
                 line += ": " + ". ".join(sentences[:3]) + "."
+        if birthdays and birthdays.get(name):
+            from src.chat.birthdays import profile_line
+
+            line += (" " if key_facts or notes else ": ") + profile_line(birthdays[name])
         lines.append(line)
 
     if not lines:

@@ -82,6 +82,13 @@ class InboundMessage:
     media_filename: str = ""
     # Filled in once a photo has been read by the vision model.
     image_description: str = ""
+    # WhatsApp's own preview of a shared link (title, description, url). It
+    # costs nothing and is sometimes all there is: for an X post the description
+    # IS the post, and some news sites answer a fetch with nothing readable.
+    link_preview: Dict[str, str] = field(default_factory=dict)
+    # What the shared links say, for the reply to read. The log only gets the
+    # one-line synopsis; a question about the link needs the article itself.
+    link_context: str = ""
     # A sticker arrives as image/webp, the same as a photo. `fileSha256` is the
     # same for every copy of the same sticker, which is what lets it be read once.
     is_sticker: bool = False
@@ -140,6 +147,39 @@ def _media_filename(payload: Dict[str, Any]) -> str:
                     name = value["fileName"]
                     break
     return os.path.basename(str(name or "").strip().replace("\\", "/"))
+
+
+def _link_preview(data: Dict[str, Any]) -> Dict[str, str]:
+    """WhatsApp's preview of the link in this message, or ``{}``.
+
+    NOWEB carries it on ``extendedTextMessage``: ``matchedText`` is the URL,
+    ``title``/``description`` what the sender's phone rendered. A preview whose
+    title is only the domain or whose description is the URL again says nothing.
+    """
+    message = data.get("message")
+    if not isinstance(message, dict):
+        return {}
+    extended = message.get("extendedTextMessage")
+    if not isinstance(extended, dict) or not extended.get("matchedText"):
+        return {}
+    url = str(extended.get("matchedText") or "")
+    preview = {"url": url,
+               "title": str(extended.get("title") or ""),
+               "description": str(extended.get("description") or "")}
+    if preview["description"].strip() == url.strip():
+        preview["description"] = ""
+    return preview
+
+
+def _sticker(data: Dict[str, Any]) -> tuple:
+    """``(is_sticker, sha, animated)`` from ``_data.message.stickerMessage``."""
+    message = data.get("message")
+    sticker = message.get("stickerMessage") if isinstance(message, dict) else None
+    if not isinstance(sticker, dict):
+        return False, "", False
+    sha = str(sticker.get("fileSha256") or "")
+    safe = sha.replace("/", "_").replace("+", "-").rstrip("=")
+    return True, safe, bool(sticker.get("isAnimated"))
 
 
 def _baileys_text(message: Any) -> str:
@@ -284,6 +324,7 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
         media_url=str((payload.get("media") or {}).get("url") or ""),
         media_mimetype=str((payload.get("media") or {}).get("mimetype") or ""),
         media_filename=_media_filename(payload),
+        link_preview=_link_preview(data),
         is_sticker=is_sticker,
         sticker_sha=sticker_sha,
         sticker_animated=sticker_animated,
@@ -440,6 +481,8 @@ class WhatsAppAdapter:
         transcribe: Optional[Callable[[str, str], Optional[str]]] = None,
         describe_image: Optional[Callable[[str, str], Optional[str]]] = None,
         ingest_document: Optional[Callable[["InboundMessage"], Optional[str]]] = None,
+        read_links: Optional[Callable[[str, Dict[str, str]], List[Tuple[str, str]]]] = None,
+        archive_sticker: Optional[Callable[["InboundMessage"], None]] = None,
         summary_writer: Any = None,
         sender_resolver: Any = None,
         reply_ledger: Any = None,
@@ -487,15 +530,20 @@ class WhatsAppAdapter:
         # message for a silent bug report is worse than typing seven characters.
         self.bug_commands = {"/bug", "/erro"}
         self.feedback_commands = {"/feedback", "/sugestao", "/sugestão"}
+        # A member stating their own birthday: the most trusted source there is,
+        # so it needs no review (see src/chat/birthdays.py).
+        self.birthday_commands = {"/aniversario", "/aniversário", "/birthday", "/anos"}
         # Every command token, used to keep these messages OUT of the memory log
         # (see _parse_command — the log is written before the reply gate).
         self.all_commands = (
             self.clear_commands | self.bug_commands | self.feedback_commands
+            | self.birthday_commands
         )
         self._command_families = {
             **{token: "clear" for token in self.clear_commands},
             **{token: "bug" for token in self.bug_commands},
             **{token: "feedback" for token in self.feedback_commands},
+            **{token: "birthday" for token in self.birthday_commands},
         }
         # Where a new report is announced. A JID (…@c.us); empty disables it.
         # Real numbers stay out of git, so this comes from KAYA_REPORT_JID.
@@ -505,6 +553,14 @@ class WhatsAppAdapter:
         # one-line synopsis. Injected like describe_image so the adapter keeps
         # no pypdf import and stays testable without one.
         self.ingest_document = ingest_document
+        # Reads the links in a message: ``(text, preview) -> [(line, excerpt)]``.
+        # The line goes into the message the way a photo's description does; the
+        # excerpt is kept for a reply that asks about the link. Injected so the
+        # adapter makes no HTTP calls of its own and tests need no network.
+        self.read_links = read_links
+        # Keeps a sticker's bytes by hash. The Pi purges media after 7 days, and
+        # the group's stickers are the vocabulary a later feature would use.
+        self.archive_sticker = archive_sticker
         self.config = config
         # Chat ids whose content is group-wide memory (the Kaya group). Everything
         # else is private to its own chat — see src/chat/scope.py.
@@ -581,8 +637,12 @@ class WhatsAppAdapter:
             # updates in our future interactions" — a promise the bot has no state
             # to keep, from the one mode whose prompt lacked the clause forbidding
             # exactly that.
-            "unknown_command": ("Não conheço esse comando. Tenho /bug, /feedback "
-                                "e /clear."),
+            "unknown_command": ("Não conheço esse comando. Tenho /bug, /feedback, "
+                                "/aniversario e /clear."),
+            "birthday_usage": ("Escreve /aniversario e o dia em que fazes anos. "
+                               "Exemplo: /aniversario 8/9."),
+            "birthday_not_member": "Só guardo aniversários de quem é do grupo.",
+            "birthday_saved": "Registado, fazes anos a {date}.",
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -597,6 +657,7 @@ class WhatsAppAdapter:
         # ingester read it so a roast never comes back as a fact.
         self.reply_ledger = reply_ledger
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
+        self._responder_takes_links = _accepts_kwarg(responder, "link_context")
         self.tts_synthesize = tts_synthesize
         # What a reply sounds like is not what it looks like: emoji, markdown and
         # URLs are read out loud by Piper. Injected like tts_synthesize so the
@@ -740,6 +801,54 @@ class WhatsAppAdapter:
         return datetime.datetime.fromtimestamp(
             window[0], tz=datetime.timezone.utc
         ).replace(tzinfo=None).isoformat()
+
+    def announce(self, chat_id: str, text: str) -> Any:
+        """Say something nobody asked for: the birthday greeting, and nothing else.
+
+        Always written, never spoken, and added to the chat's window so the next
+        reply knows the bot already said parabéns.
+        """
+        sent = self.waha_client.send_text(chat_id, text)
+        self.session_store.append(chat_id, f"Kaya Bot: {text}")
+        return sent
+
+    def _is_member(self, name: str) -> bool:
+        if self.sender_resolver is not None:
+            try:
+                return bool(self.sender_resolver.is_member(name))
+            except Exception:  # noqa: BLE001
+                return False
+        return name in set(self.member_aliases.values())
+
+    def _handle_birthday(self, msg: InboundMessage, body: str,
+                         speaker: str) -> Dict[str, Any]:
+        """Store the speaker's own birthday. Answered by code, never generated."""
+        from src.chat import birthdays
+
+        month_day = birthdays.parse_date(body)
+        if not month_day:
+            reply = self.command_replies["birthday_usage"]
+        elif not self._is_member(speaker):
+            reply = self.command_replies["birthday_not_member"]
+        else:
+            store_path = birthdays.settings(self.config)["store"]
+            path = Path(store_path)
+            birthdays.BirthdayStore(
+                path if path.is_absolute() else birthdays.BASE_DIR / path
+            ).set(speaker, month_day, "self")
+            reply = self.command_replies["birthday_saved"].format(
+                date=birthdays.spoken_date(month_day))
+        self.waha_client.send_text(msg.chat_id, reply)
+        return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                "command": "birthday"}
+
+    def _read_links(self, text: str, preview: Dict[str, str]) -> List[Tuple[str, str]]:
+        """The injected link reader, never raising: a failed read is not a lost message."""
+        try:
+            return list(self.read_links(text, preview) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("link reading failed: %s", exc)
+            return []
 
     def _handle_image_request(self, msg: "InboundMessage", speaker: str,
                               text: str) -> Dict[str, Any]:
@@ -1250,6 +1359,23 @@ class WhatsAppAdapter:
                             else f"[{label}: {description}]")
                 print(f"🖼️  described {label.lower()} ({len(description)} chars)")
 
+        if msg.is_sticker and msg.media_url and self.archive_sticker is not None:
+            try:
+                self.archive_sticker(msg)
+            except Exception as exc:  # noqa: BLE001 — an archive miss is not a lost message
+                logger.warning("could not archive a sticker: %s", exc)
+
+        # A shared link is the same problem once more: the message is a URL, and
+        # what it says lives somewhere else. Read here, it becomes
+        # "[Link: título (site) — sinopse]" in the text, so the log, the ingester,
+        # the router and retrieval see what was shared rather than an address.
+        if self.read_links is not None and msg.text.strip():
+            links = self._read_links(msg.text, msg.link_preview)
+            if links:
+                msg.text += "".join(f"\n{line}" for line, _ in links)
+                msg.link_context = "\n\n".join(excerpt for _, excerpt in links if excerpt)
+                print(f"🔗 read {len(links)} link(s)")
+
         # A slash command is an instruction to the bot, not something the group
         # said, and this log is what gets embedded into long-term memory. It is
         # written BEFORE the reply gate below, so commands have to be excluded
@@ -1336,6 +1462,8 @@ class WhatsAppAdapter:
         parsed = self._parse_command(text)
         if parsed and parsed[0] in ("bug", "feedback"):
             return self._handle_report(msg, parsed[1], speaker, parsed[0])
+        if parsed and parsed[0] == "birthday":
+            return self._handle_birthday(msg, parsed[1], speaker)
 
         # An unrecognised command is answered by code, never by the model. The
         # model treats it as an ordinary message and agrees to whatever it asks:
@@ -1381,6 +1509,15 @@ class WhatsAppAdapter:
                 kwargs["summary"] = self.summary_writer.store.summary_for(msg.chat_id)
             except Exception as exc:  # noqa: BLE001 — a missing summary is not fatal
                 logger.warning("could not read the summary for this chat: %s", exc)
+        # The article behind a link, for a reply that asks about it. A reply to
+        # the message that shared it counts: "@Kaya o que achas disto?" quoting a
+        # link is the usual way the question is put. The quoted one is a cache hit.
+        link_context = msg.link_context
+        if not link_context and msg.quoted_text and self.read_links is not None:
+            link_context = "\n\n".join(
+                excerpt for _, excerpt in self._read_links(msg.quoted_text, {}) if excerpt)
+        if link_context and self._responder_takes_links:
+            kwargs["link_context"] = link_context
         asked = f"{quoted}\n{text}" if quoted else text
         return PendingReply(msg=msg, speaker=speaker, text=text, asked=asked,
                             recent=recent, kwargs=kwargs)

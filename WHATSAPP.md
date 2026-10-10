@@ -81,6 +81,7 @@ group they still need an @-mention like anything else.
 | `/clear` | `/limpar` | Forget this chat's recent verbatim context |
 | `/bug <what happened>` | `/erro` | File a bug report |
 | `/feedback <your idea>` | `/sugestao`, `/sugestão` | Leave a suggestion |
+| `/aniversario <dia>` | `/aniversário`, `/birthday`, `/anos` | Save your own birthday (members only), e.g. `/aniversario 8/9` |
 
 Most of what the group actually uses is not a slash command at all — the router
 reads it out of ordinary language (`src/chat/router.py`):
