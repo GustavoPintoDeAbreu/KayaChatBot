@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY src/gateway src/gateway
 COPY src/chat/whatsapp_adapter.py src/chat/stt.py src/chat/waha_client.py \
      src/chat/documents.py src/chat/feedback.py src/chat/memory.py src/chat/response_utils.py \
-     src/chat/scope.py src/chat/
+     src/chat/scope.py src/chat/channels.py src/chat/birthdays.py src/chat/
 COPY src/chat/static/landing.html src/chat/static/landing.html
 COPY src/data/message_log.py src/data/
 COPY config.yaml config.yaml
