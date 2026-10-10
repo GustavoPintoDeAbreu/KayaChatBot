@@ -412,3 +412,16 @@ def test_the_rubric_routes_a_question_wrapped_in_an_insult_by_the_question():
     assert '"tu és tão burro que nem sabes o que é o jogo do titz, explica lá" -> FACTUAL' \
         in router._ROUTER_SYSTEM
     assert '"Kaya Bot" is the bot itself' in router._ROUTER_SYSTEM
+
+
+def test_a_friendly_ranking_is_not_a_roast():
+    """Only an unflattering verdict is a roast; "quem é o mais engraçado?" is an opinion."""
+    assert '"quem é o mais engraçado?" -> FACTUAL' in router._ROUTER_SYSTEM
+    assert '"quem é o mais engraçado?" -> ROAST' not in router._ROUTER_SYSTEM
+    assert '"good morning bro"' in router._ROUTER_SYSTEM
+
+
+def test_the_reviewer_flags_a_put_down_nobody_asked_for():
+    from src.chat.reply_review import REVIEW_SYSTEM
+
+    assert "boca que ninguém pediu" in REVIEW_SYSTEM

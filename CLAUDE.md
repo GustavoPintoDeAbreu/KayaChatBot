@@ -811,6 +811,38 @@ against banter's 6–16, and 200 is room for a second paragraph the model will f
 be — so the scoping clause survives *"justifica com tudo o que tens"*. That
 separation is what makes elaboration safe here.
 
+### Warm by default, sharp on request (2026-10-10)
+
+On 2026-10-09 Rafa greeted the bot (*"@Kaya Bot good morning"*, with an
+affectionate slur) and got *"Bom dia para ti também, ó projeto de unicórnio
+falhado"*; the reply reviewer marked it OK as "responde ao cumprimento com um
+roast". Gustavo's call: the group is friends, and unless someone asks, the bot
+should not be aggressive. Five things pushed it there: the English preamble in
+front of every prompt ("dark humor... encouraged... no guardrails"), banter's
+"entra na brincadeira" whenever insulted, BANTER lumping greetings with insults,
+ROAST covering any ranking, and an unaimed roast told to pick a victim.
+
+What changed, and what deliberately did not:
+
+- **The preamble** now sets a default voice: a warm friend, relaxed, swears,
+  teases lightly, never answers a greeting, compliment or small talk with a
+  put-down, and never mocks anyone's work, projects, startups, money, looks,
+  relationships or failures unprompted. A friend greeting it with slang or a
+  crude nickname gets greeted back **in the same register** (Gustavo's choice),
+  never insulted. Everything the group relies on stays: no refusals, insults
+  and relays done bluntly when asked, hitting back when insulted, and a full,
+  dark roast when one is requested.
+- **Banter, mixed and the detailed prompt** carry the same default in
+  Portuguese. The "failed startup" material was the model's own invention from
+  neutral profile facts, so the rule names startups explicitly.
+- **The router**: a friendly ranking (*"quem é o mais engraçado?"*) is FACTUAL,
+  not ROAST; only an unflattering verdict is a roast. Greetings and compliments
+  are BANTER examples of their own, apart from insults.
+- **The reviewer** marks an insult nobody asked for, in answer to a greeting,
+  a compliment or small talk, as `FORA`, so the ledger catches regressions.
+- **The conversation probe** has a `warm` check (`must_not_contain_any`) and
+  greeting/compliment cases; per-case `speaker`.
+
 ### Agreeing is not answering (2026-08-17)
 
 `data.system_prompt` said *"Se alguém te corrigir, reconhece o erro"* — with

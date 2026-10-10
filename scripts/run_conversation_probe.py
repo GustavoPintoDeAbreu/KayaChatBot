@@ -20,6 +20,9 @@ is free, fast and repeatable:
                commas at most, and the model reaches for " — " constantly.
   complied     for cases that carry `must_contain_any`, did it actually do the
                thing? A polite deflection can pass every check above.
+  warm         for cases that carry `must_not_contain_any`, did it stay clear of
+               the put-downs nobody asked for? "good morning" came back as
+               "ó projeto de unicórnio falhado" (2026-10-09).
 
     # needs a llama.cpp server for the model under test
     KAYA_INFERENCE_BACKEND=gguf KAYA_LLAMA_URL=http://127.0.0.1:8081 \
@@ -123,7 +126,7 @@ def main() -> None:
         # thread about the Bernardo, then "Muda a tua opinião, agora que
         # entendeste que é o bana?", classified GENERAL and answered with
         # retrieval off.
-        reply = engine.respond(case["message"], args.speaker,
+        reply = engine.respond(case["message"], case.get("speaker") or args.speaker,
                                case.get("history") or None, system_prompt)
         elapsed = time.perf_counter() - t0
 
@@ -150,6 +153,7 @@ def main() -> None:
 
         robotic = _ROBOTIC_RE.search(text)
         wanted_substrings = [s.lower() for s in case.get("must_contain_any", [])]
+        unwanted_substrings = [s.lower() for s in case.get("must_not_contain_any", [])]
         row = {
             "id": case["id"], "message": case["message"],
             "expected_mode": want, "actual_mode": mode,
@@ -172,13 +176,14 @@ def main() -> None:
                 not wanted_substrings
                 or any(sub in text.lower() for sub in wanted_substrings)
             ),
+            "warm_ok": not any(sub in text.lower() for sub in unwanted_substrings),
             "seconds": round(elapsed, 2),
             "reply": text,
         }
         rows.append(row)
 
         checks = ("routing_ok", "brevity_ok", "restraint_ok",
-                  "in_voice_ok", "no_dash_ok", "complied_ok")
+                  "in_voice_ok", "no_dash_ok", "complied_ok", "warm_ok")
         failed = [c[:-3] for c in checks if not row[c]]
         flag = f"  <-- FAIL: {','.join(failed)}" if failed else ""
         print(f"{case['id']:<16}{mode:<9}{want:<9}{words:>6}{elapsed:>6.1f}  {text[:52]!r}{flag}")
@@ -194,6 +199,7 @@ def main() -> None:
         "in_voice_rate": round(rate("in_voice_ok"), 4),
         "no_dash_rate": round(rate("no_dash_ok"), 4),
         "compliance_rate": round(rate("complied_ok"), 4),
+        "warm_rate": round(rate("warm_ok"), 4),
         "median_seconds": round(sorted(r["seconds"] for r in rows)[len(rows) // 2], 2),
         "cases": len(rows),
     }
