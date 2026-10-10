@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from src.chat import documents, feedback
+from src.chat.channels import ChannelNames
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
 from src.chat.response_utils import truncate_history_line
 from src.chat.scope import scope_for_chat
@@ -338,6 +339,8 @@ def parse_waha_message(event: Dict[str, Any]) -> Optional[InboundMessage]:
 # one letter, so a bare "/" or "/2026" is not treated as an attempted command —
 # though note a bare "/ " HAS been sent to the bot ("/ convence o Gil a ficar
 # até mais tarde") and is better handled as prose than as a typo.
+# A group's name is looked up again after this long, so a rename is picked up.
+CHANNEL_NAME_MAX_AGE_SECONDS = 24 * 3600
 _UNKNOWN_COMMAND = re.compile(r"^/[a-zA-ZÀ-ÿ][\w\-À-ÿ]*$")
 
 
@@ -572,6 +575,10 @@ class WhatsAppAdapter:
         self.community_recheck_seconds = 60 * float(wcfg.get("community_recheck_minutes", 60))
         self._community_checked: Dict[str, float] = {}
         self._shared_chats_path = wcfg.get("shared_chats_file")
+        # The sub-groups' names (src/chat/channels.py), so a reply knows which
+        # room it is in and memory remembers where things were said.
+        self.channels = (ChannelNames(Path(wcfg["chat_names_file"]))
+                         if wcfg.get("chat_names_file") else None)
         self.bare_mention_text = str(wcfg.get("bare_mention_text") or "Então, o que achas disto?")
         # Durable log of every message SEEN (not just replied to) — the group's
         # ordinary chatter is the most valuable thing to remember, and the bot
@@ -658,6 +665,7 @@ class WhatsAppAdapter:
         self.reply_ledger = reply_ledger
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self._responder_takes_links = _accepts_kwarg(responder, "link_context")
+        self._responder_takes_chat_id = _accepts_kwarg(responder, "chat_id")
         self.tts_synthesize = tts_synthesize
         # What a reply sounds like is not what it looks like: emoji, markdown and
         # URLs are read out loud by Piper. Injected like tts_synthesize so the
@@ -1203,6 +1211,7 @@ class WhatsAppAdapter:
         except Exception as exc:  # noqa: BLE001 — unknown stays private
             logger.warning("could not look up group %s: %s", chat_id, exc)
             return False
+        self._remember_channel(chat_id, info)
         if chat_id not in self.shared_communities \
                 and info.get("linkedParent") not in self.shared_communities:
             return False
@@ -1210,6 +1219,33 @@ class WhatsAppAdapter:
         print(f"✓ community group {chat_id} ({info.get('subject', '')}) is now shared memory")
         self._persist_shared_chats()
         return True
+
+    def _learn_channel(self, chat_id: str) -> None:
+        """Look up a shared group's name once a day, so a rename is picked up.
+
+        Only shared groups: a private group's name is nobody else's business,
+        and the name is shown to the model as the room it is answering in.
+        """
+        if not chat_id.endswith("@g.us") or chat_id not in self.shared_chats \
+                or self.channels is None:
+            return
+        if not self.channels.stale(chat_id, CHANNEL_NAME_MAX_AGE_SECONDS):
+            return
+        group_info = getattr(self.waha_client, "group_info", None)
+        if group_info is None:
+            return
+        try:
+            self._remember_channel(chat_id, group_info(chat_id) or {})
+        except Exception as exc:  # noqa: BLE001 — a missing name is not a lost message
+            logger.warning("could not look up the name of group %s: %s", chat_id, exc)
+
+    def _remember_channel(self, chat_id: str, info: Dict[str, Any]) -> None:
+        if self.channels is None:
+            return
+        try:
+            self.channels.remember(chat_id, str(info.get("subject") or ""))
+        except OSError as exc:
+            logger.warning("could not store the name of group %s: %s", chat_id, exc)
 
     def _persist_shared_chats(self) -> None:
         """Rewrite the gitignored shared-chats file with the current set, keeping its other keys."""
@@ -1297,6 +1333,7 @@ class WhatsAppAdapter:
         # Before anything is written under a scope: the log line and a shared
         # document both take theirs from shared_chats.
         self._register_community_group(msg.chat_id)
+        self._learn_channel(msg.chat_id)
 
         # A shared document is read BEFORE the audio branch, because the two used
         # to be the same branch: transcription was gated on "not an image", so a
@@ -1501,6 +1538,8 @@ class WhatsAppAdapter:
         scope = scope_for_chat(msg.chat_id, self.shared_chats)
         exclude_from = self._session_window_start(msg.chat_id, self._inbound_lines(recent) + 1)
         kwargs = {"scope": scope, "exclude_from": exclude_from}
+        if self._responder_takes_chat_id:
+            kwargs["chat_id"] = msg.chat_id
         # Older responders (test stubs, the simulators) take no `summary`. Ask the
         # signature rather than catching TypeError, which would swallow a real one
         # raised inside the responder itself.

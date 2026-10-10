@@ -68,6 +68,7 @@ if _contacts_path.exists():
 # has names and aliases but no phone numbers, so the map cannot be generated ahead of
 # time. Matching WhatsApp's pushName against an alias fills it in as people talk.
 _wcfg["contacts_file"] = str(_contacts_path)
+_wcfg["chat_names_file"] = str(Path(config_path).parent / "data" / "whatsapp_chat_names.json")
 try:
     _members_file = config.get("data", {}).get("group_members_file")
     if _members_file:
@@ -218,7 +219,8 @@ engine.system_prompt_factory = _prompt_for_turn
 
 
 def _responder(message: str, speaker: str, recent_lines, scope=None,
-               exclude_from=None, summary: str = "", link_context: str = ""):
+               exclude_from=None, summary: str = "", link_context: str = "",
+               chat_id: str = ""):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
@@ -233,7 +235,7 @@ def _responder(message: str, speaker: str, recent_lines, scope=None,
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,
         scope=scope, exclude_from=exclude_from, summary=summary,
-        link_context=link_context,
+        link_context=link_context, chat_id=chat_id,
     )
 
 
