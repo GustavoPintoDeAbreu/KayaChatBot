@@ -222,3 +222,16 @@ def test_aniversario_from_a_non_member_is_refused(tmp_path):
     adapter.handle_event(birthday_event("@bot /aniversario 8/9", "b3"))
     assert "quem é do grupo" in client.sent[-1]["text"]
     assert not (tmp_path / "birthdays.json").exists()
+
+
+def test_mine_birthdays_reads_month_first_assignments():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("mine_birthdays", "scripts/mine_birthdays.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.parse_assignment("Pedro=07-15") == ("Pedro", "07-15")
+    assert module.parse_assignment("Gustavo=09-08") == ("Gustavo", "09-08")
+    assert module.parse_assignment("Gil=6 de fevereiro") == ("Gil", "02-06")
+    with pytest.raises(SystemExit):
+        module.parse_assignment("Bana=13-31")
