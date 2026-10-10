@@ -32,6 +32,9 @@ services:
       # The owner's /homelaboff and /homelabon DMs (src/gateway/homelab.py). Empty turns them off.
       - HOMELAB_OWNER_NUMBERS=${HOMELAB_OWNER_NUMBERS:-}
       - HOMELAB_PC_POWER_URL=${HOMELAB_PC_POWER_URL:-}
+      # The chat the birthday line goes to (src/gateway/birthdays.py): the
+      # Community's general group. Empty turns birthday messages off.
+      - GATEWAY_BIRTHDAY_CHAT=${GATEWAY_BIRTHDAY_CHAT:-}
     volumes:
       - ./data/gateway:/data
       - ./data/runtime:/config:ro

@@ -48,11 +48,18 @@ class WahaClient:
 
         self._client = httpx.Client(base_url=self.base_url, headers=self._headers, timeout=30.0)
 
-    def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> Dict[str, Any]:
-        """Send a text message. ``reply_to`` quotes a prior message id (groups)."""
+    def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None,
+                  mentions: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Send a text message. ``reply_to`` quotes a prior message id (groups).
+
+        ``mentions`` are the ids tagged in ``text``: WhatsApp only renders an
+        ``@<number>`` in the text as a tag when its id is listed here too.
+        """
         body: Dict[str, Any] = {"session": self.session, "chatId": chat_id, "text": text}
         if reply_to:
             body["reply_to"] = reply_to
+        if mentions:
+            body["mentions"] = list(mentions)
         resp = self._client.post("/api/sendText", json=body)
         resp.raise_for_status()
         return resp.json()
@@ -136,10 +143,13 @@ class MockWahaClient:
             print(f"\n[→ WhatsApp {chat_id}] (voice note, {len(ogg_bytes or b'')} bytes)\n")
         return {"id": f"mock-voice-{self._counter}"}
 
-    def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> Dict[str, Any]:
+    def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None,
+                  mentions: Optional[List[str]] = None) -> Dict[str, Any]:
         self._counter += 1
         message_id = f"mock-{self._counter}"
         record = {"chat_id": chat_id, "text": text, "reply_to": reply_to}
+        if mentions:
+            record["mentions"] = list(mentions)
         self.sent.append(record)
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] {text}\n")
