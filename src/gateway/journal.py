@@ -16,7 +16,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +204,15 @@ class Journal:
                 f"SELECT {_EVENT_COLUMNS} FROM events WHERE seq = ?", (seq,)
             ).fetchone()
         return _to_event(row) if row is not None else None
+
+    def messages_since(self, since: float) -> List[JournalEvent]:
+        """Every ``message`` event sent at or after ``since`` (epoch seconds), oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM events WHERE event_type = 'message' "
+                "AND COALESCE(wa_ts, received_at) >= ? ORDER BY seq ASC", (since,)
+            ).fetchall()
+        return [_to_event(row) for row in rows]
 
     def next_pending(self) -> Optional[JournalEvent]:
         """Return the lowest-seq pending event, or ``None``."""

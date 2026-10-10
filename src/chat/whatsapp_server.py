@@ -806,6 +806,19 @@ def relay_status(x_relay_token: str = Header(default="")):
             "draining": _backlog.draining()}
 
 
+@app.get("/whatsapp/relay/birthdays")
+def relay_birthdays(x_relay_token: str = Header(default="")):
+    """The roster the Pi greets from: date, aliases and the id to tag, per member."""
+    _check_relay_token(x_relay_token)
+    from src.chat import birthdays
+
+    try:
+        contacts = _json.loads(_contacts_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        contacts = {}
+    return {"members": birthdays.roster(config, Path(config_path).parent, contacts=contacts)}
+
+
 def _web_credentials() -> Optional[Tuple[str, str]]:
     """The username/password pair guarding the chat UI, or None if unset.
 

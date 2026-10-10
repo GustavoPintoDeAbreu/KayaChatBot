@@ -44,6 +44,7 @@ from src.chat.whatsapp_adapter import (
 )
 from src.gateway.autoreply import OfflineResponder
 from src.gateway.forwarder import Forwarder
+from src.gateway.birthdays import BirthdayGreeter
 from src.gateway.homelab import HomelabPower
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.gateway.journal import Journal
@@ -66,6 +67,7 @@ class GatewaySettings:
     config_path: str
     landing_html: str
     whitelist_path: str
+    birthday_chat: str
     pc_url: str
     relay_token: str
     waha_url: str
@@ -86,6 +88,7 @@ class GatewaySettings:
             config_path=env.get("GATEWAY_CONFIG", "config.yaml"),
             landing_html=env.get("GATEWAY_LANDING_HTML", "src/chat/static/landing.html"),
             whitelist_path=env.get("GATEWAY_WHITELIST", "/config/whatsapp_whitelist.json"),
+            birthday_chat=env.get("GATEWAY_BIRTHDAY_CHAT", "").strip(),
             pc_url=env.get("KAYA_PC_URL", "http://192.168.1.149:7860").rstrip("/"),
             relay_token=env.get("KAYA_RELAY_TOKEN", ""),
             waha_url=env.get("KAYA_WAHA_URL", "http://waha:3000").rstrip("/"),
@@ -108,6 +111,8 @@ class Gateway:
                  fetch_media: Optional[Callable[[str], Awaitable[Tuple[bytes, str]]]] = None,
                  idea_tap: Optional[IdeaTap] = None,
                  homelab: Optional[HomelabPower] = None,
+                 send_mentions: Optional[Callable[[str, str, list], Any]] = None,
+                 fetch_birthdays: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                  now: Callable[[], float] = time.time) -> None:
         self.settings = settings
         self.idea_tap = idea_tap
@@ -137,6 +142,13 @@ class Gateway:
         if homelab:
             homelab.attach(journal=self.journal, monitor=self.monitor, send_text=self._send_text,
                            data_dir=settings.data_dir, now=now)
+        self.birthdays: Optional[BirthdayGreeter] = None
+        if settings.birthday_chat and ((config.get("chat") or {}).get("birthdays") or {}).get("enabled"):
+            self.birthdays = BirthdayGreeter(
+                chat_id=settings.birthday_chat, data_dir=settings.data_dir, config=config,
+                journal=self.journal, send_text=send_mentions or self._waha_send_mentions(),
+                fetch_roster=fetch_birthdays or self._fetch_birthdays,
+                timezone=self.schedule.timezone, now=now)
         self._bot_jids: Set[str] = set(json.loads(self.journal.get_meta("bot_jids", "[]")))
         self._stop = asyncio.Event()
         self._tasks: list = []
@@ -161,6 +173,21 @@ class Gateway:
         client = WahaClient(self.settings.waha_url, self.settings.waha_session,
                             self.settings.waha_api_key)
         return lambda chat_id, text, reply_to=None: client.send_text(chat_id, text, reply_to=reply_to)
+
+    def _waha_send_mentions(self) -> Callable[[str, str, list], Any]:
+        """WAHA's sendText with tagged members, for the birthday line."""
+        from src.chat.waha_client import WahaClient
+
+        client = WahaClient(self.settings.waha_url, self.settings.waha_session,
+                            self.settings.waha_api_key)
+        return lambda chat_id, text, mentions: client.send_text(chat_id, text, mentions=mentions)
+
+    def _fetch_birthdays(self) -> Optional[Dict[str, Any]]:
+        """The PC's birthday roster, or None when the PC does not answer."""
+        response = httpx.get(f"{self.settings.pc_url}/whatsapp/relay/birthdays",
+                             headers={"X-Relay-Token": self.settings.relay_token}, timeout=5)
+        response.raise_for_status()
+        return response.json().get("members")
 
     async def _download_media(self, url: str) -> Tuple[bytes, str]:
         """Fetch a media file from WAHA now, before WAHA deletes it."""
@@ -269,6 +296,7 @@ class Gateway:
             "scheduled_on": self.schedule.is_scheduled_on(now),
             "outage": self.responder.outage(),
             "journal": self.journal.stats(),
+            "birthdays": self.birthdays.status() if self.birthdays else None,
         }
 
     def _build_public_app(self) -> FastAPI:
@@ -284,7 +312,8 @@ class Gateway:
 
         @app.get("/status")
         def public_status() -> JSONResponse:
-            body = {key: value for key, value in self.status().items() if key != "journal"}
+            body = {key: value for key, value in self.status().items()
+                    if key not in ("journal", "birthdays")}
             return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
         return app
@@ -378,6 +407,8 @@ class Gateway:
                        asyncio.create_task(self.forwarder.run(self._stop))]
         if self.homelab:
             self._tasks.append(asyncio.create_task(self.homelab.watch(self._stop)))
+        if self.birthdays:
+            self._tasks.append(asyncio.create_task(self.birthdays.watch(self._stop)))
 
     async def stop_background(self) -> None:
         """Stop them and wait."""

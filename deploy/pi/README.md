@@ -57,6 +57,17 @@ the journal size). This is the one place outside the PC where group messages
 live. It is on the LAN, never sent anywhere else, and the SSD is the Pi's only
 disk.
 
+## Birthday messages
+
+`src/gateway/birthdays.py` posts a fixed line at 00:00 to
+`GATEWAY_BIRTHDAY_CHAT` (the general group), tagging the member, and a nudge at
+12:00 only if nobody has said parabéns since midnight. The lines and windows are
+`chat.birthdays` in `config.yaml`. The dates come from the PC
+(`GET /whatsapp/relay/birthdays`, pulled every 30 min while the PC answers) and
+the last copy is kept in `data/gateway/birthdays.json`, so it works with the PC
+off. What was sent is in `data/gateway/birthday_state.json`; `/status` on the
+internal port shows the roster size and the last send.
+
 ## Deploying
 
 ```bash
