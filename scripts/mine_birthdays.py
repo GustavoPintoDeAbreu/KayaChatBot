@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -71,13 +72,17 @@ def aliases_for(members: Dict) -> Dict[str, List[str]]:
 
 
 def parse_assignment(value: str) -> Tuple[str, str]:
+    """``Member=MM-DD`` (month first, as stored) or any day-first date ``parse_date`` reads."""
     member, _, raw = value.partition("=")
-    month_day = birthdays.parse_date(raw.replace("-", "/", 1)) if "-" in raw else birthdays.parse_date(raw)
+    raw = raw.strip()
+    match = re.fullmatch(r"(\d{1,2})-(\d{1,2})", raw)
+    if match:
+        month, day = int(match.group(1)), int(match.group(2))
+        month_day = f"{month:02d}-{day:02d}" if birthdays._valid(month, day) else None
+    else:
+        month_day = birthdays.parse_date(raw)
     if not member or not month_day:
         raise SystemExit(f"expected Member=MM-DD, got {value!r}")
-    if "-" in raw:
-        month, day = raw.split("-")
-        month_day = f"{int(month):02d}-{int(day):02d}"
     return member.strip(), month_day
 
 
