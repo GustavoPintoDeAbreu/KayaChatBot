@@ -71,6 +71,31 @@ class IngestState:
     def watermark(self, scope: str) -> int:
         return int((self._data.get("scopes", {}) or {}).get(scope, {}).get("last_ts", 0))
 
+    def chat_watermark(self, scope: str, chat_id: str) -> int:
+        """A chat's own watermark inside its scope; the scope's until it has one.
+
+        The Community's sub-groups share the ``shared`` scope but are chunked
+        apart, so each needs its own mark: a quiet chat's unsettled tail must
+        not hold back, or re-chunk, a busy one. A chat that has none yet starts
+        from the scope's, which is exactly where the single watermark left it.
+        """
+        entry = (self._data.get("scopes", {}) or {}).get(scope, {}) or {}
+        chats = entry.get("chats", {}) or {}
+        if chat_id in chats:
+            return int(chats[chat_id])
+        return int(entry.get("last_ts", 0))
+
+    def set_chat_watermarks(self, scope: str, marks: Dict[str, int], ingested: int) -> None:
+        """Store each chat's mark; the scope's own is the lowest of them."""
+        scopes = self._data.setdefault("scopes", {})
+        entry = scopes.setdefault(scope, {})
+        chats = entry.setdefault("chats", {})
+        chats.update({chat_id: int(ts) for chat_id, ts in marks.items()})
+        entry["last_ts"] = min(int(ts) for ts in chats.values()) if chats else int(entry.get("last_ts", 0))
+        entry["last_run"] = datetime.now(timezone.utc).isoformat()
+        entry["total_ingested"] = int(entry.get("total_ingested", 0)) + int(ingested)
+        self._save()
+
     def set_watermark(self, scope: str, ts: int, ingested: int) -> None:
         scopes = self._data.setdefault("scopes", {})
         entry = scopes.setdefault(scope, {})
@@ -120,6 +145,7 @@ def build_chunks(
     settle_seconds: int = 0,
     now: Optional[int] = None,
     keep_bot_quote: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    channel_of: Optional[Callable[[str], str]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Group consecutive messages into retrievable chunks.
 
@@ -147,6 +173,12 @@ def build_chunks(
     the quote is the only way they get in, and on 2026-09-28 that was how its
     roasts were becoming "what the group said". Refused, the line keeps the
     member's side and says only that it answered the bot.
+
+    Every chunk records the ``chat_id`` it came from and, through
+    ``channel_of``, the channel's name. The caller hands this one chat at a
+    time (``Ingester.ingest_scope``): the Community's sub-groups share a scope,
+    and a chunk interleaving the trip channel with general is a chunk about
+    neither.
     """
     chunks: List[Dict[str, Any]] = []
     current: List[Dict[str, Any]] = []
@@ -196,6 +228,9 @@ def build_chunks(
                 "timestamp_end": _iso(end),
                 "scope": scope,
                 "source": "live",
+                "chat_id": str(current[0].get("chat_id") or ""),
+                "channel": (channel_of(str(current[0].get("chat_id") or "")) or "")
+                if channel_of else "",
             },
         })
         consumed_through = max(consumed_through, int(end or 0))
@@ -303,15 +338,28 @@ class Ingester:
 
     # ── the work ─────────────────────────────────────────────────────────────
     def ingest_scope(self, scope: str) -> Dict[str, Any]:
-        """Ingest everything logged for one scope since its watermark."""
+        """Ingest everything logged for one scope since its watermarks, chat by chat."""
         since = self.state.watermark(scope)
-        messages = list(self.log.read(scope, after_ts=since))
-        if not messages:
+        logged = list(self.log.read(scope, after_ts=since))
+        by_chat: Dict[str, List[Dict[str, Any]]] = {}
+        for message in logged:
+            chat_id = str(message.get("chat_id") or "")
+            if int(message.get("timestamp") or 0) > self.state.chat_watermark(scope, chat_id):
+                by_chat.setdefault(chat_id, []).append(message)
+        if not by_chat:
             return {"scope": scope, "messages": 0, "chunks": 0, "since": since}
 
-        chunks, consumed_through = build_chunks(
-            messages, scope, settle_seconds=self.settle_seconds,
-            keep_bot_quote=self._bot_quote_filter())
+        keep_bot_quote = self._bot_quote_filter()
+        channel_of = self._channel_of()
+        chunks: List[Dict[str, Any]] = []
+        marks: Dict[str, int] = {}
+        for chat_id, messages in by_chat.items():
+            built, consumed_through = build_chunks(
+                messages, scope, settle_seconds=self.settle_seconds,
+                keep_bot_quote=keep_bot_quote, channel_of=channel_of)
+            chunks.extend(built)
+            marks[chat_id] = self._advance(scope, chat_id, messages, consumed_through)
+
         if chunks:
             texts = [c["text"] for c in chunks]
             # Serialised against generation. This used to run unsynchronised on
@@ -332,6 +380,52 @@ class Ingester:
                 embeddings=embeddings,
             )
 
+        self.state.set_chat_watermarks(scope, marks, len(chunks))
+        return {
+            "scope": scope, "messages": sum(len(m) for m in by_chat.values()),
+            "chunks": len(chunks), "since": since, "watermark": self.state.watermark(scope),
+        }
+
+    def rechunk_since(self, scope: str, since: str) -> Dict[str, Any]:
+        """Rebuild a scope's live chunks from ``since`` (``YYYY-MM-DD``, UTC), once.
+
+        For chunks written before per-chat chunking, when the Community's
+        sub-groups were interleaved in one stream (``whatsapp.ingest.rechunk_since``).
+        Deletes the live chunks that end on or after ``since`` and rewinds the
+        scope to the earliest message they covered, so the next pass rebuilds
+        them one chat at a time with their channel. Recorded in the state file,
+        so it runs once per value; it runs inside the server process because
+        ChromaDB must not be written by two processes at once.
+        """
+        done = (self.state._data.get("rechunked", {}) or {}).get(scope)
+        if done == since:
+            return {"scope": scope, "rechunked": 0, "skipped": "already done"}
+        found = self.collection.get(where={"$and": [{"source": "live"}, {"scope": scope}]},
+                                    include=["metadatas"])
+        doomed = [(chunk_id, metadata) for chunk_id, metadata
+                  in zip(found.get("ids") or [], found.get("metadatas") or [])
+                  if str((metadata or {}).get("timestamp_end") or "") >= since]
+        if doomed:
+            earliest = min(str(metadata.get("timestamp_start") or since) for _, metadata in doomed)
+            rewind = int(datetime.fromisoformat(earliest).replace(tzinfo=timezone.utc).timestamp()) - 1
+            ids = [chunk_id for chunk_id, _ in doomed]
+            for start in range(0, len(ids), 500):
+                self.collection.delete(ids=ids[start:start + 500])
+            entry = self._data_scope(scope)
+            entry["last_ts"] = min(int(entry.get("last_ts", rewind)), rewind)
+            entry["chats"] = {}
+        self.state._data.setdefault("rechunked", {})[scope] = since
+        self.state._save()
+        logger.info("rechunk %s since %s: %d live chunk(s) removed", scope, since, len(doomed))
+        return {"scope": scope, "rechunked": len(doomed)}
+
+    def _data_scope(self, scope: str) -> Dict[str, Any]:
+        return self.state._data.setdefault("scopes", {}).setdefault(scope, {})
+
+    def _advance(self, scope: str, chat_id: str, messages: List[Dict[str, Any]],
+                 consumed_through: int) -> int:
+        """Where one chat's watermark may move to after this pass."""
+        since = self.state.chat_watermark(scope, chat_id)
         # Clamp to now. The watermark is a high-water mark, so a single message
         # with a clock-skewed or bogus future timestamp pins it ahead of real
         # time and every later message is silently skipped — memory stops
@@ -344,22 +438,35 @@ class Ingester:
         skipped = [t for t in timestamps if t > horizon]
         if skipped:
             logger.warning(
-                "%s: %d message(s) dated in the future (max %s); watermark held at %s",
-                scope, len(skipped), max(skipped), newest)
+                "%s/%s: %d message(s) dated in the future (max %s); watermark held at %s",
+                scope, chat_id, len(skipped), max(skipped), newest)
         # Never advance past messages that were deliberately left unconsumed for
         # the next run — doing so is how they would be lost forever, since read()
         # only ever returns what is strictly newer than the watermark.
         if consumed_through:
             newest = min(newest, consumed_through)
-        if newest <= since:
-            # Nothing legitimately newer — leave the watermark alone rather than
-            # moving it backwards.
+        else:
             newest = since
-        self.state.set_watermark(scope, newest, len(chunks))
-        return {
-            "scope": scope, "messages": len(messages), "chunks": len(chunks),
-            "since": since, "watermark": newest,
-        }
+        # Nothing legitimately newer: leave the watermark alone rather than
+        # moving it backwards.
+        return max(newest, since)
+
+    def _channel_of(self) -> Callable[[str], str]:
+        """A chat id's channel name, read once per pass."""
+        from src.chat import channels
+
+        names = channels.from_config(self.config)
+        cache: Dict[str, str] = {}
+
+        def channel_of(chat_id: str) -> str:
+            if chat_id not in cache:
+                try:
+                    cache[chat_id] = names.label(chat_id) if chat_id.endswith("@g.us") else ""
+                except Exception:  # noqa: BLE001 — a missing name is not a lost chunk
+                    cache[chat_id] = ""
+            return cache[chat_id]
+
+        return channel_of
 
     def ingest_all(self) -> List[Dict[str, Any]]:
         """Ingest every scope that has logged messages."""
@@ -376,7 +483,14 @@ class Ingester:
 def run_ingest(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Convenience entry point used by the boot catch-up and the periodic pass."""
     t0 = time.time()
-    results = Ingester(config).ingest_all()
+    ingester = Ingester(config)
+    since = ((config.get("whatsapp", {}) or {}).get("ingest", {}) or {}).get("rechunk_since")
+    if since:
+        try:
+            ingester.rechunk_since("shared", str(since))
+        except Exception as exc:  # noqa: BLE001 — the old chunks stay, which is the old behaviour
+            logger.warning("rechunk since %s failed: %s", since, exc)
+    results = ingester.ingest_all()
     total_chunks = sum(r.get("chunks", 0) for r in results)
     total_msgs = sum(r.get("messages", 0) for r in results)
     if total_msgs:

@@ -343,6 +343,37 @@ mention was stripped to `""`, and `if not text: return None` dropped it. A bare
 mention in a group is now answered as `whatsapp.bare_mention_text`, with the
 recent lines as its context. The stand-in is never logged.
 
+### The bot knows which channel it is in (2026-10-10)
+
+The Community's sub-groups all share the `shared` scope, and nothing told them
+apart: a reply in the trip channel did not know it was there, and ingest built
+chunks from one interleaved stream, so a chunk could hold three lines of the trip
+channel between lines of general and be about neither.
+
+- **Names** (`src/chat/channels.py`). The adapter stores each shared group's
+  WAHA `subject` in `data/whatsapp_chat_names.json` (gitignored), looked up again
+  after a day so renames land; `labels` in the same file overrides a subject by
+  hand. Only shared groups are named.
+- **The prompt** gets *"Estás no canal «X» da comunidade Kaya"* next to the
+  speaker rules (`engine._channel_line`), so the bot knows the room. The adapter
+  passes `chat_id` to the responder, and `respond` passes it on to retrieval.
+- **Chunks are built one chat at a time** with `chat_id` and `channel` metadata,
+  and `format_context` labels each retrieved conversation `[canal: X]`. Each chat
+  has its own watermark inside the scope (`IngestState.chat_watermark`), so a
+  quiet chat's warm tail neither holds back nor re-chunks a busy one. This also
+  fixed a loss on the old path: a pass where **every** new message was still
+  settling flushed nothing, `consumed_through` was 0, and the watermark jumped
+  past them, so they were never chunked.
+- **Same-channel boost**: `rag.same_channel_top_k` (2) chunks from the chat being
+  asked are put in front of the semantic hits, under the same relevance floor and
+  scope check. The others stay, so a trip question asked in general still finds
+  the trip channel.
+- **Migration**: `whatsapp.ingest.rechunk_since` deletes the live chunks ending
+  on or after that date and rewinds the scope, once per value (recorded in
+  `ingest_state.json`), inside the server process, since ChromaDB must not be
+  written by two processes. Chunks from before the Community carry no `chat_id`
+  and are simply never boosted.
+
 ### GPU topology (2× RTX 3090, no NVLink)
 
 **The whole bot runs on ONE card (since 2026-09-04).** Prod is `NVIDIA_VISIBLE_DEVICES=1` +

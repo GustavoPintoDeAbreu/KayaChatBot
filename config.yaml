@@ -740,6 +740,10 @@ whatsapp:
   ingest_state_file: "data/ingest_state.json"
   ingest:
     on_boot: true          # catch up on whatever was missed while down
+    # Live chunks ending on or after this date are rebuilt once, one chat at a
+    # time with their channel (src/data/ingest.py rechunk_since): before
+    # 2026-10-10 the Community's sub-groups were interleaved in one stream.
+    rechunk_since: "2026-10-01"
     # 15, not 120. At two hours there was a blind spot the size of the gap: a
     # message from ten minutes ago had already scrolled past the verbatim window
     # and was not yet embedded, so it existed nowhere the model could reach.
@@ -890,6 +894,9 @@ rag:
   # relevant chunks usually score > 0.4. Raise to drop more off-topic context;
   # set 0.0 to disable filtering. Tune against the benchmark.
   min_similarity: 0.25
+  # Chunks from the sub-group being asked, put in front of the other hits
+  # (retriever._prepend_same_channel). 0 turns it off.
+  same_channel_top_k: 2
 
   # Knowledge approach for benchmarking
   # Options:

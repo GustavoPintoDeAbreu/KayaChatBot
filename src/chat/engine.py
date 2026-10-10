@@ -206,6 +206,24 @@ def _link_block(link_context: str) -> str:
             + link_context.strip())
 
 
+def _channel_line(config: Dict[str, Any], chat_id: Optional[str]) -> str:
+    """Which sub-group of the Community this turn is in, for the system prompt.
+
+    A shared group only: a DM or a private group has no channel to name. Any
+    failure is no line, which is the old behaviour.
+    """
+    if not chat_id or not chat_id.endswith("@g.us"):
+        return ""
+    try:
+        from src.chat import channels
+
+        line = channels.prompt_line(channels.from_config(config).label(chat_id))
+    except Exception as exc:  # noqa: BLE001 — a channel name is never worth a reply
+        print(f"⚠️  could not read the channel name: {exc}")
+        return ""
+    return f"\n\n{line}" if line else ""
+
+
 def build_system_prompt(
     config: Dict[str, Any],
     config_path: str,
@@ -363,6 +381,7 @@ class KayaEngine:
         collect: Optional[Dict[str, Any]] = None,
         summary: str = "",
         retrieval_query: str = "",
+        chat_id: Optional[str] = None,
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -394,6 +413,7 @@ class KayaEngine:
                     exclude_from=exclude_from,
                     include_documents=include_documents,
                     collect=collect,
+                    chat_id=chat_id,
                 )
             except Exception as exc:  # noqa: BLE001 — never let RAG failure drop a reply
                 print(f"⚠️  RAG retrieval failed: {exc}")
@@ -470,6 +490,7 @@ class KayaEngine:
         exclude_from: Optional[str] = None,
         summary: str = "",
         link_context: str = "",
+        chat_id: Optional[str] = None,
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -613,6 +634,7 @@ class KayaEngine:
             # is writing are filled in here — the detailed prompt is built once
             # at import and shared by every chat, so it cannot carry a speaker.
             system_prompt = apply_speaker_rules(self.config, system_prompt, speaker)
+            system_prompt += _channel_line(self.config, chat_id)
 
             # 4. Mode picks retrieval: off for banter, reduced for mixed.
             retrieved: Dict[str, Any] = {}
@@ -638,6 +660,7 @@ class KayaEngine:
                 # into an answer about the world, and the summary is the group.
                 summary="" if route.mode in (router.BANTER, router.GENERAL) else summary,
                 retrieval_query=route.query,
+                chat_id=chat_id,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.

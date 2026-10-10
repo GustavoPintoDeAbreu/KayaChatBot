@@ -543,6 +543,72 @@ class ConversationRetriever:
         # "what did we do yesterday" with the first ten minutes of it.
         return merged[:max(top_k, len(dated))]
 
+    def _prepend_same_channel(self, chunks: List[Dict[str, Any]], chat_id: Optional[str],
+                              query_embedding: Any, scope: Optional[str],
+                              exclude_from: Optional[str]) -> List[Dict[str, Any]]:
+        """Put the best matches from the channel being asked in front.
+
+        Since 2026-09-29 the group is a Community, and its sub-groups share one
+        memory. "o que decidimos?" asked in the trip channel is about the trip,
+        but the general group has six years of chunks to the trip channel's
+        handful, so the trip's own lines can lose on similarity alone. The
+        ``rag.same_channel_top_k`` best chunks of this chat are fetched with a
+        ``chat_id`` filter, and kept only above the same relevance floor. The
+        other hits stay behind them, so a question about the trip asked in
+        general still finds the trip channel. Only chunks ingested since the
+        Community carry ``chat_id``; older ones simply never match the filter.
+        Any failure returns the chunks unchanged.
+        """
+        extra = int(self.rag_config.get('same_channel_top_k', 2) or 0)
+        if not chat_id or not chat_id.endswith('@g.us') or extra <= 0 \
+                or not self.collection or query_embedding is None:
+            return chunks
+        where: Dict[str, Any] = {"chat_id": chat_id}
+        if scope:
+            where = {"$and": [scope_filter(scope), where]}
+        try:
+            available = self.collection.count()
+            if not available:
+                return chunks
+            results = self.collection.query(
+                query_embeddings=[query_embedding], n_results=min(extra, available),
+                where=where, include=['documents', 'metadatas', 'distances'])
+        except Exception as exc:  # noqa: BLE001 — never lose an answer to this
+            print(f"⚠️  same-channel fetch failed ({exc}); using the other results only")
+            return chunks
+        min_similarity = self.rag_config.get('min_similarity', 0.0)
+        seen = {chunk['text'] for chunk in chunks}
+        found = []
+        for doc, metadata, distance in zip(results['documents'][0], results['metadatas'][0],
+                                           results['distances'][0]):
+            if not doc or doc in seen or 1 - distance < min_similarity:
+                continue
+            if scope and not is_readable(metadata.get('scope'), scope):
+                continue
+            if exclude_from:
+                chunk_end = parse_iso(metadata.get('timestamp_end'))
+                if chunk_end and chunk_end >= exclude_from:
+                    continue
+            found.append({
+                'rank': 0, 'text': doc, 'metadata': metadata,
+                'similarity_score': 1 - distance, 'distance': distance,
+                'participants': (metadata.get('participants', '').split(',')
+                                 if metadata.get('participants') else []),
+                'mentioned': (metadata.get('mentioned', '').split(',')
+                              if metadata.get('mentioned') else []),
+                'message_count': metadata.get('message_count', 0),
+                'token_count': metadata.get('token_count', 0),
+                'timestamp_start': metadata.get('timestamp_start'),
+                'timestamp_end': metadata.get('timestamp_end'),
+            })
+            seen.add(doc)
+        if not found:
+            return chunks
+        merged = found + chunks
+        for index, chunk in enumerate(merged, start=1):
+            chunk['rank'] = index
+        return merged
+
     def format_context(self, retrieved_chunks: List[Dict[str, Any]],
                        show_dates: bool = False) -> str:
         """Format retrieved conversation chunks into context string for the model.
@@ -567,7 +633,11 @@ class ConversationRetriever:
                 except (ValueError, TypeError):
                     pass
 
-            context_parts.append(f"\n--- Conversa {i}{timestamp_info} ---")
+            # Which sub-group it was said in, when the chunk knows (ingested
+            # since the Community, 2026-09-29).
+            channel = str((chunk.get('metadata') or {}).get('channel') or '')
+            channel_info = f" [canal: {channel}]" if channel else ""
+            context_parts.append(f"\n--- Conversa {i}{timestamp_info}{channel_info} ---")
             context_parts.append(chunk['text'])
 
         context_parts.append("\n=== Fim das conversas ===")
@@ -793,6 +863,7 @@ class ConversationRetriever:
         exclude_from: Optional[str] = None,
         include_documents: bool = True,
         collect: Optional[Dict[str, Any]] = None,
+        chat_id: Optional[str] = None,
     ) -> str:
         """
         Retrieve context from all active sources and return a combined formatted context block.
@@ -833,6 +904,8 @@ class ConversationRetriever:
             scope=scope,
             exclude_from=exclude_from,
         )
+        conv_chunks = self._prepend_same_channel(
+            conv_chunks, chat_id, query_embedding, scope, exclude_from)
 
         # Retrieve from knowledge base if approach calls for it
         kb_chunks = []
