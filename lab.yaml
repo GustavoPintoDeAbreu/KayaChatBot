@@ -1,0 +1,37 @@
+# What this repo is to the rest of the lab. Read by labwatch's catalog (agents
+# query it through the lab MCP). This repo is PUBLIC: never put addresses,
+# ports, hosts, chat ids, member data or secrets here; refer to services by id.
+# Only `public` may be repeated by a chatbot.
+product: kaya
+name: Kaya
+summary: "WhatsApp and web chatbot for a friends' group: local Gemma model with RAG over the group's history, voice in and out, images, documents, web search for world questions. The brain runs on the PC; the WhatsApp front door on the Pi."
+repo: GustavoPintoDeAbreu/KayaChatBot
+runs:
+  - {host: pc, kind: container, name: kaya-prod, deploy: ".github/workflows/deploy-prod.yml (reviewer-gated) -> scripts/deploy_prod.sh"}
+  - {host: pi, kind: container, name: kaya-gateway, deploy: scripts/deploy_pi.sh}
+  - {host: pi, kind: container, name: kaya-waha, deploy: scripts/deploy_pi.sh}
+  - {host: pi, kind: container, name: kaya-cloudflared, deploy: scripts/deploy_pi.sh}
+provides:
+  - {id: kaya.waha.client, kind: lib, path: src/chat/waha_client.py, summary: "Full WAHA client: sendText, voice, reactions, media; MockWahaClient twin for tests"}
+  - {id: kaya.inference.backend, kind: lib, path: src/chat/inference_backend.py, summary: "Generation through the broker (Ollama / llama.cpp) or in-process HF, selected by KAYA_INFERENCE_BACKEND"}
+  - {id: kaya.stt, kind: lib, path: src/chat/stt.py, summary: "Speech-to-text (Whisper) for voice notes"}
+  - {id: kaya.tts, kind: lib, path: src/chat/tts.py, summary: "Text-to-speech replies as WhatsApp voice notes"}
+  - {id: kaya.vision, kind: lib, path: src/chat/vision.py, summary: "Describe images sent in chat with the local vision model"}
+  - {id: kaya.web_search, kind: lib, path: src/chat/web_search.py, summary: "Web-search answers via xAI Grok for questions that name no group member (privacy guard)"}
+  - {id: kaya.retriever, kind: lib, path: src/chat/retriever.py, summary: "RAG retriever over the group's history (vector store + embedder)"}
+  - {id: kaya.router, kind: lib, path: src/chat/router.py, summary: "Intent routing (banter/mixed/general/factual/command) and standalone-question rewrite"}
+  - {id: kaya.gateway, kind: service, path: src/gateway, summary: "The Pi front door: event journal, forwarder to the PC, buffering while the PC is off, offline auto-reply"}
+  - {id: kaya.config_loader, kind: lib, path: src/config_loader.py, summary: "YAML config loader with env overrides"}
+  - {id: kaya.power, kind: service, path: deploy/power, summary: "The PC's 07:00 wake (alarm backup), the poweroff announcement to the Pi, and the boot check; off by hand, no automatic shutdown"}
+  - {id: kaya.sim, kind: script, path: scripts/run_conversation_sim.py, summary: "Multi-person conversation simulator over the real webhook path with mock outbound"}
+uses: [svc.llm-broker, svc.kaya-waha, svc.kaya-gateway, svc.cloudflared, svc.pc-wake, host.pc, host.pi]
+docs:
+  - {topic: "agent guide (architecture, invariants, conventions)", path: CLAUDE.md}
+  - {topic: "deployment (prod, dev, Pi)", path: DEPLOYMENT.md}
+  - {topic: "WhatsApp bridge setup", path: WHATSAPP.md}
+public:
+  built_with: "Kaya is a Gemma 4 model running on a graphics card in Gustavo's PC, which can look things up in the group's history. A Raspberry Pi 5 keeps the WhatsApp connection alive around the clock and holds messages while the PC sleeps; Kaya also understands voice notes, images and documents, answers with voice when asked, and searches the web for questions about the world."
+  stats:
+    - {key: kaya.in.messages, label: "messages Kaya read this week"}
+    - {key: kaya.replies, label: "replies Kaya sent this week"}
+    - {key: kaya.replies.voice, label: "voice replies this week"}

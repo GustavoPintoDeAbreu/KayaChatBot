@@ -89,9 +89,10 @@ def test_an_animated_sticker_is_flattened_to_one_frame():
         assert getattr(flat, "is_animated", False) is False
 
 
-def test_a_static_sticker_passes_through_untouched():
-    original = _webp(1)
-    assert flatten_animation(original, "image/webp") == (original, "image/webp")
+def test_a_static_sticker_is_re_encoded_as_png():
+    """Ollama answers some static WebP with a 500; the same file as PNG is read."""
+    data, mimetype = flatten_animation(_webp(1), "image/webp")
+    assert mimetype == "image/png" and data.startswith(b"\x89PNG")
 
 
 def test_a_photo_is_never_re_encoded():

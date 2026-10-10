@@ -159,7 +159,51 @@ def build_mode_system_prompt(config: Dict[str, Any], mode_prompt: str) -> str:
         preamble = config.get("chat", {}).get("uncensored_system_prompt", "")
         if preamble:
             prompt = preamble + "\n\n" + prompt
-    return prompt + f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
+    return prompt + _today(config)
+
+
+def _birthday_dates(config: Dict[str, Any], config_dir: Optional[Path] = None) -> Dict[str, str]:
+    """Confirmed birthdays, ``{member: MM-DD}``. ``{}`` when off or unreadable."""
+    from src.chat import birthdays
+
+    if not birthdays.settings(config)["enabled"]:
+        return {}
+    try:
+        return {member: month_day for member, (month_day, _)
+                in birthdays.load_dates(config, config_dir).items()}
+    except Exception as exc:  # noqa: BLE001 — a birthday is never worth a prompt
+        print(f"⚠️  could not read birthdays: {exc}")
+        return {}
+
+
+def _today(config: Dict[str, Any], config_dir: Optional[Path] = None) -> str:
+    """The date line, plus whose birthday it is.
+
+    Without the second part the bot met a morning of "parabéns Fred!!" with no
+    idea why. Every prompt carries it, banter included: it is not a profile, and
+    a reply to "já deste os parabéns?" needs it more than anything else.
+    """
+    from datetime import date
+
+    from src.chat import birthdays
+
+    line = f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
+    dates = _birthday_dates(config, config_dir)
+    today = birthdays.today_line({m: (d, "") for m, d in dates.items()}, date.today())
+    return f"{line} {today}" if today else line
+
+
+def _link_block(link_context: str) -> str:
+    """What the links in this turn say, labelled so it reads as the shared page.
+
+    Given to every mode, banter included: it is not group memory, it is the
+    thing the message is about, and "o que achas disto?" with no article is the
+    question the bot used to answer blind.
+    """
+    if not link_context.strip():
+        return ""
+    return ("Conteúdo dos links partilhados (texto da página, não é do grupo):\n"
+            + link_context.strip())
 
 
 def build_system_prompt(
@@ -198,9 +242,10 @@ def build_system_prompt(
                 max_facts = int((config.get("rag", {}) or {}).get("max_facts_per_member", 0))
             system_prompt += build_member_prompt_suffix(
                 members_data, shuffle=True,
-                max_facts=max_facts, sample_facts=sample_facts)
+                max_facts=max_facts, sample_facts=sample_facts,
+                birthdays=_birthday_dates(config, Path(config_path).parent))
 
-    system_prompt += f"\n\nHoje é {datetime.now().strftime('%Y-%m-%d')}."
+    system_prompt += _today(config, Path(config_path).parent)
     return system_prompt
 
 
@@ -424,6 +469,7 @@ class KayaEngine:
         scope: Optional[str] = None,
         exclude_from: Optional[str] = None,
         summary: str = "",
+        link_context: str = "",
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -584,7 +630,8 @@ class KayaEngine:
                 scope=scope,
                 exclude_from=exclude_from,
                 extra_context="\n\n".join(
-                    part for part in (count_context, web_context) if part),
+                    part for part in (count_context, web_context,
+                                      _link_block(link_context)) if part),
                 # Banter gets no summary: it retrieves nothing by design, and a
                 # paragraph of background would undo exactly what that mode is for.
                 # General neither: it is the mode that must not bring the group
