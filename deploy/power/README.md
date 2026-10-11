@@ -161,6 +161,16 @@ hostname's "MS-7C91" is not the board). Under **Settings → Platform Power**:
 The RTC alarm does not survive removing AC power (manual), so it is only the
 backup. The Pi's magic packet is the primary wake.
 
+**Resume by Alarm woke the PC at 01:00.** From 2026-09-29 to 2026-10-10 this
+guide said "Enabled, any time". Every night the PC was off it then booted at
+01:00 WEST, which is 00:00 UTC (the RTC runs on UTC), the BIOS's default alarm
+time. The shutdown script had set the alarm for 07:00 each time
+(`journalctl -u kaya-going-down`), so the board used its own time, not the OS
+one. The early boot also exhausted the locked GNOME keyring before anyone logged
+in. The setting was fixed in the BIOS on 2026-10-11. labwatch now alerts on
+WhatsApp when the PC boots before 06:50 without Wake-on-LAN or the RTC
+(`health.pc_wake_by`).
+
 **The BIOS alarm time is what fires, not the OS one.** With Resume by Alarm left
 at 0:00:00, the PC shut down at 23:32 on 2026-09-28 and powered itself on at
 01:00 (00:00 UTC). `/proc/driver/rtc` read `alrm_time 00:00:00` although
@@ -182,7 +192,7 @@ sudo deploy/power/install.sh --uninstall
 
 Test once, with nobody depending on the bot:
 
-- **RTC:** `sudo rtcwake -m off -s 300` should power off and come back in 5 minutes.
+- **RTC (best effort):** `sudo rtcwake -m off -s 300` should power off and come back in 5 minutes.
 - **Wake-on-LAN:** `sudo systemctl poweroff`, then `pi5 wake-pc`.
 
 ## Tested 2026-09-25
