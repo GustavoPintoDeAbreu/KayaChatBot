@@ -266,17 +266,19 @@ class TestFinalize:
 
     def test_dropped_are_deduped(self):
         draft = polls.finalize("Q", ["a"], [("x", "r1"), ("x", "r2")],
-                               polls._fold("a"), self.SETTINGS)
+                               polls._fold("a x"), self.SETTINGS)
         assert draft.dropped == [("x", "r1")]
 
     def test_an_invented_dropped_name_is_not_listed(self):
         # A dropped option the model made up is not something the group said, so
         # it must not appear in the "Deixei de fora" line. A said one is kept.
+        # The invented name is counted as invented, like an ungrounded option.
         draft = polls.finalize(
             "Q", ["o botequim"],
             [("o castelo inventado", "rejeitado"), ("o sushi bar", "fechado")],
             polls._fold("botequim sushi bar"), self.SETTINGS)
         assert draft.dropped == [("o sushi bar", "fechado")]
+        assert draft.invented == ["o castelo inventado"]
 
     def test_empty_question_gets_the_default(self):
         draft = polls.finalize("", ["a"], [], polls._fold("a"), self.SETTINGS)
@@ -351,9 +353,14 @@ class TestDraftPoll:
         assert "O Castelo de Sintra" in draft.invented
 
     def test_telemetry_shape(self):
+        # Both dropped names are grounded in the corpus, so both survive the
+        # grounding filter and show up in the telemetry.
+        records = self.RECORDS + [
+            _record(3, "a Casa de Pastéis está fechada", sender="Pedro"),
+        ]
         fake = FakeGenerate([FINAL])
         draft = polls.draft_poll(fake, topic="jantar", request="x",
-                                 records=self.RECORDS, settings=polls.settings(_config()))
+                                 records=records, settings=polls.settings(_config()))
         tel = draft.telemetry()
         assert tel["poll_status"] == "ok"
         assert tel["poll_options"] == 2

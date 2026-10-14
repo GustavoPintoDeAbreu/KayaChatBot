@@ -330,8 +330,10 @@ def finalize(question: str, options: Sequence[str], dropped: Sequence[Tuple[str,
         if fold in dropped_seen or fold in kept_folds:
             continue
         # A dropped name the model invented is not something the group said, so
-        # it must not surface in the "Deixei de fora" line either.
+        # it must not surface in the "Deixei de fora" line either. It is counted
+        # as invented, like an ungrounded option, so the invention rate covers it.
         if not is_grounded(name, corpus):
+            invented.append(name)
             continue
         dropped_seen.add(fold)
         final_dropped.append((name, reason))
