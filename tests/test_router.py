@@ -425,3 +425,44 @@ def test_the_reviewer_flags_a_put_down_nobody_asked_for():
     from src.chat.reply_review import REVIEW_SYSTEM
 
     assert "boca que ninguém pediu" in REVIEW_SYSTEM
+
+
+# ── CMD_POLL: turning what the chat discussed into a WhatsApp poll ───────────
+# A poll is built from the chat's own log, so the label only matters for
+# requests to MAKE one: talking about a poll, voting, or asking which option is
+# best stays in the ordinary modes.
+
+def test_a_poll_request_routes_to_poll():
+    route = router.classify(StubBackend("CMD_POLL"), _config(),
+                            "faz uma sondagem com os sítios que falámos")
+    assert route.command == router.CMD_POLL
+    assert route.fallback is False
+
+
+def test_poll_is_not_confused_with_the_other_commands():
+    for label, expected in (("CMD_POLL", router.CMD_POLL),
+                            ("CMD_COUNT", router.CMD_COUNT),
+                            ("CMD_IMAGE", router.CMD_IMAGE),
+                            ("CMD_CLEAR", router.CMD_CLEAR)):
+        assert router.classify(StubBackend(label), _config(), "x").command == expected
+
+
+def test_a_poll_request_keeps_a_standalone_query():
+    """The Q: line names what the poll is about; the engine reads the log for it."""
+    route = router.classify(
+        StubBackend("CMD_POLL\nQ: sondagem com os restaurantes propostos para o almoço de Natal"),
+        _config(), "faz uma poll com isso")
+    assert route.command == router.CMD_POLL
+    assert route.query == "sondagem com os restaurantes propostos para o almoço de Natal"
+
+
+def test_the_prompt_describes_polling():
+    backend = StubBackend("CMD_POLL")
+    router.classify(backend, _config(), "faz uma sondagem")
+    system = backend.calls[0]["messages"][0]["content"]
+    assert "CMD_POLL" in system
+    # The line that matters: asking for an opinion is not a request to make one.
+    assert '"qual é o melhor restaurante para o almoço?" -> GENERAL' in system
+    assert "The bot never suggests or creates a poll that was not asked for." in system
+    # And a poll is the one pure command that still gets a Q: line.
+    assert "pure commands other than CMD_POLL" in system

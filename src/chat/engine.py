@@ -92,12 +92,17 @@ class Reply:
     recorded latency and delivery medium but never the route, so a bad answer
     could not be attributed to a bad classification rather than a bad generation.
     Kept as a dict because it is written straight into the log's ``**extra``.
+
+    ``poll`` carries a ``polls.PollDraft`` on a CMD_POLL turn: the options the
+    model found in the chat, what it left out, and how the send went. The text
+    of those replies is a short line, never the poll itself.
     """
 
     text: str
     route: Optional["router.Route"] = None
     citation: str = ""
     telemetry: Dict[str, Any] = field(default_factory=dict)
+    poll: Optional[Any] = None
 
     @property
     def text_with_citation(self) -> str:
@@ -532,6 +537,12 @@ class KayaEngine:
             subject_text = f"{message} {route.query}".strip()
             mcfg = router.mode_config(self.config, route.mode)
 
+            # A poll is built from the chat's own log, not from retrieval: the
+            # options have to be what was actually said, so the whole thread is
+            # read and the model works out which of them are still in play.
+            if route.command == router.CMD_POLL:
+                return self._poll_reply(route, message, subject_text, scope, chat_id)
+
             # A pure command ("responde só em áudio") is executed by the caller,
             # not generated — return immediately without spending a generation.
             # A one-off "explain this in audio" still needs a real answer — only
@@ -905,6 +916,46 @@ class KayaEngine:
             return ("Não foi possível contar isso agora. Diz que não conseguiste "
                     "contar, em vez de dares um número.")
         return tally.format_table(term, rows, total)
+
+    def _poll_reply(self, route: "router.Route", message: str, subject_text: str,
+                    scope: Optional[str], chat_id: Optional[str]) -> "Reply":
+        """CMD_POLL: read this chat's log and work out the poll options.
+
+        No retrieval, no member profiles, no web search — the only source of an
+        option is the conversation itself, and the draft's ``invented`` list is
+        how a model that broke that rule shows up in the telemetry.
+        """
+        from src.chat import polls
+
+        pcfg = polls.settings(self.config)
+        if not chat_id:
+            draft = polls.PollDraft(status=polls.STATUS_NO_CHAT)
+            text = polls.NO_CHAT_LINE
+        elif not pcfg["enabled"]:
+            draft = polls.PollDraft(status=polls.STATUS_DISABLED)
+            text = ""
+        else:
+            since_ts = (int(datetime.now().timestamp())
+                        - pcfg["lookback_days"] * 86400) if pcfg["lookback_days"] > 0 else 0
+            records = polls.load_chat_messages(
+                polls.log_dir(self.config), scope or "shared", chat_id,
+                since_ts, pcfg["max_messages"])
+            draft = polls.draft_poll(
+                lambda messages, max_new_tokens: self.backend.generate(
+                    messages, max_new_tokens=max_new_tokens,
+                    sampling={**self._inf, "temperature": pcfg["temperature"]}),
+                topic=route.query or message,
+                request=message,
+                records=records,
+                settings=pcfg,
+            )
+            text = ""
+            print(f"📊 poll: {draft.messages_read} message(s), {draft.chunks} chunk(s), "
+                  f"{len(draft.options)} option(s), {len(draft.dropped)} left out")
+
+        telemetry = self._telemetry(route, "", subject_text, "")
+        telemetry.update(draft.telemetry())
+        return Reply(text=text, route=route, poll=draft, telemetry=telemetry)
 
     def _plan(self, system_prompt: str, user_turn: str) -> str:
         """One private pass of notes before the answer. "" on any failure.

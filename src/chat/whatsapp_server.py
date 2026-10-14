@@ -230,7 +230,8 @@ def _responder(message: str, speaker: str, recent_lines, scope=None,
     ``scope`` limits which chat's long-term memory may be retrieved, and
     ``exclude_from`` stops retrieval re-injecting the recent turns the prompt
     already carries verbatim. ``summary`` is this chat's rolling summary of the
-    turns that have already scrolled out of that window.
+    turns that have already scrolled out of that window. ``chat_id`` is the chat
+    to read when building a poll: community sub-groups share one log file.
     """
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,

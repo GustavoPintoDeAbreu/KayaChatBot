@@ -582,6 +582,26 @@ chat:
         - "Malta, hoje faz anos o {tag} e isto está muito calado 👀 Parabéns!"
         - "Lembrete amigo: o {tag} faz anos hoje 🎂 Toca a dar os parabéns!"
 
+  # ── Polls (src/chat/polls.py) ───────────────────────────────────────────────
+  # Off until scripts/preview_poll.py looks right on a real chat. When asked to
+  # make a poll, the bot reads this chat's own log (lookback_days back) and the
+  # local model works out which options are still in play; the poll itself is a
+  # native WhatsApp message, and every sent one is recorded in `store`.
+  poll:
+    enabled: false
+    store: data/polls.jsonl
+    lookback_days: 90
+    max_messages: 2000
+    line_max_words: 80
+    chunk_words: 5000
+    max_chunks: 6
+    max_options: 12
+    max_option_chars: 100
+    max_question_chars: 200
+    max_dropped_listed: 5
+    max_new_tokens: 400
+    temperature: 0.2
+
   # ── Rolling per-chat summary (src/chat/summary.py) ──────────────────────────
   # 60 lines of verbatim history covers an evening, not a month. What scrolls
   # past it is condensed here so the THREAD of a long exchange survives — who

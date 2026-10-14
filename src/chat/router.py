@@ -61,6 +61,7 @@ CMD_TEXT = "text"
 CMD_CLEAR = "clear"
 CMD_IMAGE = "image"
 CMD_COUNT = "count"
+CMD_POLL = "poll"
 
 # The router answers with one of these bare tokens.
 _LABELS = {
@@ -76,6 +77,7 @@ _LABELS = {
     "CMD_CLEAR": (None, CMD_CLEAR),
     "CMD_IMAGE": (None, CMD_IMAGE),
     "CMD_COUNT": (None, CMD_COUNT),
+    "CMD_POLL": (None, CMD_POLL),
 }
 
 _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens on the first line:
@@ -92,6 +94,7 @@ CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing 
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
 CMD_COUNT — asking HOW MANY TIMES a word or expression was used in the chat, or who used it most. It needs every message counted, not a few remembered. Examples: "quantas vezes é que o Rafa disse isso?", "quem é que diz mais palavrões?", "conta quantas vezes dissemos X", "dá-me a lista de todos e quantas vezes cada um disse Y", "how many times did we say that?".
+CMD_POLL — asking the bot to CREATE a WhatsApp poll (sondagem, votação) from what the chat has been discussing. Only an explicit request to make one. Examples: "faz uma sondagem com os restaurantes", "cria uma votação com as opções que demos", "mete isso numa poll", "faz um poll para escolhermos o dia", "make a poll with the options".
 
 FACTUAL and GENERAL differ only in whether the group is the subject. If answering needs the group's own memory it is FACTUAL; otherwise it is GENERAL, even when a group member is mentioned in passing:
   "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
@@ -164,6 +167,16 @@ CMD_COUNT is only for questions that need TALLYING every message. A question abo
   "quantas vezes é que o Gil falou de correr?" -> CMD_COUNT (every message has to be counted)
   "o Rafa diz muito isso" -> MIXED (an observation, not a request for a number)
 
+CMD_POLL is only for a request to MAKE a poll. Talking about a poll, voting, or asking which option is best is not:
+  "faz uma sondagem com os sítios que falámos" -> CMD_POLL
+  "a sondagem do Pedro estava mal feita" -> BANTER (an opinion about a poll)
+  "votei no Chico" -> BANTER
+  "quem é que votou no Chico?" -> FACTUAL (a question, not a request to make one)
+  "qual é o melhor restaurante para o almoço?" -> GENERAL (asking for an opinion, not a poll)
+The bot never suggests or creates a poll that was not asked for.
+For CMD_POLL always write the Q: line, naming what the poll is about:
+  "faz uma poll com isso" -> Q: sondagem com os restaurantes propostos para o almoço de Natal
+
 A message is often a CONTINUATION of the recent conversation rather than a new
 subject: a pronoun with no antecedent, an ellipsis, a challenge, a bare "e o X?".
 Classify those by what the recent conversation is ABOUT, not by the isolated
@@ -202,7 +215,7 @@ group's memory, so it must stand on its own without the conversation:
   "quem é o Peter?" -> Q: quem é o Peter?
   "do que se trata a minha start up?" -> Q: do que se trata a startup do Pedro?
 Omit the Q: line entirely when there is nothing to look up — for BANTER and for
-pure commands. Do not invent a question that was not asked:
+pure commands other than CMD_POLL. Do not invent a question that was not asked:
   "Conheço uns quantos ya" -> no Q: line (nobody asked anything)
   "Ahahhha" -> no Q: line
 

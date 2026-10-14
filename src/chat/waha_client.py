@@ -8,8 +8,8 @@ and sends replies back through WAHA's ``/api/sendText`` endpoint.
 ``WahaClient`` talks to a real WAHA instance. ``MockWahaClient`` records what
 *would* be sent instead — this is how the whole flow is developed and tested
 before a real phone number / WAHA session exists. Both expose the same
-``send_text`` / ``send_seen`` / ``start_typing`` surface so the adapter is
-agnostic to which one it holds.
+``send_text`` / ``send_poll`` / ``send_seen`` / ``start_typing`` surface so the
+adapter is agnostic to which one it holds.
 """
 
 import logging
@@ -61,6 +61,25 @@ class WahaClient:
         if mentions:
             body["mentions"] = list(mentions)
         resp = self._client.post("/api/sendText", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
+    def send_poll(self, chat_id: str, name: str, options: List[str],
+                  multiple_answers: bool = True) -> Dict[str, Any]:
+        """Send a native multiple-choice poll (WAHA ``/api/sendPoll``).
+
+        There is no ``reply_to`` on this endpoint: the poll is its own message.
+        """
+        body: Dict[str, Any] = {
+            "session": self.session,
+            "chatId": chat_id,
+            "poll": {
+                "name": name,
+                "options": list(options),
+                "multipleAnswers": bool(multiple_answers),
+            },
+        }
+        resp = self._client.post("/api/sendPoll", json=body)
         resp.raise_for_status()
         return resp.json()
 
@@ -142,6 +161,19 @@ class MockWahaClient:
         if self.echo:
             print(f"\n[→ WhatsApp {chat_id}] (voice note, {len(ogg_bytes or b'')} bytes)\n")
         return {"id": f"mock-voice-{self._counter}"}
+
+    def send_poll(self, chat_id: str, name: str, options: List[str],
+                  multiple_answers: bool = True) -> Dict[str, Any]:
+        """Capture the poll instead of sending it."""
+        self._counter += 1
+        message_id = f"mock-poll-{self._counter}"
+        record = {"chat_id": chat_id,
+                  "poll": {"name": name, "options": list(options),
+                           "multipleAnswers": multiple_answers}}
+        self.sent.append(record)
+        if self.echo:
+            print(f"\n[→ WhatsApp {chat_id}] (poll) {name}: {options}\n")
+        return {"mocked": True, "id": message_id, **record}
 
     def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None,
                   mentions: Optional[List[str]] = None) -> Dict[str, Any]:
