@@ -495,3 +495,28 @@ def test_the_prompt_describes_poll_status():
     assert "CMD_POLL_STATUS" in system
     # The line that keeps a match question away from the bot's poll.
     assert '"quem está a ganhar o jogo?" -> GENERAL' in system
+
+
+# ── CMD_RECAP: summing up what the chat said about one subject ───────────────
+def test_a_recap_request_routes_to_recap():
+    route = router.classify(StubBackend("CMD_RECAP\nQ: almoço de natal"), _config(),
+                            "o que é que decidimos?")
+    assert route.command == router.CMD_RECAP
+    assert route.mode == router.FACTUAL
+    assert route.query == "almoço de natal"
+
+
+def test_recap_is_not_confused_with_the_other_commands():
+    for label, expected in (("CMD_RECAP", router.CMD_RECAP),
+                            ("CMD_COUNT", router.CMD_COUNT),
+                            ("CMD_POLL", router.CMD_POLL),
+                            ("CMD_POLL_STATUS", router.CMD_POLL_STATUS),
+                            ("CMD_CLEAR", router.CMD_CLEAR)):
+        assert router.classify(StubBackend(label), _config(), "x").command == expected
+
+
+def test_the_prompt_describes_recaps():
+    backend = StubBackend("CMD_RECAP")
+    router.classify(backend, _config(), "resume isto")
+    system = backend.calls[0]["messages"][0]["content"]
+    assert "CMD_RECAP" in system and "names only the SUBJECT" in system

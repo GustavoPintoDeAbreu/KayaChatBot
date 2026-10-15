@@ -482,6 +482,26 @@ chat:
     max_new_tokens: 200
     temperature: 0.4         # notes are for thinking, not for voice
 
+  # ── Recaps of one topic (src/chat/recap.py) ─────────────────────────────────
+  # "o que é que decidimos sobre o almoço de natal?" reads every logged message
+  # on that topic this chat may see (keyword seeds, their neighbours in the same
+  # chat, and the time windows of the semantic hits), not the top-k chunks
+  # nearest the question. A keyword in more than max(common_floor,
+  # common_ratio × rows) messages only seeds alongside a second keyword, so
+  # "almoço" alone does not pull in every lunch. Over max_chars the oldest
+  # non-seed lines go first. Bot replies and the rolling summary are never used.
+  recap:
+    enabled: true
+    max_new_tokens: 450
+    semantic_top_k: 8
+    neighbour_rows: 3
+    neighbour_gap_minutes: 30
+    common_ratio: 0.02
+    common_floor: 25
+    max_chars: 40000        # ~12k tokens by the repo's words/0.6 estimate; num_ctx is 32768
+    max_archive_chunks: 3
+    max_keywords: 6
+
   # ── Audio (Phase 4) ─────────────────────────────────────────────────────────
   # Capability gates. While these are false the bot must NOT promise voice
   # replies: confirming "passo a responder-te por áudio" and then answering in

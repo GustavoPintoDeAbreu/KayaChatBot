@@ -16,13 +16,13 @@ preamble) without duplicating the member-profile / date assembly.
 
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from src.chat import router, sources, variety
+from src.chat import recap, router, sources, variety
 from src.chat.inference_backend import LlamaCppBackend, OllamaBackend, ensure_model_loaded
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
@@ -532,6 +532,9 @@ class KayaEngine:
             # a follow-up that lost its thread, not a question about the world.
             # Corrected deterministically rather than by asking the model again.
             route = self._reconcile(route, message, recent_lines)
+            # Recaps switched off: the request is answered as an ordinary factual turn.
+            if route.command == router.CMD_RECAP and not recap.recap_config(self.config)["enabled"]:
+                route = replace(route, command=None)
             # Everything downstream that asks "who is this turn about" reads the
             # rewrite too, so an elliptical follow-up resolves to a person.
             subject_text = f"{message} {route.query}".strip()
@@ -551,9 +554,10 @@ class KayaEngine:
             # CMD_COUNT is a command that still needs an answer, like
             # CMD_AUDIO_ONCE: the numbers are counted here rather than
             # remembered, but a person still has to be told them in the bot's
-            # own voice.
+            # own voice. CMD_RECAP too: the thread is read here, and the model
+            # writes the summary.
             if route.command and route.command not in (router.CMD_AUDIO_ONCE,
-                                                       router.CMD_COUNT):
+                                                       router.CMD_COUNT, router.CMD_RECAP):
                 return Reply(text="", route=route,
                              telemetry=self._telemetry(route, "", subject_text, ""))
 
@@ -566,6 +570,13 @@ class KayaEngine:
             if route.command == router.CMD_COUNT:
                 count_context = self._count_context(message, scope)
                 mcfg = router.mode_config(self.config, router.FACTUAL)
+
+            # The recap block IS this turn's retrieval: a second top-k pass would
+            # bring back exactly the general chatter the topic filter removed.
+            recap_context, recap_instruction, recap_stats = "", "", {}
+            if route.command == router.CMD_RECAP:
+                recap_context, recap_instruction, recap_stats = self._recap_context(route.query, scope)
+                mcfg = {**router.mode_config(self.config, router.FACTUAL), "retrieval": False}
 
             # Off-topic / current-events questions get live facts from Grok's web
             # search. This runs AFTER routing, and only for the two informational
@@ -589,7 +600,9 @@ class KayaEngine:
             # Search fires on a small minority of messages, so the trade is cheap.
             web_context = ""
             citation = ""
-            if route.mode in (router.FACTUAL, router.GENERAL) and self.retriever:
+            # A recap topic is group data: it never goes to the web search.
+            if (route.mode in (router.FACTUAL, router.GENERAL) and self.retriever
+                    and route.command != router.CMD_RECAP):
                 from src.chat.web_search import maybe_web_search
 
                 web_result = maybe_web_search(message, self.retriever, self.config)
@@ -617,6 +630,9 @@ class KayaEngine:
                     max_new_tokens = self._inf.get(
                         "max_new_tokens_default", min(256, self._inf.get("max_new_tokens", 512))
                     )
+            if route.command == router.CMD_RECAP and not explicit_cap:
+                max_new_tokens = max(int(max_new_tokens or 0),
+                                     int(recap.recap_config(self.config)["max_new_tokens"]))
 
             # 3. Mode picks the prompt. `banter` deliberately drops the member
             #    profiles that made the model riff about a random person.
@@ -663,25 +679,31 @@ class KayaEngine:
                 scope=scope,
                 exclude_from=exclude_from,
                 extra_context="\n\n".join(
-                    part for part in (count_context, web_context,
+                    part for part in (recap_context, count_context, web_context,
                                       _link_block(link_context)) if part),
                 # Banter gets no summary: it retrieves nothing by design, and a
                 # paragraph of background would undo exactly what that mode is for.
                 # General neither: it is the mode that must not bring the group
                 # into an answer about the world, and the summary is the group.
-                summary="" if route.mode in (router.BANTER, router.GENERAL) else summary,
+                # A recap neither: the summary is model-written and can carry the
+                # bot's own claims (PR #95); a recap comes only from people's messages.
+                summary="" if (route.mode in (router.BANTER, router.GENERAL)
+                               or route.command == router.CMD_RECAP) else summary,
                 retrieval_query=route.query,
                 chat_id=chat_id,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
             brevity_hint = mcfg.get("brevity_hint") or self._inf.get("brevity_hint", "")
-            if brevity_hint and not (wants_long and route.mode in _CAN_ELABORATE):
+            if (brevity_hint and route.command != router.CMD_RECAP
+                    and not (wants_long and route.mode in _CAN_ELABORATE)):
                 user_turn += f"\n\n({brevity_hint})"
             # Unlike brevity_hint, this survives a request for detail: it says how
             # to answer, not how long to be.
             if mcfg.get("mode_hint"):
                 user_turn += f"\n\n({mcfg['mode_hint']})"
+            if recap_instruction:
+                user_turn += f"\n\n({recap_instruction})"
             if route.mode == router.ROAST:
                 user_turn += self._roast_hint(subject_text, recent_lines)
             user_turn += self._question_hint(route)
@@ -766,6 +788,8 @@ class KayaEngine:
             raw = self.backend.generate(
                 messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
+            if route.command == router.CMD_RECAP:
+                raw = recap.protect_speaker_lines(raw, speaker)
             text = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
 
             # One retry, hotter. Only one: this is inside the GPU lock, and
@@ -779,6 +803,8 @@ class KayaEngine:
                 retry = self.backend.generate(
                     messages, max_new_tokens=max_new_tokens, sampling=hotter
                 )
+                if route.command == router.CMD_RECAP:
+                    retry = recap.protect_speaker_lines(retry, speaker)
                 retry_text = clean_response(retry, user_name=speaker, bot_name="Kaya Bot")
                 # Keep the retry only if it is actually different; a second
                 # duplicate is not an improvement over the first.
@@ -820,6 +846,8 @@ class KayaEngine:
 
         telemetry = self._telemetry(route, context, subject_text, text,
                                     reasoning=reasoning)
+        if recap_stats:
+            telemetry.update(recap_stats)
         if stripped:
             telemetry["citations_stripped"] = stripped
         if route.mode == router.DEBATE:
@@ -886,6 +914,22 @@ class KayaEngine:
         except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
             print(f"⚠️  could not build the variety hint: {exc}")
             return ""
+
+    def _recap_context(self, topic: str, scope: Optional[str]) -> Tuple[str, str, Dict[str, Any]]:
+        """The on-topic transcript for a recap, and how to write it.
+
+        Returns an instruction to say so, never an improvised recap, when the log
+        cannot be read — same contract as ``_count_context``.
+        """
+        from src.chat import tally
+        try:
+            return recap.gather(self.config, topic, scope,
+                                retriever=self.retriever,
+                                resolver=tally.load_resolver(self.config))
+        except Exception as exc:  # noqa: BLE001 — a failed recap must not drop the reply
+            print(f"⚠️  recap failed: {exc}")
+            return ("", recap.UNREADABLE_INSTRUCTION,
+                    {"recap_topic": topic, "recap_error": type(exc).__name__})
 
     def _count_context(self, message: str, scope: Optional[str]) -> str:
         """The counted table for a "how many times" question. "" if unanswerable.

@@ -142,6 +142,7 @@ kaya_chatbot_env/bin/python scripts/eval_links.py --run|--serve|--score     # th
 kaya_chatbot_env/bin/python scripts/eval_stickers.py --run|--serve|--score  # the gate for chat.stickers (≥80% right, no names)
 kaya_chatbot_env/bin/python scripts/mine_birthdays.py [--accept Pedro=07-15 | --set X=MM-DD | --show]
 kaya_chatbot_env/bin/python scripts/preview_poll.py --list-chats | --chat JID --topic "…"   # the gate for chat.poll (never sends)
+kaya_chatbot_env/bin/python scripts/recap_preview.py --topic "almoço de natal" [--scope shared] [--semantic]   # what a recap would read, no LLM
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
@@ -644,6 +645,20 @@ standing jobs the bot has no state for ("Consigo manter o contador atualizado",
 then "Aí está, Frederico" with no list). Poll tallies are the same idea applied
 to a poll: `CMD_POLL_STATUS` answers *"quem está a ganhar?"* from the recorded
 votes in code, never generated (see Poll votes and reminders below).
+
+### Recaps of a topic (2026-10-15)
+
+`CMD_RECAP` answers *"o que é que decidimos sobre o almoço de natal?"*; the router's
+`Q:` line names only the subject. `src/chat/recap.py` reads the scope's log, not
+the top-k chunks: rows matching a topic keyword are seeds, their neighbours (±3
+rows, 30 min, **same chat only**) and the time windows of the semantic hits are
+added, and a keyword found in more than `max(common_floor, common_ratio × rows)`
+messages seeds only alongside a second one. It reads by `readable_scopes`, the
+retrieval rule, not tally's own-file rule, because its semantic half already
+crosses into shared. No rolling summary and no bot lines (PR #95's laundering),
+no web search (the topic is group data), and no ordinary retrieval on top.
+`protect_speaker_lines` prefixes "- " to the asker's own line under *Quem disse o
+quê*, which `clean_response` would otherwise take for a new turn and cut there.
 
 ### An opinion may vary, a fact may not (2026-08-16)
 

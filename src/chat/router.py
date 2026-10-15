@@ -61,6 +61,7 @@ CMD_TEXT = "text"
 CMD_CLEAR = "clear"
 CMD_IMAGE = "image"
 CMD_COUNT = "count"
+CMD_RECAP = "recap"
 CMD_POLL = "poll"
 CMD_POLL_STATUS = "poll_status"
 
@@ -78,6 +79,7 @@ _LABELS = {
     "CMD_CLEAR": (None, CMD_CLEAR),
     "CMD_IMAGE": (None, CMD_IMAGE),
     "CMD_COUNT": (None, CMD_COUNT),
+    "CMD_RECAP": (None, CMD_RECAP),
     "CMD_POLL": (None, CMD_POLL),
     "CMD_POLL_STATUS": (None, CMD_POLL_STATUS),
 }
@@ -96,6 +98,7 @@ CMD_AUDIO_ONCE — asking for THIS one answer as a voice note, without changing 
 CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
 CMD_COUNT — asking HOW MANY TIMES a word or expression was used in the chat, or who used it most. It needs every message counted, not a few remembered. Examples: "quantas vezes é que o Rafa disse isso?", "quem é que diz mais palavrões?", "conta quantas vezes dissemos X", "dá-me a lista de todos e quantas vezes cada um disse Y", "how many times did we say that?".
+CMD_RECAP — asking the bot to SUM UP what the chat said about one subject: what was decided, what is still open, who wanted what. It needs every message on that subject read, not a few remembered. Examples: "resume o que dissemos sobre o almoço de natal", "o que é que decidimos?", "ponto de situação do jantar", "o que é que cada um disse sobre o restaurante?", "where did we land on the trip?".
 CMD_POLL — asking the bot to CREATE a WhatsApp poll (sondagem, votação) from what the chat has been discussing. Only an explicit request to make one. Examples: "faz uma sondagem com os restaurantes", "cria uma votação com as opções que demos", "mete isso numa poll", "faz um poll para escolhermos o dia", "make a poll with the options".
 CMD_POLL_STATUS — asking about the RESULTS or the VOTERS of a poll the bot created in this chat: who is winning, who has voted, who is missing. The answer is built by code from the recorded votes, so it is a command, not a generated reply. Examples: "quem está a ganhar a votação?", "quem falta votar?", "quem já votou?", "como está a sondagem?", "qual é o resultado da poll?".
 
@@ -170,6 +173,13 @@ CMD_COUNT is only for questions that need TALLYING every message. A question abo
   "quantas vezes é que o Gil falou de correr?" -> CMD_COUNT (every message has to be counted)
   "o Rafa diz muito isso" -> MIXED (an observation, not a request for a number)
 
+CMD_RECAP is for a SUMMARY of a discussion. A single fact is FACTUAL, a number is CMD_COUNT, a verdict on who is right is DEBATE:
+  "quando é o almoço de natal?" -> FACTUAL (one fact)
+  "o que é que decidimos sobre o almoço de natal?" -> CMD_RECAP
+  "quantas vezes falámos do jantar?" -> CMD_COUNT
+  "quem tem razão sobre o restaurante?" -> DEBATE
+  "resume lá isto" -> CMD_RECAP (the subject is whatever the recent conversation is about)
+
 CMD_POLL is only for a request to MAKE a poll. Talking about a poll, voting, or asking which option is best is not:
   "faz uma sondagem com os sítios que falámos" -> CMD_POLL
   "a sondagem do Pedro estava mal feita" -> BANTER (an opinion about a poll)
@@ -226,6 +236,10 @@ group's memory, so it must stand on its own without the conversation:
   "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
   "quem é o Peter?" -> Q: quem é o Peter?
   "do que se trata a minha start up?" -> Q: do que se trata a startup do Pedro?
+For CMD_RECAP the Q: line names only the SUBJECT, resolved from the recent conversation, never the request itself:
+  "o que é que decidimos?" in a thread about the Christmas lunch -> Q: almoço de natal
+  "resume o que dissemos sobre a viagem" -> Q: viagem
+  "faz um resumo" with no subject anywhere in the conversation -> no Q: line
 Omit the Q: line entirely when there is nothing to look up — for BANTER and for
 pure commands other than CMD_POLL. Do not invent a question that was not asked:
   "Conheço uns quantos ya" -> no Q: line (nobody asked anything)
