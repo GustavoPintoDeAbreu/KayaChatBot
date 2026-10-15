@@ -62,7 +62,9 @@ services:
       # which is why every event used to arrive twice; the journal's dedup key
       # absorbs that either way.
       - WHATSAPP_HOOK_URL=http://gateway:8088/waha/webhook
-      - WHATSAPP_HOOK_EVENTS=message,message.reaction
+      # poll.vote / poll.vote.failed are journaled here and forwarded to the PC,
+      # which records who voted on its own polls (src/chat/poll_votes.py).
+      - WHATSAPP_HOOK_EVENTS=message,message.reaction,poll.vote,poll.vote.failed
       - WHATSAPP_HOOK_CUSTOM_HEADERS=X-Webhook-Token:${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
       - WAHA_API_KEY=${KAYA_WAHA_API_KEY:-}
       - WAHA_DASHBOARD_USERNAME=${KAYA_WEB_USER:-admin}

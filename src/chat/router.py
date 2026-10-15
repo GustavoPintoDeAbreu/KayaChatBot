@@ -62,6 +62,7 @@ CMD_CLEAR = "clear"
 CMD_IMAGE = "image"
 CMD_COUNT = "count"
 CMD_POLL = "poll"
+CMD_POLL_STATUS = "poll_status"
 
 # The router answers with one of these bare tokens.
 _LABELS = {
@@ -78,6 +79,7 @@ _LABELS = {
     "CMD_IMAGE": (None, CMD_IMAGE),
     "CMD_COUNT": (None, CMD_COUNT),
     "CMD_POLL": (None, CMD_POLL),
+    "CMD_POLL_STATUS": (None, CMD_POLL_STATUS),
 }
 
 _ROUTER_SYSTEM = """You classify messages sent to a friend-group chatbot. Answer with EXACTLY ONE of these tokens on the first line:
@@ -95,6 +97,7 @@ CMD_CLEAR — asking the bot to forget or reset the recent conversation.
 CMD_IMAGE — asking the bot to MAKE or ALTER a picture. Examples: "faz uma imagem de um gato astronauta", "põe o Rafa vestido de rei", "edita esta foto e mete-lhe uma coroa", "gera uma foto disto", "photoshop this".
 CMD_COUNT — asking HOW MANY TIMES a word or expression was used in the chat, or who used it most. It needs every message counted, not a few remembered. Examples: "quantas vezes é que o Rafa disse isso?", "quem é que diz mais palavrões?", "conta quantas vezes dissemos X", "dá-me a lista de todos e quantas vezes cada um disse Y", "how many times did we say that?".
 CMD_POLL — asking the bot to CREATE a WhatsApp poll (sondagem, votação) from what the chat has been discussing. Only an explicit request to make one. Examples: "faz uma sondagem com os restaurantes", "cria uma votação com as opções que demos", "mete isso numa poll", "faz um poll para escolhermos o dia", "make a poll with the options".
+CMD_POLL_STATUS — asking about the RESULTS or the VOTERS of a poll the bot created in this chat: who is winning, who has voted, who is missing. The answer is built by code from the recorded votes, so it is a command, not a generated reply. Examples: "quem está a ganhar a votação?", "quem falta votar?", "quem já votou?", "como está a sondagem?", "qual é o resultado da poll?".
 
 FACTUAL and GENERAL differ only in whether the group is the subject. If answering needs the group's own memory it is FACTUAL; otherwise it is GENERAL, even when a group member is mentioned in passing:
   "o Gil também acha que o Ronaldo é melhor, e tu?" -> GENERAL (the question is about Ronaldo)
@@ -171,11 +174,20 @@ CMD_POLL is only for a request to MAKE a poll. Talking about a poll, voting, or 
   "faz uma sondagem com os sítios que falámos" -> CMD_POLL
   "a sondagem do Pedro estava mal feita" -> BANTER (an opinion about a poll)
   "votei no Chico" -> BANTER
-  "quem é que votou no Chico?" -> FACTUAL (a question, not a request to make one)
+  "quem é que já votou?" -> CMD_POLL_STATUS (a question about the poll, not a request to make one)
   "qual é o melhor restaurante para o almoço?" -> GENERAL (asking for an opinion, not a poll)
 The bot never suggests or creates a poll that was not asked for.
 For CMD_POLL always write the Q: line, naming what the poll is about:
   "faz uma poll com isso" -> Q: sondagem com os restaurantes propostos para o almoço de Natal
+
+CMD_POLL_STATUS is only for a poll the bot itself put up in this chat. "Quem está
+a ganhar?" right after a poll or a reminder about one is CMD_POLL_STATUS; the same
+words about a game, a bet or the world are GENERAL. Saying you voted is a reaction,
+not a question:
+  "quem está a ganhar a votação?" after a poll -> CMD_POLL_STATUS
+  "quem falta votar?" -> CMD_POLL_STATUS
+  "quem está a ganhar o jogo?" -> GENERAL (a match, not the bot's poll)
+  "já votei" -> BANTER (a statement, not a request for the result)
 
 A message is often a CONTINUATION of the recent conversation rather than a new
 subject: a pronoun with no antecedent, an ellipsis, a challenge, a bare "e o X?".

@@ -160,3 +160,83 @@ def test_background_tasks_start_and_stop(rig):
         await asyncio.wait_for(gateway.stop_background(), timeout=10)
 
     asyncio.run(cycle())
+
+
+# ── poll votes (2026-10-15) ──────────────────────────────────────────────────
+# poll.vote and its failed twin are journaled (and forwarded to the PC, which
+# records the vote) but never auto-replied. The chat comes from the poll's own
+# "from", not the envelope's "from", which is empty for a vote.
+def _poll_vote(voter=ALICE, chat=GROUP, poll_id="true_" + GROUP + "_key1",
+               options=("sim",), timestamp=1_790_000_000, event="poll.vote"):
+    return {
+        "event": event,
+        "me": {"id": BOT},
+        "payload": {
+            "poll": {"id": poll_id, "fromMe": True, "from": chat},
+            "vote": {"participant": voter, "to": chat,
+                     "selectedOptions": list(options), "fromMe": False,
+                     "timestamp": timestamp * 1000},
+        },
+    }
+
+
+def test_poll_vote_is_journaled_with_chat_and_voter(rig):
+    gateway, *_ = rig
+    result = _post(gateway, _poll_vote()).json()
+    assert result["addressed"] is False
+    entry = gateway.journal.get(result["seq"])
+    assert entry.event_type == "poll.vote"
+    assert entry.chat_id == GROUP
+    assert entry.sender_id == ALICE
+    assert entry.wa_ts == 1_790_000_000
+    assert gateway.journal.pending_count() == 1
+
+
+def test_poll_vote_double_delivery_is_one_row(rig):
+    """WAHA delivers every event twice; the duplicate can differ in envelope
+    fields, so the dedup key hashes the payload, not the whole event."""
+    gateway, *_ = rig
+    first = _post(gateway, _poll_vote()).json()
+    assert "seq" in first
+    # same payload, a different envelope (the "me" field differs)
+    duplicate = _poll_vote()
+    duplicate["me"] = {"id": BOT, "session": "reconnect"}
+    assert _post(gateway, duplicate).json() == {"duplicate": True}
+    assert gateway.journal.pending_count() == 1
+
+
+def test_poll_vote_never_gets_offline_reply(rig):
+    gateway, clock, monitor, sent, _ = rig
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 120
+    _post(gateway, _poll_vote(timestamp=int(clock.value)))
+    assert sent == []
+
+
+def test_poll_vote_failed_is_journaled(rig):
+    """The failed twin has no voter to record, but it is still a poll event:
+    it is journaled, not dropped as an unknown type."""
+    gateway, *_ = rig
+    result = _post(gateway, _poll_vote(event="poll.vote.failed")).json()
+    assert "seq" in result
+    assert result["addressed"] is False
+    entry = gateway.journal.get(result["seq"])
+    assert entry.event_type == "poll.vote.failed"
+
+
+def test_reaction_double_delivery_is_one_row(rig):
+    """The payload-hash dedup is poll-only: a reaction carries a message id, so it
+    is deduped by that id, not by a payload hash. Two identical reaction events
+    (same target message id) collapse to one row."""
+    gateway, *_ = rig
+    event = {
+        "event": "message.reaction",
+        "me": {"id": BOT},
+        "payload": {"id": "react-1", "from": GROUP, "participant": ALICE,
+                    "reaction": {"text": "👍", "messageId": "target-msg-1"},
+                    "timestamp": 1_790_000_000},
+    }
+    first = _post(gateway, event).json()
+    assert "seq" in first
+    assert _post(gateway, event).json() == {"duplicate": True}
+    assert gateway.journal.pending_count() == 1
