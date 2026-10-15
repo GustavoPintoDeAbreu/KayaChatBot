@@ -37,7 +37,9 @@ ENV_FILE="${KAYA_POWER_ENV:-/etc/kaya-power.env}"
 USER_NAME="${POWER_USER:-gustavo}"
 USER_UID="$(id -u "$USER_NAME")"
 USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
-IDLE_MINUTES="${POWER_IDLE_MINUTES:-15}"
+IDLE_MINUTES="${POWER_IDLE_MINUTES:-30}"
+CLAUDE_IDLE_MINUTES="${POWER_CLAUDE_IDLE_MINUTES:-30}"
+CLAUDE_PROJECTS_DIR="${POWER_CLAUDE_PROJECTS_DIR:-$USER_HOME/.claude/projects}"
 WARN_SECONDS="${POWER_WARN_SECONDS:-120}"
 GPU_BUSY_PERCENT="${POWER_GPU_BUSY_PERCENT:-30}"
 # The dev card (GPU0), by UUID because indices change across boots. GPU1 is Kaya's.
@@ -47,7 +49,7 @@ GATEWAY_URL="${POWER_GATEWAY_URL:-}"
 RELAY_TOKEN="${KAYA_RELAY_TOKEN:-}"
 SCHEDULE_PY="${POWER_PYTHON:-python3}"
 SCHEDULE_REPO="${POWER_REPO:-$USER_HOME/kaya-prod}"
-RETRY_MINUTES="${POWER_RETRY_MINUTES:-15}"
+RETRY_MINUTES="${POWER_RETRY_MINUTES:-10}"
 STOP_BEFORE_WAKE_MINUTES="${POWER_STOP_BEFORE_WAKE_MINUTES:-60}"
 STAY_ON_FILE="${POWER_STAY_ON_FILE:-$USER_HOME/.stay-on}"
 DOCKER="${DOCKER_BIN:-/snap/bin/docker}"
@@ -89,12 +91,27 @@ pending_replies() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("pending_replies",0))' 2>/dev/null
 }
 
+# Minutes since a Claude Code session last wrote its transcript, or nothing when
+# none did within CLAUDE_IDLE_MINUTES. A Remote Control session driven from the
+# phone touches no keyboard, so the idle monitor cannot see it.
+claude_active_minutes() {
+  local newest
+  newest="$(find "$CLAUDE_PROJECTS_DIR" -name '*.jsonl' -mmin "-$CLAUDE_IDLE_MINUTES" \
+              -printf '%T@\n' 2>/dev/null | sort -n | tail -1)"
+  [ -n "$newest" ] && echo $(( ($(date +%s) - ${newest%.*}) / 60 ))
+}
+
 # Echoes every reason the PC counts as in use, one per line. Scheduled mode
-# blocks on .stay-on; manual mode does not — the owner asked for it.
+# blocks on .stay-on and on Claude Code sessions; manual mode does not — the
+# owner asked for it.
 busy_reasons() {
   local mode="${1:-scheduled}"
   if [ "$mode" = scheduled ] && [ -e "$STAY_ON_FILE" ]; then
     echo "$STAY_ON_FILE exists"
+  fi
+  if [ "$mode" = scheduled ]; then
+    local claude; claude="$(claude_active_minutes)"
+    [ -n "$claude" ] && echo "a Claude Code session was active $claude min ago"
   fi
   local idle; idle="$(idle_ms)"
   if [ -n "$idle" ] && [ "$idle" -lt $((IDLE_MINUTES * 60000)) ]; then
