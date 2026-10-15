@@ -116,7 +116,7 @@ def test_a_recap_gets_no_summary_and_no_brevity_hint(tmp_path):
 def test_a_recap_has_room_to_answer(tmp_path):
     backend = Backend()
     make_engine(tmp_path, backend, Retriever()).respond("o que é que decidimos?", "Gustavo", [], "sys")
-    assert backend.answer_calls[0]["max_new_tokens"] == 450
+    assert backend.answer_calls[0]["max_new_tokens"] == 700
 
 
 def test_the_scope_reaches_the_recap(tmp_path):
@@ -158,3 +158,10 @@ def test_a_recap_with_no_topic_asks_for_one(tmp_path):
     backend = Backend(label="CMD_RECAP")
     make_engine(tmp_path, backend, Retriever()).respond("faz um resumo", "Gustavo", [], "sys")
     assert recap.NO_TOPIC_INSTRUCTION in user_turn(backend)
+
+
+def test_markdown_bold_becomes_whatsapp_bold(tmp_path):
+    backend = Backend(answer="**Decidido**\nnada decidido ainda\n**Em aberto**\n- o Ramiro")
+    reply = make_engine(tmp_path, backend, Retriever()).respond(
+        "o que é que decidimos?", "Gustavo", [], "sys")
+    assert reply.text.startswith("*Decidido*") and "*Em aberto*" in reply.text and "**" not in reply.text
