@@ -87,6 +87,7 @@ def rig(tmp_path):
         # The sudo fake drops -u, so nothing runs as this user.
         "POWER_USER": "root",
         "POWER_STAY_ON_FILE": str(tmp_path / "stay-on"),
+        "POWER_CLAUDE_PROJECTS_DIR": str(tmp_path / "claude-projects"),
         "DOCKER_BIN": str(tmp_path / "bin" / "docker"),
         "POWER_BOOT_DIR": str(boot),
         "POWER_MODULES_DIR": str(tmp_path / "modules"),
@@ -279,3 +280,30 @@ def test_scheduled_dry_run_is_unchanged(rig):
     assert "dry run: the PC is idle and would shut down now" in result.stdout
     assert _poweroffs(tmp_path) == []
     assert not any(name == "systemctl" for name, _ in _fakes(tmp_path))
+
+
+def test_a_recent_claude_session_holds_the_scheduled_shutdown(rig):
+    """A Remote Control session from the phone touches no keyboard; its transcript does move."""
+    env, tmp_path = rig
+    session = tmp_path / "claude-projects" / "-home-gustavo-Desktop" / "abc.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text("{}\n")
+    env["POWER_STOP_BEFORE_WAKE_MINUTES"] = "100000"        # past the deadline: one check, then give up
+    result = _run_script(env, "--dry-run")
+    assert "a Claude Code session was active 0 min ago" in result.stdout
+    assert "giving up tonight" in result.stdout and _poweroffs(tmp_path) == []
+
+    old = time.time() - 31 * 60
+    os.utime(session, (old, old))
+    result = _run_script(env, "--dry-run")
+    assert "dry run: the PC is idle and would shut down now" in result.stdout
+
+
+def test_the_manual_report_ignores_claude_sessions(rig):
+    """/homelaboff is the owner asking: his own session must not hold it."""
+    env, tmp_path = rig
+    session = tmp_path / "claude-projects" / "p" / "abc.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text("{}\n")
+    result = _run_script(env, "--report")
+    assert "Claude Code session" not in result.stdout

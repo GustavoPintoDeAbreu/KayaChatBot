@@ -22,7 +22,7 @@ provides:
   - {id: kaya.router, kind: lib, path: src/chat/router.py, summary: "Intent routing (banter/mixed/general/factual/command) and standalone-question rewrite"}
   - {id: kaya.gateway, kind: service, path: src/gateway, summary: "The Pi front door: event journal, forwarder to the PC, buffering while the PC is off, offline auto-reply"}
   - {id: kaya.config_loader, kind: lib, path: src/config_loader.py, summary: "YAML config loader with env overrides"}
-  - {id: kaya.power, kind: service, path: deploy/power, summary: "The PC's 07:00 wake (alarm backup), the poweroff announcement to the Pi, and the boot check; off by hand, no automatic shutdown"}
+  - {id: kaya.power, kind: service, path: deploy/power, summary: "The PC's 07:00 wake (alarm backup), the nightly shutdown once idle (from 23:00, waits for ~/.stay-on, Qwen, CI, GPU, keyboard, Claude sessions), the poweroff announcement to the Pi, and the boot check"}
   - {id: kaya.sim, kind: script, path: scripts/run_conversation_sim.py, summary: "Multi-person conversation simulator over the real webhook path with mock outbound"}
 uses: [svc.llm-broker, svc.kaya-waha, svc.kaya-gateway, svc.cloudflared, svc.pc-wake, host.pc, host.pi]
 docs:

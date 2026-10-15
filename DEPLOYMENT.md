@@ -76,8 +76,8 @@ so the landing page stays public.
 ## The Pi edge and the GPU broker (2026-09-24)
 
 The PC is no longer always on: it wakes at 07:00 (`config.yaml` → `power`) and,
-since 2026-10-05, is turned off by hand; there is no automatic shutdown
-(`deploy/power/README.md`). Everything that
+since 2026-10-15, turns itself off from 23:00 (02:00 after Friday and Saturday)
+once nothing is running (`deploy/power/README.md`). Everything that
 must be up all the time moved to the Raspberry Pi, and every LLM on the PC now
 loads through one broker instead of holding a GPU permanently.
 
@@ -93,7 +93,7 @@ loads through one broker instead of holding a GPU permanently.
    │                    │ forwarder, in order, retried                  │
    └────────────────────┼───────────────────────────────┼───────────────┘
                         ▼ POST /whatsapp/relay           ▼ /app (Gradio)
-   ┌──────────── GPU PC (192.168.1.149, from 07:00, off by hand) ───────┐
+   ┌──────────── GPU PC (192.168.1.149, 07:00 to idle after 23:00) ─────┐
    │ kaya-prod :7860 ─ KAYA_OLLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
    │   replies ──▶ WAHA on the Pi         ├─ kaya (Ollama) GPU1, priority│
    │                                      ├─ qwen-impl   GPU0            │

@@ -180,7 +180,8 @@ class TestCLISmoke:
             cwd=str(Path(__file__).parent.parent.parent),
         )
         assert result.returncode == 0
-        assert result.stdout.strip() == ""
+        lines = result.stdout.strip().splitlines()
+        assert lines == ["Sat,Sun 02:00", "Mon..Thu,Sun 23:00"]
 
     def test_oncalendar_wake(self):
         result = subprocess.run(
