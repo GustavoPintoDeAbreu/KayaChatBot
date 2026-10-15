@@ -39,10 +39,14 @@ from src.chat.relay import BacklogTracker, RelayState, parse_envelope
 from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
 from src.chat import feedback
+from src.chat import poll_votes
 from src.chat.web_search import CITATION_PREFIX
 
 # WAHA event names that carry an emoji reaction (engine-dependent spelling).
 _REACTION_EVENTS = ("message.reaction", "reaction")
+# WAHA event names that carry a tap on a poll. The Pi journals them and the
+# adapter records who voted (src/chat/poll_votes.py); they are never answered.
+_POLL_EVENTS = poll_votes.POLL_VOTE_EVENTS + poll_votes.POLL_VOTE_FAILED_EVENTS
 
 _docker_cfg = "/app/config.yaml"
 _local_cfg = str(Path(__file__).parent.parent.parent / "config.yaml")
@@ -403,6 +407,18 @@ _reply_ledger = ReplyLedger((config.get("whatsapp", {}) or {}).get(
 # Shares the engine's backend, so no second model is loaded.
 _summary_writer = SummaryWriter(config, engine.backend, ledger=_reply_ledger)
 
+# The polls Kaya created and who voted on them. The adapter records votes on it
+# and the reminder scheduler runs on it, so it is built ONCE here and shared:
+# two registries on the same file would overwrite each other's writes. The store
+# path resolves against the config's directory, the same way the birthday state
+# does, so the adapter and the scheduler can never disagree about the file.
+_poll_cfg = poll_votes.settings(config)
+_poll_registry = None
+if _poll_cfg["enabled"]:
+    _poll_store = Path(_poll_cfg["store"])
+    _poll_registry = poll_votes.PollRegistry(
+        _poll_store if _poll_store.is_absolute() else Path(config_path).parent / _poll_store)
+
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
                           transcribe=_stt,
@@ -412,7 +428,8 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           archive_sticker=_archive_sticker,
                           summary_writer=_summary_writer,
                           sender_resolver=_sender_resolver,
-                          reply_ledger=_reply_ledger)
+                          reply_ledger=_reply_ledger,
+                          poll_registry=_poll_registry)
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
@@ -498,9 +515,19 @@ def _log_interaction_metrics(result: dict, t0: float) -> None:
         )
 
 
+def _process_poll_vote(event: dict):
+    try:
+        adapter.handle_poll_vote(event)
+    except Exception as exc:  # noqa: BLE001 — never crash the webhook worker
+        print(f"⚠️  WhatsApp poll vote handler error: {exc}")
+
+
 def _process(event: dict):
     if event.get("event") in _REACTION_EVENTS:
         _process_reaction(event)
+        return
+    if event.get("event") in _POLL_EVENTS:
+        _process_poll_vote(event)
         return
     t0 = time.perf_counter()
     try:
@@ -690,6 +717,61 @@ def _start_ingest_scheduler() -> None:
     )
 
 
+def _start_poll_reminder_scheduler() -> None:
+    """@-mention the people who have not voted on a poll Kaya created.
+
+    The votes themselves are recorded at relay time (``adapter.handle_poll_vote``);
+    this only decides when to nag. Prod only, and never at message time: a
+    reminder is a plain ``send_text`` with no model call, so it is a daemon thread
+    like the birthday notices. Each pass waits while the Pi gateway is still
+    replaying a backlog, so a reminder is never built on a half-arrived log.
+    ``dry_run`` sends to the maintainer's DM instead of the group, because a wrong
+    electorate would mean tagging the wrong people.
+    """
+    from datetime import datetime as _datetime
+    from zoneinfo import ZoneInfo
+
+    cfg = poll_votes.settings(config)
+    if not cfg["enabled"] or not cfg["remind"]["enabled"]:
+        return
+    if _poll_registry is None:
+        return
+    if os.environ.get("KAYA_ENV") != "prod":
+        print("Poll reminders only run in prod; not starting.")
+        return
+    if cfg["remind"]["dry_run"] and not _report_to:
+        print("⚠️  Poll reminders are in dry run but KAYA_REPORT_JID is unset; not starting.")
+        return
+
+    zone = ZoneInfo(cfg["timezone"])
+    remind_cfg = cfg["remind"]
+
+    def _pass() -> None:
+        # Skip the tick entirely while a backlog is draining, and take ``now``
+        # only after: a slot computed before a long drain would run its window
+        # and gap checks against a stale timestamp.
+        if _backlog.draining():
+            return
+        now = _datetime.now(zone)
+        for poll, slot, missing in adapter.due_poll_reminders(now):
+            adapter.send_poll_reminder(poll, slot, missing,
+                                       dry_run_to=_report_to if remind_cfg["dry_run"] else "")
+
+    def _loop() -> None:
+        while True:
+            try:
+                _pass()
+            except Exception as exc:  # noqa: BLE001 — must never take the bot down
+                print(f"⚠️  poll reminder check failed: {exc}")
+            time.sleep(300)
+
+    threading.Thread(target=_loop, name="kaya-poll-reminders", daemon=True).start()
+    print(f"✓ Poll reminders scheduled (every {remind_cfg['interval_hours']}h, "
+          f"stop at {remind_cfg['stop_after_hours']}h, "
+          f"{remind_cfg['send_between'][0]}–{remind_cfg['send_between'][1]}, "
+          f"dry run {remind_cfg['dry_run']})")
+
+
 # The Pi gateway (src/gateway) journals every WhatsApp event and forwards it here
 # in order, retrying until acked. An ack means the event is on disk; the answer is
 # generated afterwards, on one worker, so replies keep their order too.
@@ -728,6 +810,7 @@ if not MOCK_MODE:
     _start_ingest_scheduler()
     _start_bio_scheduler()
     _start_birthday_scheduler()
+    _start_poll_reminder_scheduler()
 
 
 @app.post("/whatsapp/webhook")
@@ -750,6 +833,9 @@ async def webhook(
             fb = await run_in_threadpool(adapter.handle_reaction, event)
             _log_reaction_feedback(fb)
             return {"handled": fb is not None, **(fb or {})}
+        if event.get("event") in _POLL_EVENTS:
+            result = await run_in_threadpool(adapter.handle_poll_vote, event)
+            return {"handled": result is not None, **(result or {})}
         t0 = time.perf_counter()
         result = await run_in_threadpool(adapter.handle_event, event, _system_prompt)
         _log_interaction_metrics(result, t0)
@@ -775,6 +861,10 @@ async def relay(request: Request, x_relay_token: str = Header(default="")):
         event = envelope.event
         if event.get("event") in _REACTION_EVENTS:
             _log_reaction_feedback(await run_in_threadpool(adapter.handle_reaction, event))
+            _relay_state.mark_applied(envelope.journal_id, envelope.seq)
+            return {"ack": envelope.seq}
+        if event.get("event") in _POLL_EVENTS:
+            await run_in_threadpool(adapter.handle_poll_vote, event)
             _relay_state.mark_applied(envelope.journal_id, envelope.seq)
             return {"ack": envelope.seq}
         try:

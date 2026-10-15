@@ -466,3 +466,32 @@ def test_the_prompt_describes_polling():
     assert "The bot never suggests or creates a poll that was not asked for." in system
     # And a poll is the one pure command that still gets a Q: line.
     assert "pure commands other than CMD_POLL" in system
+
+
+# ── poll status (2026-10-15) ─────────────────────────────────────────────────
+# "quem está a ganhar?" after the bot put up a poll is a question about the
+# recorded votes, not a generated answer: the router sends it to CMD_POLL_STATUS
+# and the adapter builds the reply from the registry.
+def test_poll_status_routes():
+    route = router.classify(StubBackend("CMD_POLL_STATUS"), _config(),
+                            "quem está a ganhar a votação?")
+    assert route.command == router.CMD_POLL_STATUS
+    assert route.fallback is False
+
+
+def test_poll_status_not_confused_with_other_commands():
+    """Longest-label-first: CMD_POLL_STATUS must not shadow, or be shadowed by,
+    the other command labels."""
+    for label, expected in (("CMD_POLL_STATUS", router.CMD_POLL_STATUS),
+                            ("CMD_COUNT", router.CMD_COUNT),
+                            ("CMD_IMAGE", router.CMD_IMAGE)):
+        assert router.classify(StubBackend(label), _config(), "x").command == expected
+
+
+def test_the_prompt_describes_poll_status():
+    backend = StubBackend("CMD_POLL_STATUS")
+    router.classify(backend, _config(), "quem falta votar?")
+    system = backend.calls[0]["messages"][0]["content"]
+    assert "CMD_POLL_STATUS" in system
+    # The line that keeps a match question away from the bot's poll.
+    assert '"quem está a ganhar o jogo?" -> GENERAL' in system

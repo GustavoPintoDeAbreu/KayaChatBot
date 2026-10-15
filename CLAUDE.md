@@ -638,7 +638,9 @@ counts the log and hands the model a finished table to phrase. It is scope-bound
 includes the pre-bot export — the group is older than the bot. A term it cannot
 identify returns nothing rather than a number. The prompts also stopped accepting
 standing jobs the bot has no state for ("Consigo manter o contador atualizado",
-then "Aí está, Frederico" with no list).
+then "Aí está, Frederico" with no list). Poll tallies are the same idea applied
+to a poll: `CMD_POLL_STATUS` answers *"quem está a ganhar?"* from the recorded
+votes in code, never generated (see Poll votes and reminders below).
 
 ### An opinion may vary, a fact may not (2026-08-16)
 
@@ -892,6 +894,61 @@ understood, and remembered as a photo.
   this needs no eval. The detailed, mixed and banter prompts say a sticker is a
   reaction and never the sender's face: on 2026-09-28 a meme of a man with his
   hands on his head came back as *"Essa cara de desespero diz tudo sobre ti, Gil"*.
+
+### Poll votes and reminders (2026-10-14)
+
+Kaya posts a native WhatsApp poll (the sibling conversation-poll feature); the
+group then asks *"quem está a ganhar?"* / *"quem falta votar?"*. Answering those
+needs a count, and top-k retrieval cannot count — the same reason `tally.py`
+exists for messages. `src/chat/poll_votes.py` is the whole feature, and it is
+**stdlib-only and torch-free**: the Pi gateway imports it to journal the events,
+so it must stay out of the model stack (`tests/gateway/test_torch_free.py`).
+
+**Unverified WAHA assumptions** (ships `enabled: false` until a real event is
+captured on the Pi and its shape matches the parser): the event is named
+`poll.vote` (with `poll.vote.failed` when a vote cannot be decrypted); the
+payload shape — `payload.poll.id` for the poll, `payload.vote` for the voter — is
+from WAHA's public docs, not this repo, and which of `vote.from` / `vote.to` /
+`vote.participant` holds the group vs the voter is unknown (the parser tries
+them in order); whether NOWEB can decrypt votes with its store disabled is
+unknown; and whether `sendText`'s `mentions` accepts an `@lid` JID is unknown.
+
+- **The Pi journals the vote.** WAHA emits `poll.vote` (and `poll.vote.failed`),
+  registered in `deploy/pi/docker-compose.yml`'s `WHATSAPP_HOOK_EVENTS`. The
+  gateway's `handle_webhook` parses them with `parse_waha_poll_vote` — the
+  poll's chat id comes from the first of `vote.to`, `vote.from`, `poll.to`,
+  `poll.from` that ends in `@g.us` (a DM falls back to the voter), not
+  `payload.from`, which is empty for this event shape — and journals them with
+  the voter as `sender_id`. They are never auto-replied (`addressed=False`), and
+  the dedup key hashes the **payload**, not the envelope: WAHA's double delivery
+  can differ in envelope fields, so hashing the whole event misses it.
+- **The PC records who voted.** The relay forwards the event to the adapter's
+  `handle_poll_vote`, which calls `PollRegistry.record_vote` on the shared
+  `data/poll_votes.json` (one registry, built in `whatsapp_server` and injected
+  into the adapter — the adapter never resolves the store path itself). Only
+  votes on a poll Kaya itself posted are recorded (`vote_from_me` is ignored,
+  and a vote on a member's poll is dropped); a vote is never logged to the
+  message log or the session store.
+- **Reminders are a prod-only scheduler**, the same pattern as birthdays: a
+  daemon thread gated on `KAYA_ENV == "prod"`, never at message time. It skips a
+  tick while `_backlog.draining()` (votes cast overnight are still replaying),
+  and only ever sends the **latest** due slot — a PC that was off for a day does
+  not fire the missed slots one after another. Every `remind.interval_hours` it
+  @-mentions the non-voters: the electorate is everyone who **wrote in that chat**
+  since the poll's `created_at` minus `electorate_days` (members *and* non-members,
+  not since now). Its limit: someone who never writes in the chat is never
+  reminded. It stops at `stop_after_hours`, when everyone has voted (the poll is
+  closed `all_voted`), and a slot with no identifiable electorate yet is marked
+  reminded and skipped (not closed), so a poll auto-registered before anyone had
+  written can still get reminders on later slots. `dry_run` sends to
+  `KAYA_REPORT_JID` instead of the group, so the first real event can be watched
+  without spamming the group.
+- **`CMD_POLL_STATUS`** is the router command for *"quem está a ganhar?"* after a
+  poll: it answers from the recorded votes in code (`status_text`), never
+  generated, and says plainly when there is no poll of Kaya's in that chat.
+- **`PollRegistry.register()` is the hook** the conversation-poll PR should call
+  after its `send_poll`. Until then a poll is learned from its first vote, so its
+  reminder clock starts at the first vote, not the post.
 
 ### A roast is about one person (2026-09-04)
 

@@ -151,6 +151,23 @@ def test_a_sent_poll_is_recorded_in_the_store(tmp_path):
     assert entry["messages_read"] == 3
 
 
+def test_a_sent_poll_is_registered_for_votes(tmp_path):
+    """With poll_votes on, the reminders count from when the poll was sent, not
+    from its first vote."""
+    from src.chat import poll_votes
+
+    adapter, client = make_poll_adapter(tmp_path, PollReply(_draft()))
+    adapter.poll_registry = poll_votes.PollRegistry(tmp_path / "poll_votes.json")
+
+    result = adapter.handle_event(group_event("faz uma sondagem", mention=True))
+
+    record = adapter.poll_registry.get(result["poll_id"])
+    assert record is not None
+    assert record["chat_id"] == GROUP
+    assert record["options"] == ["O Botequim do Zé", "A Tasca da Rita"]
+    assert record["source"] == "explicit"
+
+
 def test_one_option_is_a_line_not_a_poll(tmp_path):
     adapter, client = make_poll_adapter(tmp_path, PollReply(_draft(options=["O Botequim do Zé"])))
 

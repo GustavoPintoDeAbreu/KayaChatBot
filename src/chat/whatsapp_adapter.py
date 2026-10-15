@@ -489,6 +489,7 @@ class WhatsAppAdapter:
         summary_writer: Any = None,
         sender_resolver: Any = None,
         reply_ledger: Any = None,
+        poll_registry: Any = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -662,6 +663,10 @@ class WhatsAppAdapter:
             "poll_send_failed": ("Não consegui criar a sondagem. "
                                  "As opções que encontrei: {options}."),
             "poll_left_out": "Deixei de fora: {items}.",
+            # No poll of the bot's own is running in this chat. The status is
+            # built by code from the recorded votes, never generated, so the
+            # "none" case is a fixed line too (src/chat/poll_votes.py).
+            "poll_none": "Não tenho nenhuma sondagem minha a decorrer nesta conversa.",
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -675,6 +680,11 @@ class WhatsAppAdapter:
         # later decided about it (src/chat/reply_review.py). The summary and the
         # ingester read it so a roast never comes back as a fact.
         self.reply_ledger = reply_ledger
+        # The polls Kaya created and who voted on them (src/chat/poll_votes.py).
+        # The Pi journals WAHA's poll.vote events and the server forwards them to
+        # handle_poll_vote; the prod-only reminder scheduler runs on the same
+        # registry. None when whatsapp.poll_votes.enabled is off.
+        self.poll_registry = poll_registry
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self._responder_takes_links = _accepts_kwarg(responder, "link_context")
         self._responder_takes_chat_id = _accepts_kwarg(responder, "chat_id")
@@ -862,6 +872,147 @@ class WhatsAppAdapter:
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                 "command": "birthday"}
 
+    def handle_poll_vote(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Record one tap on a poll Kaya created (src/chat/poll_votes.py).
+
+        The Pi journals the WAHA poll.vote event and the server forwards it here.
+        It is bookkeeping, not a message: nothing is written to the message log
+        or the session store, and nothing is answered. A vote on a poll that is
+        not the bot's is ignored (the registry keeps only its own polls).
+        Returns a small dict the webhook can ack, or None when there is nothing
+        to record. Never raises: a lost vote is a repeated reminder, not a dead
+        webhook.
+        """
+        from src.chat import poll_votes
+
+        if event.get("event") in poll_votes.POLL_VOTE_FAILED_EVENTS:
+            logger.warning("WAHA reported a failed poll vote: %s",
+                           json.dumps(event.get("payload", {}), ensure_ascii=False)[:300])
+            return {"poll_vote_failed": True}
+        if self.poll_registry is None:
+            return None
+        vote = poll_votes.parse_waha_poll_vote(event)
+        if vote is None:
+            return None
+        name = self._name_for_jid(vote.voter_id)
+        if name == "Kaya Bot":
+            name = ""
+        recorded = self.poll_registry.record_vote(vote, name, int(time.time()))
+        if recorded:
+            logger.info("poll vote recorded: %s on %s", name or vote.voter_id,
+                        vote.poll_id)
+        return {"chat_id": vote.chat_id, "poll_id": vote.poll_id,
+                "voter": name or vote.voter_id, "options": list(vote.options),
+                "recorded": bool(recorded)}
+
+    def _bot_local_ids(self) -> set:
+        """The local parts of every bot identity, for the electorate filter."""
+        return {_phone_from_alt(j) for j in self.bot_jids} - {""}
+
+    def poll_voters(self, poll: Dict[str, Any]) -> List[Any]:
+        """Who could have voted: the members active in this chat since the poll."""
+        from src.chat import poll_votes
+
+        scope = scope_for_chat(poll["chat_id"], self.shared_chats)
+        cfg = poll_votes.settings(self.config)
+        since = poll["created_at"] - cfg["electorate_days"] * 86400
+        return poll_votes.electorate(
+            self.message_log.read(scope, after_ts=since - 1),
+            poll["chat_id"], since, self._bot_local_ids(), self._is_member)
+
+    def due_poll_reminders(self, now: Any) -> List[Tuple[Dict[str, Any], Any, List[Any]]]:
+        """The open polls whose next reminder slot has come, with who is missing.
+
+        A poll nobody has written in yet has no electorate to remind, so the
+        slot is marked reminded and skipped (not closed): a poll auto-registered
+        from its first vote can still get reminders on later slots once people
+        start writing. One everyone has voted on is closed as "all_voted". The
+        rest are returned as ``(poll, slot, missing)`` for the scheduler to send.
+        """
+        from src.chat import poll_votes
+
+        if self.poll_registry is None:
+            return []
+        cfg = poll_votes.settings(self.config)
+        remind = cfg["remind"]
+        due = []
+        for poll in self.poll_registry.open_polls(now.timestamp(), remind["stop_after_hours"]):
+            slot = poll_votes.due_slot(poll, now, remind)
+            if slot is None:
+                continue
+            electorate = self.poll_voters(poll)
+            if not electorate:
+                # No identifiable voters yet: skip this slot, but do not close the
+                # poll, so a later slot (after someone writes) can still remind.
+                # Nothing was sent, so do not touch last_reminder_at — a skipped
+                # slot must not eat the min-gap that protects the next real one.
+                self.poll_registry.mark_slot_skipped(poll["id"], slot)
+                logger.info("poll %s: no identifiable voters, skipped slot %s",
+                            poll["id"], slot)
+                continue
+            missing = poll_votes.missing_voters(poll, electorate)
+            if not missing:
+                self.poll_registry.close(poll["id"], "all_voted")
+                logger.info("poll %s: everyone voted, closed", poll["id"])
+                continue
+            due.append((poll, slot, missing))
+        return due
+
+    def send_poll_reminder(self, poll: Dict[str, Any], slot: Any, missing: List[Any],
+                           dry_run_to: str = "") -> Dict[str, Any]:
+        """@-mention the non-voters of one poll, or send it to the maintainer.
+
+        A dry run goes to ``dry_run_to`` (the maintainer's DM) as plain text with
+        no mentions, so the wording is checked before it reaches the group. A
+        real run sends the @-mention version to the poll's chat and appends the
+        names version to the session store, so the group sees the bot said it.
+        """
+        from src.chat import poll_votes
+
+        tokens_text, names_text, jids = poll_votes.reminder_text(poll, missing)
+        now_ts = int(time.time())
+        if dry_run_to:
+            self.waha_client.send_text(dry_run_to, f"[ensaio, para {poll['chat_id']}] {names_text}")
+            self.poll_registry.mark_reminded(poll["id"], slot, now_ts)
+            return {"dry_run": True, "to": dry_run_to, "text": names_text}
+        self.waha_client.send_text(poll["chat_id"], tokens_text, mentions=jids)
+        self.session_store.append(poll["chat_id"], f"Kaya Bot: {names_text}")
+        self.poll_registry.mark_reminded(poll["id"], slot, now_ts)
+        return {"dry_run": False, "to": poll["chat_id"], "text": names_text,
+                "mentions": list(jids)}
+
+    def _handle_poll_status(self, msg: InboundMessage, speaker: str, text: str,
+                            telemetry: Dict[str, Any]) -> Dict[str, Any]:
+        """Answer "quem está a ganhar?" from the recorded votes, by code.
+
+        The status is built from the registry, never generated: a poll the bot
+        created and someone asked about is a fact question, and the numbers must
+        come out the same every time. No poll in this chat gets the fixed line.
+        """
+        from src.chat import poll_votes
+
+        cfg = poll_votes.settings(self.config)
+        poll = None
+        if self.poll_registry is not None:
+            poll = self.poll_registry.latest_for_chat(
+                msg.chat_id, int(time.time()), cfg["status_max_age_hours"])
+        if poll is None:
+            reply = self.command_replies["poll_none"]
+        else:
+            voters = self.poll_voters(poll)
+            reply = poll_votes.status_text(poll, voters, cfg["timezone"])
+        self._deliver(msg.chat_id, reply,
+                      reply_to=msg.message_id if msg.is_group else None)
+        self.session_store.append(msg.chat_id, f"Kaya Bot: {reply}")
+        telemetry["command"] = "poll_status"
+        # poll_status is deliberately logged (it is not in BOOKKEEPING_COMMANDS),
+        # so the row needs the same user_text / is_group / telemetry the normal
+        # path carries — otherwise the log gets an empty user_message and no
+        # route telemetry.
+        return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
+                "user_text": text, "is_group": msg.is_group,
+                "command": "poll_status", "telemetry": telemetry}
+
     def _read_links(self, text: str, preview: Dict[str, str]) -> List[Tuple[str, str]]:
         """The injected link reader, never raising: a failed read is not a lost message."""
         try:
@@ -949,6 +1100,15 @@ class WhatsAppAdapter:
             })
         except Exception as exc:  # noqa: BLE001 — the poll went out; the record is best-effort
             logger.warning("poll record failed: %s", exc)
+        # The vote registry (whatsapp.poll_votes) learns about the poll now, so the
+        # reminders count from when it was sent rather than from its first vote.
+        poll_id = extract_sent_id(sent)
+        if self.poll_registry is not None and poll_id:
+            try:
+                self.poll_registry.register(msg.chat_id, poll_id, list(draft.options),
+                                            int(time.time()))
+            except Exception as exc:  # noqa: BLE001 — same: the poll already went out
+                logger.warning("poll registry failed: %s", exc)
 
         summary_line = f"[Sondagem: {draft.question}: {', '.join(draft.options)}]"
         if left_out:
@@ -1689,6 +1849,8 @@ class WhatsAppAdapter:
 
         if command == "image":
             return self._handle_image_request(msg, speaker, text)
+        if command == "poll_status":
+            return self._handle_poll_status(msg, speaker, text, telemetry)
 
         if command:
             reply = self._apply_command(msg.chat_id, command)

@@ -784,7 +784,8 @@ whatsapp:
     respond_on_reply: true
   # Attribute 👍/👎 emoji reactions on the bot's own replies as quality feedback
   # (logged via src/chat/feedback.py). Requires WAHA to emit reaction events — see
-  # WHATSAPP_HOOK_EVENTS in docker-compose.yml (message,message.reaction).
+  # WHATSAPP_HOOK_EVENTS in deploy/pi/docker-compose.yml
+  # (message,message.reaction,poll.vote,poll.vote.failed).
   feedback:
     enabled: true
   # DM anti-spam whitelist. When enabled, direct messages are only answered for
@@ -803,6 +804,25 @@ whatsapp:
   # file data/whatsapp_contacts.json (merged in at startup), not here. Example:
   #   { "351XXXXXXXXX": "Gustavo", "351YYYYYYYYY": "Rafa" }
   contacts: {}
+  # Votes on the polls Kaya posts (src/chat/poll_votes.py). The Pi journals
+  # WAHA's poll.vote events and forwards them; the PC records who voted in
+  # data/poll_votes.json and, in prod only, @-mentions the non-voters every
+  # interval_hours until everyone has, the poll is older than
+  # stop_after_hours, or nobody can be identified. Off until a real event is
+  # captured on the Pi and its shape matches the parser. WAHA must run the
+  # NOWEB persistent store (config.noweb.store.enabled) or no vote ever arrives.
+  poll_votes:
+    enabled: false
+    store: data/poll_votes.json
+    electorate_days: 60
+    status_max_age_hours: 168
+    remind:
+      enabled: true
+      dry_run: true
+      interval_hours: 6
+      stop_after_hours: 24
+      min_gap_hours: 3
+      send_between: ["10:00", "22:00"]
 
 # Metrics & dashboard. Every answered turn (web + WhatsApp) is logged to the
 # shared JSONL below (src/chat/metrics.py); the Gradio "Estatísticas" tab reads it.

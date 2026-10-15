@@ -47,13 +47,19 @@ from src.gateway.forwarder import Forwarder
 from src.gateway.birthdays import BirthdayGreeter
 from src.gateway.homelab import HomelabPower
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
+from src.chat.poll_votes import (POLL_VOTE_EVENTS, POLL_VOTE_FAILED_EVENTS,
+                                 parse_waha_poll_vote)
 from src.gateway.journal import Journal
 from src.gateway.monitor import PcMonitor, PcState
 from src.gateway.schedule import PowerSchedule
 
 logger = logging.getLogger(__name__)
 
-_EVENT_TYPES = ("message", "message.reaction", "reaction")
+# poll.vote and its failed twin are journaled (and forwarded to the PC, which
+# records the vote) but never auto-replied: see src/chat/poll_votes.py.
+_EVENT_TYPES = (("message", "message.reaction", "reaction")
+                + POLL_VOTE_EVENTS + POLL_VOTE_FAILED_EVENTS)
+_POLL_EVENTS = POLL_VOTE_EVENTS + POLL_VOTE_FAILED_EVENTS
 # A message older than this on arrival is WAHA replaying its own backlog after a
 # reconnect, not something somebody just sent: never auto-replied or deferred.
 _BACKLOG_SECONDS = 300
@@ -215,8 +221,19 @@ class Gateway:
         self._learn_bot_ids(event)
         payload = event.get("payload") or {}
         message_id = str(payload.get("id") or "")
-        dedup_key = (f"{event_type}:{message_id}" if message_id else f"{event_type}:"
-                     + hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest())
+        if event_type in _POLL_EVENTS:
+            # Poll votes carry no message id, and WAHA's duplicate delivery can
+            # differ in envelope fields (me, session), so hash the payload, not
+            # the whole event: the duplicate collapses, a changed vote (new
+            # timestamp) does not.
+            dedup_key = (f"{event_type}:"
+                         + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest())
+        else:
+            # A message or reaction normally carries a message id; one without it
+            # (a malformed event) falls back to hashing the whole event, so a
+            # second distinct event is not dropped as a duplicate for good.
+            dedup_key = (f"{event_type}:{message_id}" if message_id else f"{event_type}:"
+                         + hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest())
         now = self._now()
 
         msg = None
@@ -235,10 +252,15 @@ class Gateway:
                                      self._respond_on_reply, self._whitelist_enabled,
                                      self._whitelist_numbers)
         else:
-            chat_id = str(payload.get("from") or "")
-            sender_id = str(payload.get("participant") or payload.get("from") or "")
-            timestamp = payload.get("timestamp")
-            wa_ts = timestamp if isinstance(timestamp, int) else None
+            vote = parse_waha_poll_vote(event) if event_type in _POLL_EVENTS else None
+            if vote is not None:
+                chat_id, sender_id = vote.chat_id, vote.voter_id
+                wa_ts = vote.timestamp
+            else:
+                chat_id = str(payload.get("from") or "")
+                sender_id = str(payload.get("participant") or payload.get("from") or "")
+                timestamp = payload.get("timestamp")
+                wa_ts = timestamp if isinstance(timestamp, int) else None
             addressed = False
         backlog = wa_ts is not None and now - wa_ts > _BACKLOG_SECONDS
 
