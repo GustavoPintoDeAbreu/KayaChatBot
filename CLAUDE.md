@@ -141,6 +141,7 @@ kaya_chatbot_env/bin/python scripts/run_offensive_probe.py      # refusal rate; 
 kaya_chatbot_env/bin/python scripts/eval_links.py --run|--serve|--score     # the gate for chat.links (≥90% right, none invented)
 kaya_chatbot_env/bin/python scripts/eval_stickers.py --run|--serve|--score  # the gate for chat.stickers (≥80% right, no names)
 kaya_chatbot_env/bin/python scripts/mine_birthdays.py [--accept Pedro=07-15 | --set X=MM-DD | --show]
+kaya_chatbot_env/bin/python scripts/preview_poll.py --list-chats | --chat JID --topic "…"   # the gate for chat.poll (never sends)
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
@@ -954,6 +955,37 @@ What changed, and what deliberately did not:
   a compliment or small talk, as `FORA`, so the ledger catches regressions.
 - **The conversation probe** has a `warm` check (`must_not_contain_any`) and
   greeting/compliment cases; per-case `speaker`.
+
+### Polls (2026-10-14)
+
+The group talks an option into the chat and then wants to choose. Asked to make
+a poll, the bot reads the log of **that chat** — community sub-groups all append
+to `data/live_messages/shared.jsonl`, so the read is filtered by `chat_id`
+within the scope — and the local model works out which options are still in
+play: a rejected one is out, a re-proposed one is back, two names for the same
+place are one option. The poll itself is a **native WhatsApp message**
+(`WahaClient.send_poll`, `/api/sendPoll`), never generated text, so the bot
+cannot reword or add an option. A short line says what was left out.
+
+- **`CMD_POLL`** routes only an explicit request to make one. Talking about a
+  poll, voting, or asking which option is best is not: *"a sondagem do Pedro
+  estava mal feita"* is BANTER, *"quem é que votou no Chico?"* is FACTUAL. The
+  bot never suggests or creates a poll that was not asked for. The router always
+  writes the `Q:` line for it, naming what the poll is about.
+- **`src/chat/polls.py`** is torch-free (the Pi constraint) and takes the model
+  call as an argument; the engine holds the backend and the GPU lock. Long
+  threads go map-then-reduce: one pass per chunk, then one over the notes.
+- **Grounding is the rule, not the prompt.** `finalize` drops any option whose
+  name does not appear in the conversation (the `invented` list is how a model
+  that breaks the rule shows up in the telemetry) and bounds everything:
+  12 options, 100 chars each, 200 for the question.
+- **Every sent poll is recorded** in `data/polls.jsonl` (`PollStore`) —
+  `poll_id`, chat, question, options, what was dropped, who asked — for a later
+  pass to track who voted what. Nothing about a poll goes into `message_log` or
+  ChromaDB.
+- **Off by default** (`chat.poll.enabled: false`) until
+  `scripts/preview_poll.py` looks right on a real chat: it runs the exact
+  production path and prints the draft, sending and writing nothing.
 
 ### Agreeing is not answering (2026-08-17)
 

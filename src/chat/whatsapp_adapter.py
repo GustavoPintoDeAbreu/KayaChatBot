@@ -650,6 +650,18 @@ class WhatsAppAdapter:
                                "Exemplo: /aniversario 8/9."),
             "birthday_not_member": "Só guardo aniversários de quem é do grupo.",
             "birthday_saved": "Registado, fazes anos a {date}.",
+            # Polls: the fixed line for every way a poll can fail to be sent.
+            # The poll itself is a native WhatsApp message, never generated text.
+            "poll_not_enough": ("Não encontrei pelo menos duas opções em cima da mesa "
+                                "para uma sondagem. Diz-me quais queres e eu faço-a."),
+            "poll_one_option": ("Só encontrei uma opção em cima da mesa: {option}. "
+                                "Para uma sondagem preciso de pelo menos duas."),
+            "poll_unreadable": ("Não consegui ler a conversa agora. "
+                                "Tenta outra vez daqui a bocado."),
+            "poll_disabled": "Ainda não faço sondagens.",
+            "poll_send_failed": ("Não consegui criar a sondagem. "
+                                 "As opções que encontrei: {options}."),
+            "poll_left_out": "Deixei de fora: {items}.",
         }
         # Capability gate: the routed command is still recognised, but without TTS
         # the preference is NOT stored, because it would silently do nothing.
@@ -873,6 +885,82 @@ class WhatsAppAdapter:
             self._deliver(msg.chat_id, reply)
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                 "user_text": text, "command": "image"}
+
+    def _handle_poll(self, msg: InboundMessage, speaker: str, text: str,
+                     draft: Any, telemetry: Dict[str, Any]) -> Dict[str, Any]:
+        """CMD_POLL: send the native poll the engine drafted from this chat's log.
+
+        The poll is a WhatsApp poll message, never generated text, so the bot
+        cannot reword the options or add one. Everything that can go wrong has a
+        fixed line instead, and a sent poll is recorded in ``data/polls.jsonl``
+        so a later pass can track who voted what.
+        """
+        from src.chat import polls
+
+        reply_to = msg.message_id if (msg.is_group or msg.deferred) else None
+        if draft is None or draft.status == polls.STATUS_ERROR:
+            line = self.command_replies["poll_unreadable"]
+        elif draft.status == polls.STATUS_DISABLED:
+            line = self.command_replies["poll_disabled"]
+        elif draft.status == polls.STATUS_NO_MESSAGES or not draft.options:
+            line = self.command_replies["poll_not_enough"]
+        elif len(draft.options) == 1:
+            line = self.command_replies["poll_one_option"].format(option=draft.options[0])
+        else:
+            line = ""
+        if line:
+            # A poll line is always text, never a voice note: _deliver would honour
+            # this chat's audio preference and read it out with Piper.
+            self.waha_client.send_text(msg.chat_id, line, reply_to=reply_to)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": line,
+                    "user_text": text, "command": "poll", "telemetry": telemetry}
+
+        try:
+            sent = self.waha_client.send_poll(
+                msg.chat_id, draft.question, draft.options, multiple_answers=True)
+        except Exception as exc:  # noqa: BLE001 — a failed send must not drop the turn
+            logger.warning("send_poll failed: %s", exc)
+            line = self.command_replies["poll_send_failed"].format(
+                options=", ".join(draft.options))
+            self.waha_client.send_text(msg.chat_id, line, reply_to=reply_to)
+            return {"chat_id": msg.chat_id, "speaker": speaker, "reply": line,
+                    "user_text": text, "command": "poll", "telemetry": telemetry}
+
+        left_out = polls.left_out_line(
+            draft.dropped, self.command_replies["poll_left_out"],
+            polls.settings(self.config)["max_dropped_listed"])
+        if left_out:
+            self.waha_client.send_text(msg.chat_id, left_out)
+
+        try:
+            polls.PollStore(polls.store_path(self.config)).record({
+                "poll_id": extract_sent_id(sent),
+                "chat_id": msg.chat_id,
+                "scope": scope_for_chat(msg.chat_id, self.shared_chats),
+                "question": draft.question,
+                "options": list(draft.options),
+                "dropped": [{"option": name, "reason": reason}
+                            for name, reason in draft.dropped],
+                "multiple_answers": True,
+                "created_at": int(time.time()),
+                "asked_by": speaker,
+                "asked_message_id": msg.message_id,
+                "messages_read": draft.messages_read,
+            })
+        except Exception as exc:  # noqa: BLE001 — the poll went out; the record is best-effort
+            logger.warning("poll record failed: %s", exc)
+
+        summary_line = f"[Sondagem: {draft.question}: {', '.join(draft.options)}]"
+        if left_out:
+            summary_line += f"\n{left_out}"
+        self.session_store.append(msg.chat_id, f"Kaya Bot: {summary_line}")
+
+        return {
+            "chat_id": msg.chat_id, "speaker": speaker,
+            "reply": summary_line, "user_text": text,
+            "is_group": msg.is_group, "command": "poll",
+            "poll_id": extract_sent_id(sent), "telemetry": telemetry,
+        }
 
     def _apply_command(self, chat_id: str, command: str) -> str:
         """Execute a routed command and return the confirmation to send back."""
@@ -1594,6 +1682,10 @@ class WhatsAppAdapter:
         # command only so the routing decision stays visible in the telemetry.
         if command == "count":
             command = None
+
+        if command == "poll":
+            return self._handle_poll(msg, speaker, text,
+                                     getattr(result, "poll", None), telemetry)
 
         if command == "image":
             return self._handle_image_request(msg, speaker, text)
