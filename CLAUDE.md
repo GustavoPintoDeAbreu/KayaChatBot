@@ -660,6 +660,23 @@ no web search (the topic is group data), and no ordinary retrieval on top.
 `protect_speaker_lines` prefixes "- " to the asker's own line under *Quem disse o
 quê*, which `clean_response` would otherwise take for a new turn and cut there.
 
+**A request that names no subject recaps the chat** (2026-10-15). Probed on the live
+router, "o que é que decidimos?" came back with the question itself as `Q:`; all
+its words are request words, so the topic recap found nothing. Now: if the
+*message* has no content words after the request words and verb stems
+(`_REQUEST_STEMS`), `gather` reads this chat's own messages (the last
+`chat_days`, newest kept) with `CHAT_INSTRUCTION`. A period ("hoje", "ontem",
+"esta semana", the retriever's `_recency_window` table) bounds either mode. A
+topic recap reads the asking chat first and the rest of the scope only when that
+chat never mentioned the topic. Both instructions open with the question itself:
+a specific one ("o que é que o Gil disse…", "quem propôs o Fuso?") gets a short
+direct answer, a general one the sections. `whatsapp_bold` turns `**x**` (and an
+escaped `**\*x\***`) into `*x*`.
+
+**Polls only when named.** The router read "vamos votar?" and "kaya ajuda-nos a
+decidir" as CMD_POLL; `router.asks_for_poll` (sondagem / votação / poll /
+enquete / "a votos") now gates it in the engine, which answers as MIXED otherwise.
+
 ### An opinion may vary, a fact may not (2026-08-16)
 
 Peter asked to be roasted four times over three days and got the same four beats

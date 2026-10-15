@@ -101,7 +101,8 @@ def test_a_recap_routes_reads_the_log_and_answers(tmp_path):
 
 def test_a_recap_does_no_ordinary_retrieval_and_no_web_search(tmp_path):
     retriever = Retriever()
-    make_engine(tmp_path, Backend(), retriever).respond("o que é que decidimos?", "Gustavo", [], "sys")
+    make_engine(tmp_path, Backend(), retriever).respond(
+        "o que decidimos sobre o almoço de natal?", "Gustavo", [], "sys")
     assert retriever.retrieve_all_calls == []
     assert [call["query"] for call in retriever.retrieve_calls] == ["almoço de natal"]
 
@@ -122,7 +123,7 @@ def test_a_recap_has_room_to_answer(tmp_path):
 def test_the_scope_reaches_the_recap(tmp_path):
     retriever = Retriever()
     make_engine(tmp_path, Backend(), retriever).respond(
-        "o que é que decidimos?", "Gustavo", [], "sys", scope="dm:abc")
+        "o que decidimos sobre o almoço de natal?", "Gustavo", [], "sys", scope="dm:abc")
     assert retriever.retrieve_calls[0]["scope"] == "dm:abc"
 
 
@@ -154,10 +155,24 @@ def test_a_disabled_recap_answers_as_factual(tmp_path, monkeypatch):
     assert "*Decidido*" not in user_turn(backend)
 
 
-def test_a_recap_with_no_topic_asks_for_one(tmp_path):
+def test_a_general_request_recaps_this_chat(tmp_path):
+    """"o que é que se discutiu?" names no subject: the router used to pass the
+    question itself as the topic, whose words are all request words, and the
+    recap found nothing. It now reads the chat's recent conversation."""
     backend = Backend(label="CMD_RECAP")
-    make_engine(tmp_path, backend, Retriever()).respond("faz um resumo", "Gustavo", [], "sys")
-    assert recap.NO_TOPIC_INSTRUCTION in user_turn(backend)
+    reply = make_engine(tmp_path, backend, Retriever()).respond(
+        "o que é que se discutiu?", "Gustavo", [], "sys", chat_id=GROUP)
+    assert reply.telemetry["recap_mode"] == "chat"
+    assert "e o Zé da Mouraria?" in user_turn(backend)
+    assert "assuntos principais" in user_turn(backend)
+
+
+def test_a_poll_needs_to_be_asked_for_by_name(tmp_path):
+    backend = Backend(label="CMD_POLL", answer="ajudo, claro")
+    reply = make_engine(tmp_path, backend, Retriever()).respond(
+        "kaya ajuda-nos a decidir", "Gustavo", [], "sys", chat_id=GROUP)
+    assert reply.route.command is None and reply.route.mode == router.MIXED
+    assert reply.text == "ajudo, claro"
 
 
 def test_markdown_bold_becomes_whatsapp_bold(tmp_path):

@@ -532,6 +532,10 @@ class KayaEngine:
             # a follow-up that lost its thread, not a question about the world.
             # Corrected deterministically rather than by asking the model again.
             route = self._reconcile(route, message, recent_lines)
+            # A poll is made only when one is asked for by name. The router reads
+            # "vamos votar?" or "ajuda-nos a decidir" as a request too; code decides.
+            if route.command == router.CMD_POLL and not router.asks_for_poll(message):
+                route = replace(route, mode=router.MIXED, command=None)
             # Recaps switched off: the request is answered as an ordinary factual turn.
             if route.command == router.CMD_RECAP and not recap.recap_config(self.config)["enabled"]:
                 route = replace(route, command=None)
@@ -575,7 +579,8 @@ class KayaEngine:
             # bring back exactly the general chatter the topic filter removed.
             recap_context, recap_instruction, recap_stats = "", "", {}
             if route.command == router.CMD_RECAP:
-                recap_context, recap_instruction, recap_stats = self._recap_context(route.query, scope)
+                recap_context, recap_instruction, recap_stats = self._recap_context(
+                    route.query or message, message, scope, chat_id)
                 mcfg = {**router.mode_config(self.config, router.FACTUAL), "retrieval": False}
 
             # Off-topic / current-events questions get live facts from Grok's web
@@ -915,7 +920,8 @@ class KayaEngine:
             print(f"⚠️  could not build the variety hint: {exc}")
             return ""
 
-    def _recap_context(self, topic: str, scope: Optional[str]) -> Tuple[str, str, Dict[str, Any]]:
+    def _recap_context(self, topic: str, message: str, scope: Optional[str],
+                       chat_id: Optional[str]) -> Tuple[str, str, Dict[str, Any]]:
         """The on-topic transcript for a recap, and how to write it.
 
         Returns an instruction to say so, never an improvised recap, when the log
@@ -925,7 +931,8 @@ class KayaEngine:
         try:
             return recap.gather(self.config, topic, scope,
                                 retriever=self.retriever,
-                                resolver=tally.load_resolver(self.config))
+                                resolver=tally.load_resolver(self.config),
+                                request=message, chat_id=chat_id)
         except Exception as exc:  # noqa: BLE001 — a failed recap must not drop the reply
             print(f"⚠️  recap failed: {exc}")
             return ("", recap.UNREADABLE_INSTRUCTION,

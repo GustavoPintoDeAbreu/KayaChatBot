@@ -5,6 +5,7 @@ the topic (keyword seeds, their neighbours in the same chat, the time windows of
 the semantic hits) and hands the model a dated, attributed transcript.
 """
 import sys
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -158,9 +159,45 @@ def test_protect_speaker_lines():
 
 
 # ── gather ───────────────────────────────────────────────────────────────────
-def test_gather_without_topic_asks_for_one(tmp_path):
-    block, instruction, stats = recap.gather(_config(tmp_path), "", "shared", log_dir=tmp_path / "live")
-    assert block == "" and instruction == recap.NO_TOPIC_INSTRUCTION and stats["recap_topic"] == ""
+def test_a_request_with_no_subject_recaps_the_chat(tmp_path):
+    """Every word of "o que é que decidimos?" is a request word, so it names no
+    subject: the recap reads this chat's recent messages, never another chat's."""
+    _log(tmp_path, [("bora ao Ramiro", BASE, GROUP, "Gil"),
+                    ("noutro grupo", BASE + 10, OTHER, "Rafa")])
+    now = datetime.fromtimestamp(BASE + 3600, tz=LISBON)
+    for request in ("o que é que decidimos?", "o que se discutiu?", "tl;dr?", "o que é que cada um quer?"):
+        block, instruction, stats = recap.gather(_config(tmp_path), request, "shared",
+                                                 request=request, chat_id=GROUP, now=now)
+        assert stats["recap_mode"] == "chat" and stats["recap_keywords"] == []
+        assert "Gil: bora ao Ramiro" in block and "noutro grupo" not in block
+        assert instruction.startswith(f"Responde a «{request}»") and "assuntos principais" in instruction
+
+
+def test_a_named_period_bounds_the_chat_recap(tmp_path):
+    now = datetime(2026, 12, 18, 12, 0, tzinfo=LISBON)
+    yesterday = int(datetime(2026, 12, 17, 20, 0, tzinfo=LISBON).timestamp())
+    last_week = int(datetime(2026, 12, 10, 20, 0, tzinfo=LISBON).timestamp())
+    _log(tmp_path, [("ontem falámos do Ramiro", yesterday, GROUP, "Gil"),
+                    ("isto foi há uma semana", last_week, GROUP, "Rafa")])
+    block, instruction, stats = recap.gather(_config(tmp_path), "o que é que falámos ontem?", "shared",
+                                             request="o que é que falámos ontem?", chat_id=GROUP, now=now)
+    assert stats["recap_period"] == "ontem" and stats["recap_keywords"] == []
+    assert "ontem falámos do Ramiro" in block and "há uma semana" not in block
+    assert "(ontem)" in instruction
+
+
+def test_a_subject_in_the_request_keeps_the_topic_recap(tmp_path):
+    _log(tmp_path, [("almoço de natal no Ramiro?", BASE, GROUP, "Rafa")])
+    _, _, stats = recap.gather(_config(tmp_path), "almoço de natal", "shared",
+                               request="o que decidimos sobre o almoço de natal?", chat_id=GROUP)
+    assert stats["recap_mode"] == "topic" and stats["recap_keywords"] == ["almoco", "natal"]
+
+
+def test_an_empty_chat_says_so(tmp_path):
+    _log(tmp_path, [("noutro grupo", BASE, OTHER, "Rafa")])
+    block, instruction, _ = recap.gather(_config(tmp_path), "", "shared", request="resume",
+                                         chat_id=GROUP, now=datetime.fromtimestamp(BASE, tz=LISBON))
+    assert block == "" and "não inventes" in instruction
 
 
 def test_gather_with_no_matches_says_so(tmp_path):
@@ -202,3 +239,15 @@ def test_gather_passes_the_scope_to_retrieval(tmp_path):
 
 def test_whatsapp_bold_leaves_single_asterisks_alone():
     assert recap.whatsapp_bold("**Decidido**\n*Em aberto*") == "*Decidido*\n*Em aberto*"
+    assert recap.whatsapp_bold("**\\*Decidido\\***") == "*Decidido*"
+
+
+def test_a_topic_recap_prefers_the_chat_it_is_asked_in(tmp_path):
+    _log(tmp_path, [("o restaurante Pombal é bom", BASE, OTHER, "Rafa"),
+                    ("restaurante: voto no Ramiro", BASE + 10, GROUP, "Gil")])
+    block, _, stats = recap.gather(_config(tmp_path), "restaurante", "shared",
+                                   request="o que disse o Gil sobre o restaurante?", chat_id=GROUP)
+    assert stats["recap_this_chat"] and "voto no Ramiro" in block and "Pombal" not in block
+    block, _, stats = recap.gather(_config(tmp_path), "Pombal", "shared",
+                                   request="o que se disse do Pombal?", chat_id=GROUP)
+    assert not stats["recap_this_chat"] and "Pombal é bom" in block

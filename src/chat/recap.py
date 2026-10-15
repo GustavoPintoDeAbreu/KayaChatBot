@@ -33,6 +33,7 @@ DEFAULTS: Dict[str, Any] = {
     "max_chars": 40000,
     "max_archive_chunks": 3,
     "max_keywords": 6,
+    "chat_days": 14,
 }
 
 _STOPWORDS = frozenset({
@@ -49,30 +50,55 @@ _STOPWORDS = frozenset({
     "decidimos", "decidiram", "decidido", "decidida", "decisao", "dissemos", "disseram",
     "disse", "falamos", "falaram", "falou", "conversa", "conversas", "conversamos",
     "ponto", "situacao", "grupo", "chat", "kaya", "bot", "pessoal", "malta",
+    "discutimos", "discutido", "discutida", "discutiram", "discutir", "discussao", "falado",
+    "falada", "falar", "combinado", "combinamos", "combinaram", "ficamos", "ficou", "ficaram",
+    "quer", "querem", "queres", "acha", "acham", "achas", "propos", "propuseram", "sugeriu",
+    "sugeriram", "mencionou", "mencionaram", "sido", "disto", "disso", "nisto", "nisso",
+    "podes", "pode", "podem", "podias", "consegues", "quero", "queria", "gostava", "favor",
+    "sff", "pls", "please", "can", "you", "could",
+    "tldr", "resumao", "assunto", "assuntos", "tema", "temas", "passou", "passado", "passada",
+    "ultimo", "ultima", "ultimos", "ultimas", "desde", "ate", "aconteceu",
+    # periods: a time word is a window, not a keyword
+    "hoje", "ontem", "anteontem", "antes", "semana", "fim", "noite", "dia", "dias",
+    "today", "yesterday", "week", "weekend", "night", "last",
     # English
     "the", "and", "what", "who", "where", "when", "about", "did", "was", "were",
     "we", "our", "this", "that", "with", "for", "summary", "summarise", "summarize",
     "recap", "decide", "decided", "said", "say", "talked", "conversation",
+    "discussed", "discuss", "mentioned", "everyone", "each", "want", "wants", "land", "landed",
 })
 
 RECAP_INSTRUCTION = (
-    'Faz o ponto de situação de "{topic}" usando só as mensagens do histórico que '
-    "te foram dadas acima. Usa três partes, cada uma com o título em negrito do "
-    "WhatsApp, com um só asterisco de cada lado: *Decidido*, *Em aberto* e *Quem "
-    "disse o quê*. Os três títulos ficam todos na língua da resposta, nunca "
-    "misturados (em inglês: *Decided*, *Still open*, *Who said what*). Em *Quem "
-    'disse o quê* escreve uma linha por pessoa, a começar por "- Nome:", com a '
-    "posição ou proposta mais recente dessa pessoa; se mudou de ideias, diz de quê "
-    "para quê. Uma opção que foi posta de parte ou abandonada não está em aberto: "
-    "diz que caiu e, se a razão estiver nas mensagens, porquê. Junta as opções "
-    "repetidas numa só. Só atribuis uma posição a alguém se houver uma mensagem "
-    'dessa pessoa que a mostre. Se nada foi decidido, diz "nada decidido ainda". '
-    "Ignora as mensagens que não são sobre o tema. Não inventes opções, datas, "
-    "preços nem pessoas."
+    'Responde a «{request}» sobre "{topic}" usando só as mensagens do histórico '
+    "que te foram dadas acima. Se a pergunta é específica (o que uma pessoa disse, "
+    "quem propôs uma coisa, só o que se decidiu), responde só a isso, em poucas "
+    "frases e sem secções. Se é um pedido geral de resumo, usa três partes, cada "
+    "uma com o título em negrito do WhatsApp, com um só asterisco de cada lado: "
+    "*Decidido*, *Em aberto* e *Quem disse o quê*, todos na língua da resposta, "
+    "nunca misturados (em inglês: *Decided*, *Still open*, *Who said what*). Em "
+    '*Quem disse o quê* escreve uma linha por pessoa, a começar por "- Nome:", com '
+    "a posição ou proposta mais recente dessa pessoa; se mudou de ideias, diz de "
+    "quê para quê. Uma opção que foi posta de parte ou abandonada não está em "
+    "aberto: diz que caiu e, se a razão estiver nas mensagens, porquê. Junta as "
+    "opções repetidas numa só. Só atribuis uma posição a alguém se houver uma "
+    'mensagem dessa pessoa que a mostre. Se nada foi decidido, diz "nada decidido '
+    'ainda". Ignora as mensagens que não são sobre o tema. Não inventes opções, '
+    "datas, preços nem pessoas."
 )
-NO_TOPIC_INSTRUCTION = (
-    "Não foi possível perceber de que tema queres o resumo. Pergunta qual é o "
-    "tema numa frase, em vez de fazeres um resumo."
+CHAT_INSTRUCTION = (
+    "Responde a «{request}» usando só as mensagens desta conversa{period} dadas "
+    "acima. Se a pergunta é específica (só o que se decidiu, o que uma pessoa "
+    "disse, quem propôs uma coisa), responde só a isso, em poucas frases e sem "
+    "secções. Se é um pedido geral de resumo: primeiro os assuntos principais, um "
+    "a um, cada um com uma ou duas frases; depois, se houver, o que ficou decidido "
+    "e o que está em aberto, e quem defendeu o quê nos pontos que importam. Usa "
+    "títulos em negrito do WhatsApp, com um só asterisco de cada lado, todos na "
+    "língua da resposta. Só atribuis uma posição a alguém se houver uma mensagem "
+    "dessa pessoa que a mostre. Não inventes nada."
+)
+NO_MESSAGES_INSTRUCTION = (
+    "Não há mensagens nesta conversa{period} para resumir. Diz isso numa frase e "
+    "não inventes um resumo."
 )
 NO_MATCH_INSTRUCTION = (
     'Não há mensagens sobre "{topic}" no histórico desta conversa. Diz isso numa '
@@ -82,6 +108,11 @@ UNREADABLE_INSTRUCTION = (
     "Não foi possível ler o histórico agora. Diz que não conseguiste fazer o "
     "resumo, em vez de inventares um."
 )
+
+
+# Verbs of asking for a recap, in any conjugation ("discutiu", "decidiram",
+# "resumes", "conversámos"): listing every form missed some.
+_REQUEST_STEMS = ("discut", "decid", "resum", "convers", "combin", "mencion", "suger", "propus")
 
 
 def recap_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -94,7 +125,8 @@ def topic_keywords(topic: str, max_keywords: int = 6) -> List[str]:
     """Folded content words of the topic, in order, deduplicated."""
     keywords: List[str] = []
     for token in re.findall(r"[a-z0-9]+", _fold(topic or "")):
-        if len(token) >= 3 and token not in _STOPWORDS and token not in keywords:
+        if (len(token) >= 3 and token not in _STOPWORDS and not token.startswith(_REQUEST_STEMS)
+                and token not in keywords):
             keywords.append(token)
     return keywords[:max_keywords]
 
@@ -123,6 +155,21 @@ def load_rows(log_dir: Any, scope: str) -> List[Dict[str, Any]]:
             rows.append({**row, "text": text})
     rows.sort(key=lambda row: int(row.get("timestamp") or 0))
     return rows
+
+
+def period_window(text: str, tz: Any, now: Optional[datetime] = None
+                  ) -> Optional[Tuple[int, int, str]]:
+    """The period a request names ("hoje", "ontem", "esta semana"...), as epoch
+    bounds and a label, or None. Same table the retriever uses for "ontem"."""
+    from src.chat.retriever import _recency_window
+
+    local_now = (now or datetime.now(tz)).astimezone(tz).replace(tzinfo=None)
+    found = _recency_window(text or "", local_now)
+    if found is None:
+        return None
+    start, end, label = found
+    return (int(datetime.fromisoformat(start).replace(tzinfo=tz).timestamp()),
+            int(datetime.fromisoformat(end).replace(tzinfo=tz).timestamp()), label)
 
 
 def keyword_pattern(keyword: str) -> Pattern:
@@ -252,16 +299,17 @@ def fit_budget(lines: List[str], seeds: Set[int], max_chars: int) -> Tuple[List[
     return [lines[index] for index in sorted(kept)], dropped
 
 
-_MARKDOWN_BOLD = re.compile(r"\*\*([^*\n]+?)\*\*")
+_MARKDOWN_BOLD = re.compile(r"\*{2,}([^*\n]+?)\*{2,}")
 
 
 def whatsapp_bold(text: str) -> str:
     """``**Decidido**`` (markdown) becomes ``*Decidido*`` (WhatsApp).
 
     Asked for WhatsApp bold, the model still wrote markdown on the real log
-    (2026-10-15), which WhatsApp shows as literal asterisks.
+    (2026-10-15), which WhatsApp shows as literal asterisks, and once escaped
+    them as well (``**\\*Decidido\\***``).
     """
-    return _MARKDOWN_BOLD.sub(r"*\1*", text or "")
+    return _MARKDOWN_BOLD.sub(r"*\1*", (text or "").replace("\\*", "*"))
 
 
 def protect_speaker_lines(text: str, speaker: str) -> str:
@@ -289,28 +337,47 @@ def gather(
     retriever: Any = None,
     resolver: Any = None,
     log_dir: Any = None,
+    request: str = "",
+    chat_id: Optional[str] = None,
+    now: Optional[datetime] = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """(context_block, instruction, stats) for one recap turn. Never raises
-    from the retriever; a log read error propagates to the caller."""
+    from the retriever; a log read error propagates to the caller.
+
+    Two kinds of request. One that names a subject ("o que decidimos sobre o
+    almoço de natal?", "quem propôs o Fuso?") reads the messages on it. One that
+    names none ("o que é que se discutiu?", "resume o que decidimos", "tl;dr")
+    reads this chat's recent conversation: the router would otherwise pass the
+    question itself as the topic, whose words are all request words, and find
+    nothing. A period in either ("hoje", "ontem", "esta semana") bounds the rows.
+    """
     cfg = recap_config(config)
     scope = scope or SHARED
     log_dir = log_dir or (config.get("whatsapp") or {}).get("message_log_dir", "data/live_messages")
     tz = ZoneInfo(((config.get("power") or {}).get("timezone")) or "Europe/Lisbon")
 
     topic = " ".join((topic or "").split())
+    request = " ".join((request or "").split())
+    period = period_window(f"{request} {topic}", tz, now)
     stats: Dict[str, Any] = {
         "recap_topic": topic, "recap_keywords": [], "recap_rows": 0, "recap_seed_rows": 0,
         "recap_semantic_chunks": 0, "recap_archive_chunks": 0, "recap_dropped_rows": 0,
+        "recap_mode": "topic", "recap_period": period[2] if period else "", "recap_this_chat": False,
     }
-    if not topic:
-        return "", NO_TOPIC_INSTRUCTION, stats
-
     keywords = topic_keywords(topic, int(cfg["max_keywords"]))
+    if request and not topic_keywords(request, int(cfg["max_keywords"])):
+        keywords = []
     stats["recap_keywords"] = keywords
+    rows = load_rows(log_dir, scope)
+    if period:
+        rows = [row for row in rows if period[0] <= int(row.get("timestamp") or 0) <= period[1]]
+
+    if not keywords:
+        return _chat_recap(cfg, rows, chat_id, period, resolver, tz, stats, now, request)
 
     windows: List[Tuple[int, int]] = []
     archive: List[str] = []
-    if retriever is not None:
+    if retriever is not None and not period:
         try:
             chunks = retriever.retrieve(topic, top_k=int(cfg["semantic_top_k"]), scope=scope)
         except Exception as exc:  # noqa: BLE001 — the log half still answers
@@ -321,10 +388,19 @@ def gather(
         stats["recap_semantic_chunks"] = len(windows)
         stats["recap_archive_chunks"] = len(archive)
 
-    rows = load_rows(log_dir, scope)
-    selected, seeds = select_rows(rows, keywords, windows, int(cfg["neighbour_rows"]),
-                                  int(cfg["neighbour_gap_minutes"]) * 60,
-                                  float(cfg["common_ratio"]), int(cfg["common_floor"]))
+    def select(candidates: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Set[int]]:
+        return select_rows(candidates, keywords, windows, int(cfg["neighbour_rows"]),
+                           int(cfg["neighbour_gap_minutes"]) * 60,
+                           float(cfg["common_ratio"]), int(cfg["common_floor"]))
+
+    # The discussion in the chat being asked comes first: "o que é que o Gil disse
+    # sobre o restaurante?" in the lunch chat is about that chat's restaurants, not
+    # every restaurant the main group mentioned in 90 days. Only a chat that never
+    # discussed the topic reads the rest of its scope.
+    selected, seeds = select([row for row in rows if row.get("chat_id") == chat_id]) if chat_id else ([], set())
+    stats["recap_this_chat"] = bool(seeds)
+    if not seeds:
+        selected, seeds = select(rows)
     lines = [format_line(row, resolver, tz) for row in selected]
     budget = int(cfg["max_chars"]) - sum(len(text) + 1 for text in archive)
     kept, dropped = fit_budget(lines, seeds, max(0, budget))
@@ -341,4 +417,32 @@ def gather(
         block += f"\n({dropped} mensagens mais antigas sobre o tema não couberam aqui.)"
     if archive:
         block += "\n\nConversas antigas que podem ser sobre o tema:\n" + "\n---\n".join(archive)
-    return block, RECAP_INSTRUCTION.format(topic=topic), stats
+    return block, RECAP_INSTRUCTION.format(request=request or topic, topic=topic), stats
+
+
+def _chat_recap(cfg: Dict[str, Any], rows: List[Dict[str, Any]], chat_id: Optional[str],
+                period: Optional[Tuple[int, int, str]], resolver: Any, tz: Any,
+                stats: Dict[str, Any], now: Optional[datetime],
+                request: str) -> Tuple[str, str, Dict[str, Any]]:
+    """A recap of this chat's recent conversation: its own messages only (never
+    another chat in the same scope), the named period or the last ``chat_days``,
+    newest kept when it does not all fit."""
+    stats["recap_mode"] = "chat"
+    period_text = f" ({period[2]})" if period else ""
+    if chat_id:
+        rows = [row for row in rows if row.get("chat_id") == chat_id]
+    if not period:
+        current = (now or datetime.now(tz)).timestamp()
+        since = current - float(cfg["chat_days"]) * 86400
+        rows = [row for row in rows if int(row.get("timestamp") or 0) >= since]
+    lines = [format_line(row, resolver, tz) for row in rows]
+    kept, dropped = fit_budget(lines, set(), int(cfg["max_chars"]))
+    stats["recap_rows"] = len(kept)
+    stats["recap_dropped_rows"] = dropped
+    if not kept:
+        return "", NO_MESSAGES_INSTRUCTION.format(period=period_text), stats
+    block = (f"Mensagens desta conversa{period_text} ({len(kept)} mensagens, as mais "
+             f"antigas primeiro):\n" + "\n".join(kept))
+    if dropped:
+        block += f"\n({dropped} mensagens mais antigas não couberam aqui.)"
+    return block, CHAT_INSTRUCTION.format(request=request or "resume a conversa", period=period_text), stats
