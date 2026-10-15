@@ -789,7 +789,7 @@ class KayaEngine:
                 messages, max_new_tokens=max_new_tokens, sampling=self._inf
             )
             if route.command == router.CMD_RECAP:
-                raw = recap.protect_speaker_lines(raw, speaker)
+                raw = recap.whatsapp_bold(recap.protect_speaker_lines(raw, speaker))
             text = clean_response(raw, user_name=speaker, bot_name="Kaya Bot")
 
             # One retry, hotter. Only one: this is inside the GPU lock, and
@@ -804,7 +804,7 @@ class KayaEngine:
                     messages, max_new_tokens=max_new_tokens, sampling=hotter
                 )
                 if route.command == router.CMD_RECAP:
-                    retry = recap.protect_speaker_lines(retry, speaker)
+                    retry = recap.whatsapp_bold(recap.protect_speaker_lines(retry, speaker))
                 retry_text = clean_response(retry, user_name=speaker, bot_name="Kaya Bot")
                 # Keep the retry only if it is actually different; a second
                 # duplicate is not an improvement over the first.

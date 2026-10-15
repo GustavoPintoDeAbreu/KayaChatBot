@@ -198,3 +198,7 @@ def test_gather_passes_the_scope_to_retrieval(tmp_path):
     retriever = Recording()
     recap.gather(_config(tmp_path), "almoço de natal", "dm:abc", retriever=retriever)
     assert retriever.scopes == ["dm:abc"]
+
+
+def test_whatsapp_bold_leaves_single_asterisks_alone():
+    assert recap.whatsapp_bold("**Decidido**\n*Em aberto*") == "*Decidido*\n*Em aberto*"

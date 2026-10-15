@@ -492,7 +492,7 @@ chat:
   # non-seed lines go first. Bot replies and the rolling summary are never used.
   recap:
     enabled: true
-    max_new_tokens: 450
+    max_new_tokens: 700     # 450 cut the real almoço natal recap mid-sentence
     semantic_top_k: 8
     neighbour_rows: 3
     neighbour_gap_minutes: 30

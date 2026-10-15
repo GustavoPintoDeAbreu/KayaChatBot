@@ -24,7 +24,7 @@ from src.data.message_log import MessageLog
 
 DEFAULTS: Dict[str, Any] = {
     "enabled": True,
-    "max_new_tokens": 450,
+    "max_new_tokens": 700,
     "semantic_top_k": 8,
     "neighbour_rows": 3,
     "neighbour_gap_minutes": 30,
@@ -58,8 +58,9 @@ _STOPWORDS = frozenset({
 RECAP_INSTRUCTION = (
     'Faz o ponto de situação de "{topic}" usando só as mensagens do histórico que '
     "te foram dadas acima. Usa três partes, cada uma com o título em negrito do "
-    "WhatsApp: *Decidido*, *Em aberto* e *Quem disse o quê* (em inglês, se a "
-    "pergunta for em inglês: *Decided*, *Still open*, *Who said what*). Em *Quem "
+    "WhatsApp, com um só asterisco de cada lado: *Decidido*, *Em aberto* e *Quem "
+    "disse o quê*. Os três títulos ficam todos na língua da resposta, nunca "
+    "misturados (em inglês: *Decided*, *Still open*, *Who said what*). Em *Quem "
     'disse o quê* escreve uma linha por pessoa, a começar por "- Nome:", com a '
     "posição ou proposta mais recente dessa pessoa; se mudou de ideias, diz de quê "
     "para quê. Uma opção que foi posta de parte ou abandonada não está em aberto: "
@@ -249,6 +250,18 @@ def fit_budget(lines: List[str], seeds: Set[int], max_chars: int) -> Tuple[List[
         total -= len(lines[index]) + 1
         dropped += 1
     return [lines[index] for index in sorted(kept)], dropped
+
+
+_MARKDOWN_BOLD = re.compile(r"\*\*([^*\n]+?)\*\*")
+
+
+def whatsapp_bold(text: str) -> str:
+    """``**Decidido**`` (markdown) becomes ``*Decidido*`` (WhatsApp).
+
+    Asked for WhatsApp bold, the model still wrote markdown on the real log
+    (2026-10-15), which WhatsApp shows as literal asterisks.
+    """
+    return _MARKDOWN_BOLD.sub(r"*\1*", text or "")
 
 
 def protect_speaker_lines(text: str, speaker: str) -> str:
