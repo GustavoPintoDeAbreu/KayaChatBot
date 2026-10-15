@@ -81,9 +81,9 @@ RC_STOPPED = "{name} stopped."
 RC_NOT_RUNNING = "No {name} session is running."
 RC_FAILED = "Couldn't start {name} ({error})."
 RC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
-SUDO_TTL_SECONDS = 120.0
+SUDO_TTL_SECONDS = 600.0
 SUDO_ASK = ("sudo on the PC:\n{command}\nin {cwd}, from {origin}\n\n"
-            'Reply "yes {code}" to allow it, "no {code}" to refuse (2 min).')
+            'Reply "yes {code}" to allow it, "no {code}" to refuse (10 min).')
 SUDO_ALLOWED = "Allowed: {command}"
 SUDO_REFUSED = "Refused: {command}"
 SUDO_REPLY = re.compile(r"^(yes|y|sim|s|ok|no|n|não|nao)(?:\s+(\d{4}))?$")
