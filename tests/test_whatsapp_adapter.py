@@ -2165,3 +2165,12 @@ def test_live_dm_reply_is_not_quoted(tmp_path):
     adapter, client = make_adapter(tmp_path)
     adapter.handle_event(dm_event("olá", message_id="live1"))
     assert client.sent[-1]["reply_to"] is None
+
+
+def test_a_recap_is_delivered_as_an_answer_not_a_command(tmp_path):
+    adapter = make_routed_adapter(
+        tmp_path, RoutedReply(text="*Decidido*\nnada decidido ainda", command="recap", mode="factual"))
+    result = adapter.handle_event(dm_event("o que decidimos?"), system_prompt="")
+    assert result["reply"] == "*Decidido*\nnada decidido ainda"
+    assert result.get("command") is None
+    assert adapter.waha_client.sent[-1]["text"].startswith("*Decidido*")

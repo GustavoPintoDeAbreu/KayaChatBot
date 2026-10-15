@@ -1840,7 +1840,8 @@ class WhatsAppAdapter:
         # A count was answered by generating, not by changing any state — the
         # engine counted the log and the model phrased it. It reaches here as a
         # command only so the routing decision stays visible in the telemetry.
-        if command == "count":
+        # A recap is also an answer, generated from the log.
+        if command in ("count", "recap"):
             command = None
 
         if command == "poll":
