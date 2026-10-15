@@ -1040,9 +1040,11 @@ cannot reword or add an option. A short line says what was left out.
   `poll_id`, chat, question, options, what was dropped, who asked — for a later
   pass to track who voted what. Nothing about a poll goes into `message_log` or
   ChromaDB.
-- **Off by default** (`chat.poll.enabled: false`) until
-  `scripts/preview_poll.py` looks right on a real chat: it runs the exact
-  production path and prints the draft, sending and writing nothing.
+- **On since 2026-10-15** (`chat.poll.enabled`), after `scripts/preview_poll.py`
+  looked right on the "almoço natal" chat: it runs the exact production path and
+  prints the draft, sending and writing nothing. Run it again after changing the
+  prompt. One thing it showed: the model may merge several restaurants of one
+  area into a single option.
 
 ### Agreeing is not answering (2026-08-17)
 

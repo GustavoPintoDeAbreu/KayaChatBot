@@ -583,12 +583,14 @@ chat:
         - "Lembrete amigo: o {tag} faz anos hoje 🎂 Toca a dar os parabéns!"
 
   # ── Polls (src/chat/polls.py) ───────────────────────────────────────────────
-  # Off until scripts/preview_poll.py looks right on a real chat. When asked to
-  # make a poll, the bot reads this chat's own log (lookback_days back) and the
-  # local model works out which options are still in play; the poll itself is a
-  # native WhatsApp message, and every sent one is recorded in `store`.
+  # On since 2026-10-15: scripts/preview_poll.py on the "almoço natal" chat read
+  # 262 messages and drafted 6 options, 4 left out with reasons, none invented
+  # (13 s). When asked to make a poll, the bot reads this chat's own log
+  # (lookback_days back) and the local model works out which options are still
+  # in play; the poll itself is a native WhatsApp message, and every sent one is
+  # recorded in `store`.
   poll:
-    enabled: false
+    enabled: true
     store: data/polls.jsonl
     lookback_days: 90
     max_messages: 2000
