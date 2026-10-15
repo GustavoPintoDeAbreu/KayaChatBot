@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
-WAIT_SECONDS = 125.0
+WAIT_SECONDS = 605.0
 POLL_SECONDS = 2.0
 
 
