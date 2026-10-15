@@ -44,6 +44,7 @@ missing `Q:` line simply leaves the raw message as the retrieval query.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -179,9 +180,19 @@ CMD_RECAP is for a SUMMARY of a discussion. A single fact is FACTUAL, a number i
   "quantas vezes falámos do jantar?" -> CMD_COUNT
   "quem tem razão sobre o restaurante?" -> DEBATE
   "resume lá isto" -> CMD_RECAP (the subject is whatever the recent conversation is about)
+  "o que é que se discutiu?" / "o que foi discutido aqui?" -> CMD_RECAP
+  "resume o que decidimos" / "em que ficámos?" / "tl;dr?" -> CMD_RECAP
+  "o que é que falámos ontem?" -> CMD_RECAP
+  "o que é que o Gil disse sobre o restaurante?" -> CMD_RECAP (what one person said in a discussion)
+  "quem propôs o Fuso?" -> CMD_RECAP (who said what in a discussion)
+  "quem é o Peter?" -> FACTUAL (a fact about a person, not a discussion)
+  "temos de decidir isto" / "precisamos de escolher um sítio" -> MIXED (a statement, not a request for a summary)
 
-CMD_POLL is only for a request to MAKE a poll. Talking about a poll, voting, or asking which option is best is not:
+CMD_POLL is only for a request to MAKE a poll, naming it (sondagem, votação, poll). Talking about a poll, voting, deciding, or asking which option is best is not:
   "faz uma sondagem com os sítios que falámos" -> CMD_POLL
+  "vamos votar?" -> BANTER (people talking about voting, not asking the bot for a poll)
+  "votem lá" -> BANTER
+  "kaya ajuda-nos a decidir" -> MIXED (help with the choice, not a poll)
   "a sondagem do Pedro estava mal feita" -> BANTER (an opinion about a poll)
   "votei no Chico" -> BANTER
   "quem é que já votou?" -> CMD_POLL_STATUS (a question about the poll, not a request to make one)
@@ -236,10 +247,11 @@ group's memory, so it must stand on its own without the conversation:
   "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
   "quem é o Peter?" -> Q: quem é o Peter?
   "do que se trata a minha start up?" -> Q: do que se trata a startup do Pedro?
-For CMD_RECAP the Q: line names only the SUBJECT, resolved from the recent conversation, never the request itself:
-  "o que é que decidimos?" in a thread about the Christmas lunch -> Q: almoço de natal
+For CMD_RECAP the Q: line names only the SUBJECT the message names, never the request itself. A general request that names no subject gets NO Q: line: the bot then sums up the recent conversation of the chat:
   "resume o que dissemos sobre a viagem" -> Q: viagem
-  "faz um resumo" with no subject anywhere in the conversation -> no Q: line
+  "o que é que o Gil disse sobre o restaurante?" -> Q: restaurante
+  "quem propôs o Fuso?" -> Q: Fuso
+  "o que é que decidimos?" / "o que se discutiu?" / "faz um resumo" -> no Q: line
 Omit the Q: line entirely when there is nothing to look up — for BANTER and for
 pure commands other than CMD_POLL. Do not invent a question that was not asked:
   "Conheço uns quantos ya" -> no Q: line (nobody asked anything)
@@ -345,6 +357,18 @@ def reconcile(route: Route, named_in_message: Sequence[str],
     if not any(str(name).lower() in in_recent for name in named_in_message):
         return route
     return replace(route, mode=MIXED, reconciled_from=GENERAL)
+
+
+_POLL_WORDS = re.compile(r"\b(sondage\w*|votac\w*|polls?|enquetes?|inqueritos?)\b|\ba votos\b")
+
+
+def asks_for_poll(message: str) -> bool:
+    """Whether the message names a poll. CMD_POLL needs it: the router has read
+    "vamos votar?" and "ajuda-nos a decidir" as requests for one (2026-10-15),
+    and a poll nobody asked for is posted to the whole group."""
+    folded = "".join(ch for ch in unicodedata.normalize("NFD", (message or "").lower())
+                     if unicodedata.category(ch) != "Mn")
+    return bool(_POLL_WORDS.search(folded))
 
 
 def classify(

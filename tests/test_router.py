@@ -520,3 +520,12 @@ def test_the_prompt_describes_recaps():
     router.classify(backend, _config(), "resume isto")
     system = backend.calls[0]["messages"][0]["content"]
     assert "CMD_RECAP" in system and "names only the SUBJECT" in system
+
+
+
+def test_a_poll_must_be_asked_for_by_name():
+    for message in ("faz uma sondagem com os sítios", "mete isso numa poll", "cria uma votação",
+                    "põe isso a votos", "make a poll"):
+        assert router.asks_for_poll(message), message
+    for message in ("vamos votar?", "votem lá", "kaya ajuda-nos a decidir", "qual preferem?"):
+        assert not router.asks_for_poll(message), message
