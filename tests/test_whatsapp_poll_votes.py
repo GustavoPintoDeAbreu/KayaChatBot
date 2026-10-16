@@ -125,11 +125,20 @@ def test_vote_never_reaches_message_log_or_session(tmp_path):
     assert adapter.session_store.recent(GROUP, 10) == []
 
 
-def test_poll_vote_failed_is_acknowledged_not_raised(tmp_path):
+def test_poll_vote_failed_records_who_voted_not_the_choice(tmp_path):
+    # NOWEB without its store: every vote is "failed", but it says who tapped
     adapter, client, log, registry = make_adapter(tmp_path)
-    result = adapter.handle_poll_vote(_vote_event(event="poll.vote.failed"))
-    assert result == {"poll_vote_failed": True}
-    assert registry.get("key1") is None
+    result = adapter.handle_poll_vote(_vote_event(options=(), event="poll.vote.failed"))
+    assert result["poll_vote_failed"] is True and result["recorded"] is True
+    vote = registry.get("key1")["votes"]["351911111111"]
+    assert vote["unknown"] is True and vote["options"] == []
+
+
+def test_poll_vote_failed_without_a_registry_is_only_acknowledged(tmp_path):
+    adapter, client, log, registry = make_adapter(tmp_path)
+    adapter.poll_registry = None
+    assert adapter.handle_poll_vote(_vote_event(event="poll.vote.failed")) == {
+        "poll_vote_failed": True}
 
 
 def test_disabled_registry_ignores_votes(tmp_path):

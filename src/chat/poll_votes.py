@@ -6,7 +6,12 @@ records who voted on each poll in ``data/poll_votes.json``, and a prod-only
 scheduler @-mentions the people who have not voted every few hours until everyone
 has, the poll is old enough to stop, or nobody can be identified.
 
-This ships ``enabled: false``, and turning it on needs a WAHA change first.
+Without that store NOWEB still sends ``poll.vote.failed`` for every tap, and the
+failed event carries who voted (``vote.from``) but not what they picked. Those are
+recorded as ``unknown`` votes: enough to know who still has to vote and to remind
+them, never counted in a tally (2026-10-16, the owner's choice over the store change).
+
+This first shipped ``enabled: false``, waiting on that WAHA change.
 Checked against the Pi's WAHA (noweb-arm-2026.8.2) on 2026-10-15: NOWEB decrypts
 a vote by looking up the poll message **by id alone**, and only the persistent
 store can do that (``NowebPersistentStore.loadMessage`` with no jid); the
@@ -69,16 +74,33 @@ class PollVote:
     timestamp: Optional[int]
     poll_from_me: bool
     vote_from_me: bool
+    # A tap WAHA could not decrypt: we know who voted, not what they picked.
+    unknown: bool = False
 
 
 def parse_waha_poll_vote(event: Dict[str, Any]) -> Optional[PollVote]:
     """The vote in a ``poll.vote`` event, or ``None`` when it is not one.
 
-    ``poll.vote.failed`` parses to ``None`` on purpose: the caller logs it and
-    moves on, because there is no voter to record.
+    ``poll.vote.failed`` parses to ``None`` here; ``parse_waha_poll_vote_failed``
+    reads its voter.
     """
     if event.get("event") not in POLL_VOTE_EVENTS:
         return None
+    return _parse_vote_payload(event, unknown=False)
+
+
+def parse_waha_poll_vote_failed(event: Dict[str, Any]) -> Optional[PollVote]:
+    """Who tapped, from a ``poll.vote.failed`` event (NOWEB without its store).
+
+    The choice is unreadable, so the vote is ``unknown`` with no options. A
+    retraction looks the same, so it still counts as voted: an accepted cost.
+    """
+    if event.get("event") not in POLL_VOTE_FAILED_EVENTS:
+        return None
+    return _parse_vote_payload(event, unknown=True)
+
+
+def _parse_vote_payload(event: Dict[str, Any], unknown: bool) -> Optional[PollVote]:
     payload = event.get("payload") or {}
     vote = payload.get("vote")
     poll = payload.get("poll")
@@ -103,7 +125,7 @@ def parse_waha_poll_vote(event: Dict[str, Any]) -> Optional[PollVote]:
     if not chat_id:
         chat_id = voter  # a DM: the poll lives in the voter's chat with the bot
 
-    options = [str(option) for option in (vote.get("selectedOptions") or [])]
+    options = [] if unknown else [str(option) for option in (vote.get("selectedOptions") or [])]
     timestamp = vote.get("timestamp")
     if isinstance(timestamp, int):
         timestamp = timestamp // 1000 if timestamp > 10**12 else timestamp
@@ -118,6 +140,7 @@ def parse_waha_poll_vote(event: Dict[str, Any]) -> Optional[PollVote]:
         timestamp=timestamp,
         poll_from_me=bool(poll.get("fromMe")),
         vote_from_me=bool(vote.get("fromMe")),
+        unknown=unknown,
     )
 
 
@@ -267,11 +290,20 @@ class PollRegistry:
             existing = record["votes"].get(_phone_from_alt(vote.voter_id))
             if existing and int(existing.get("at") or 0) > stored_at:
                 return False
-            record["votes"][_phone_from_alt(vote.voter_id)] = {
+            if vote.unknown and existing and not existing.get("unknown"):
+                # Never trade a decrypted choice for "voted, choice unknown".
+                return False
+            if vote.unknown and existing and existing.get("unknown"):
+                if int(existing.get("at") or 0) == stored_at:
+                    return False
+            entry = {
                 "name": voter_name,
                 "options": list(vote.options),
                 "at": stored_at,
             }
+            if vote.unknown:
+                entry["unknown"] = True
+            record["votes"][_phone_from_alt(vote.voter_id)] = entry
             for option in vote.options:
                 if option not in record["options"]:
                     record["options"].append(option)
@@ -401,7 +433,7 @@ def has_voted(poll: Dict[str, Any], voter: Voter) -> bool:
     """
     votes = poll.get("votes") or {}
     for key, vote in votes.items():
-        if not vote.get("options"):
+        if not vote.get("options") and not vote.get("unknown"):
             continue
         if key in voter.ids:
             return True
@@ -482,12 +514,21 @@ def status_text(poll: Dict[str, Any], voters: Sequence[Voter],
     configured ``power.timezone``), not a zone baked into the record.
     """
     votes = poll.get("votes") or {}
-    voted = sum(1 for vote in votes.values() if vote.get("options"))
+    known = sum(1 for vote in votes.values() if vote.get("options"))
+    unknown = sum(1 for vote in votes.values() if vote.get("unknown") and not vote.get("options"))
     created = int(poll.get("created_at") or 0)
     when = datetime.datetime.fromtimestamp(
         created, tz=ZoneInfo(timezone)).strftime("%d/%m")
-    lines = [f"Sondagem de {when}, {voted} pessoas votaram:"]
-    for option, names in tally(poll):
+    if unknown and not known:
+        lines = [f"Sondagem de {when}, {unknown} pessoas votaram. "
+                 "O WhatsApp não me deixa ver as escolhas, por isso não sei quem vai à frente."]
+        options = []
+    else:
+        head = f"Sondagem de {when}, {known + unknown} pessoas votaram"
+        head += (f" (de {unknown} não consigo ver a escolha):" if unknown else ":")
+        lines = [head]
+        options = tally(poll)
+    for option, names in options:
         if names:
             lines.append(f"{option}: {len(names)} ({', '.join(names)})")
         else:
