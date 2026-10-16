@@ -2174,3 +2174,57 @@ def test_a_recap_is_delivered_as_an_answer_not_a_command(tmp_path):
     assert result["reply"] == "*Decidido*\nnada decidido ainda"
     assert result.get("command") is None
     assert adapter.waha_client.sent[-1]["text"].startswith("*Decidido*")
+
+
+# ── a deferred message answered late says so (Almoço de Natal, 16 Oct) ─────
+def _late_adapter(tmp_path):
+    seen = {}
+
+    def responder(message, speaker, recent_lines, scope=None, exclude_from=None, late_note=""):
+        seen["late_note"] = late_note
+        return "ok"
+
+    store = KeyedSessionMemory(base_dir=str(tmp_path / "sessions"), max_lines=10)
+    config = {"whatsapp": {"bot_jid": BOT_JID, "send_seen": False, "history_turns": 5,
+                           "group": {"respond_on_mention": True, "respond_on_reply": True},
+                           "contacts": {"351911111111@c.us": "Alice"}}}
+    return WhatsAppAdapter(responder, MockWahaClient(echo=False), config, session_store=store), seen
+
+
+def test_deferred_message_hours_old_carries_a_late_note(tmp_path):
+    import time as _time
+    adapter, seen = _late_adapter(tmp_path)
+    adapter.ignore_before_ts = int(_time.time())
+    pending = adapter.ingest_event(_aged(group_event("@bot quem fez merda?", mention=True), 6 * 3600),
+                                   deferred=True)
+    adapter.complete(pending)
+    assert "há 6 horas" in seen["late_note"] and "respondes com atraso" in seen["late_note"]
+
+
+def test_short_deferral_and_live_messages_carry_no_note(tmp_path):
+    import time as _time
+    adapter, seen = _late_adapter(tmp_path)
+    adapter.ignore_before_ts = int(_time.time())
+    adapter.complete(adapter.ingest_event(_aged(group_event("@bot já?", mention=True), 600), deferred=True))
+    assert seen.get("late_note", "") == ""
+    adapter.ignore_before_ts = 0
+    adapter.complete(adapter.ingest_event(group_event("@bot agora", mention=True)))
+    assert seen.get("late_note", "") == ""
+
+
+def test_late_note_names_the_day_and_minutes(tmp_path):
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    adapter, _ = _late_adapter(tmp_path)
+    tz = ZoneInfo("Europe/Lisbon")
+    now = _dt.datetime(2026, 10, 16, 23, 44, tzinfo=tz).timestamp()
+    msg = parse_waha_message(group_event("@bot x", mention=True))
+    msg.deferred = True
+    msg.timestamp = _dt.datetime(2026, 10, 16, 17, 23, tzinfo=tz).timestamp()
+    assert adapter.late_note(msg, now).startswith("Esta mensagem é das 17:23 (há 6 horas).")
+    msg.timestamp = now - 45 * 60
+    assert "(há 45 minutos)" in adapter.late_note(msg, now)
+    msg.timestamp = _dt.datetime(2026, 10, 15, 22, 50, tzinfo=tz).timestamp()
+    assert adapter.late_note(msg, now).startswith("Esta mensagem é de ontem às 22:50")
+    msg.deferred = False
+    assert adapter.late_note(msg, now) == ""

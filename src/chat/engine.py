@@ -387,6 +387,7 @@ class KayaEngine:
         summary: str = "",
         retrieval_query: str = "",
         chat_id: Optional[str] = None,
+        late_note: str = "",
     ) -> tuple:
         """Return ``(user_message_full, context)`` for one local-model turn.
 
@@ -400,6 +401,10 @@ class KayaEngine:
         has in hand (today: the web-search result), prepended ahead of RAG.
         ``summary`` is this chat's rolling summary of what has already scrolled
         out of the verbatim window (see ``src/chat/summary.py``).
+
+        ``late_note`` says the message is being answered late (the PC was off
+        when it arrived), so the model can own the delay instead of replying as
+        if the conversation had not moved on.
 
         ``retrieval_query`` is the router's standalone rewrite of the message.
         It is used for the vector search ONLY: "E de bater na mãe?" embeds to
@@ -441,28 +446,45 @@ class KayaEngine:
             # Said outright, because these lines are no longer a transcript of
             # turns the bot took part in: it now reads everything said in the
             # chat, and most of it was people talking to each other.
+            #
+            # It used to end "…e responde só à última", and the last line of this
+            # block is somebody else's: on 16 Oct Peter's "That's my g" under the
+            # bot's own reply was answered as if it were Gustavo's line just
+            # above it ("Aceito o diagnóstico"). The message being answered comes
+            # AFTER this block, labelled, so the block points there.
             parts.append(
-                "Conversa recente no grupo (a maior parte destas mensagens não foi "
-                "dirigida a ti, é o grupo a falar; lê-as para teres contexto e "
-                "responde só à última). As linhas do Kaya Bot são tuas: foste tu "
+                "Conversa recente no grupo, só como contexto (a maior parte destas "
+                "mensagens não foi dirigida a ti, é o grupo a falar). Não respondas "
+                "a nenhuma destas linhas: a mensagem a que respondes vem no fim, "
+                "depois deste bloco. As linhas do Kaya Bot são tuas: foste tu "
                 "que as escreveste:\n" + "\n".join(trimmed))
         # Who is writing, said outright. In a group every history line looks like
         # "Nome: texto", so a final line in the same shape is a weak signal — and
         # it failed: asked "why he roasting ME in my iq guess", the bot carried on
         # working through the member list and answered about somebody else
         # entirely instead of resolving "me" to the person who had just written.
+        # "tu" is the bot: the message is addressed to it. Asked "quem fez merda
+        # @Kaya tu ou o fred?", it blamed Peter, the person the thread was about.
         if speaker_label and speaker_label != "User":
             parts.append(
                 f"Quem está a escrever agora é o {speaker_label}. "
                 f'"eu", "me", "mim" e "meu" nesta mensagem referem-se ao '
-                f"{speaker_label}."
+                f"{speaker_label}; "
+                f'"tu", "te", "ti", "contigo" e "você" referem-se a ti, o Kaya Bot.'
             )
+        if late_note:
+            parts.append(late_note)
         # Quoting the bot is quoting YOU. Without it the bot read Rafa's "am I
         # right?" under its own reply as somebody else's claim, and argued
         # against its own words ("did this mf just analyze his own response").
         if "[a responder a Kaya Bot:" in (message or ""):
-            parts.append("A mensagem responde a uma mensagem tua, a que vem citada.")
-        parts.append(f"{speaker_label}: {message}")
+            parts.append(
+                "A mensagem responde a uma mensagem tua, a que vem citada. Responde "
+                f"ao que o {speaker_label} diz sobre ela, não às linhas da conversa acima.")
+        if recent_lines:
+            parts.append(f"Mensagem a que respondes agora:\n{speaker_label}: {message}")
+        else:
+            parts.append(f"{speaker_label}: {message}")
         return "\n\n".join(parts), context
 
     def generate_reply(
@@ -496,6 +518,7 @@ class KayaEngine:
         summary: str = "",
         link_context: str = "",
         chat_id: Optional[str] = None,
+        late_note: str = "",
     ) -> "Reply":
         """Route, then answer. Returns the text plus the routing decision.
 
@@ -696,6 +719,7 @@ class KayaEngine:
                                or route.command == router.CMD_RECAP) else summary,
                 retrieval_query=route.query,
                 chat_id=chat_id,
+                late_note=late_note,
             )
             # A token cap alone won't make replies feel chatty — the model writes full
             # paragraphs well under it. Steer brevity explicitly unless detail was asked.
