@@ -402,3 +402,95 @@ def test_status_text_has_no_dashes():
     tokens, names, _ = poll_votes.reminder_text(poll, [bob])
     for line in (tokens, names):
         assert "—" not in line and "–" not in line and " - " not in line
+
+
+def failed_event(voter="184065839865899@lid", poll_id="true_" + CHAT + "_key1",
+                 timestamp=1_700_000_000):
+    """The shape NOWEB sends without its store (prod, 2026-10-15)."""
+    return {
+        "event": "poll.vote.failed",
+        "payload": {
+            "poll": {"id": poll_id, "to": CHAT, "from": "64622145081581@lid", "fromMe": True},
+            "vote": {"id": "false_" + CHAT + "_AC3F_" + voter, "to": CHAT, "from": voter,
+                     "fromMe": False, "selectedOptions": [], "timestamp": timestamp},
+        },
+    }
+
+
+def test_parse_failed_vote_keeps_the_voter_and_marks_it_unknown():
+    vote = poll_votes.parse_waha_poll_vote_failed(failed_event())
+    assert vote is not None and vote.unknown is True
+    assert vote.voter_id == "184065839865899@lid"
+    assert vote.chat_id == CHAT and vote.poll_id == "key1" and vote.options == []
+    assert poll_votes.parse_waha_poll_vote_failed(vote_event()) is None
+
+
+def test_a_failed_vote_counts_as_voted_by_its_lid(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["a", "b"], 1_700_000_000)
+    vote = poll_votes.parse_waha_poll_vote_failed(failed_event())
+    assert registry.record_vote(vote, "", 1_700_000_100) is True
+    poll = registry.get("key1")
+    mateus = poll_votes.Voter(name="Mateus", ids={"351967567614", "184065839865899"})
+    rui = poll_votes.Voter(name="Rui", ids={"351933333333"})
+    assert poll_votes.has_voted(poll, mateus) is True
+    assert poll_votes.missing_voters(poll, [mateus, rui]) == [rui]
+    assert all(not names for _, names in poll_votes.tally(poll))
+
+
+def test_an_unknown_vote_never_replaces_a_decrypted_one(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["sim", "não"], 1_700_000_000)
+    real = poll_votes.parse_waha_poll_vote(vote_event(voter="351911111111@c.us"))
+    registry.record_vote(real, "Alice", 1_700_000_000)
+    unknown = poll_votes.parse_waha_poll_vote_failed(
+        failed_event(voter="351911111111@c.us", timestamp=1_700_000_500))
+    assert registry.record_vote(unknown, "Alice", 1_700_000_500) is False
+    assert registry.get("key1")["votes"]["351911111111"]["options"] == ["sim"]
+
+
+def test_a_replayed_failed_vote_is_not_stored_twice(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["a"], 1_700_000_000)
+    vote = poll_votes.parse_waha_poll_vote_failed(failed_event())
+    assert registry.record_vote(vote, "", 1) is True
+    assert registry.record_vote(vote, "", 1) is False
+
+
+def test_reminder_with_only_unknown_votes_names_no_leader(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["a", "b"], 1_700_000_000)
+    registry.record_vote(poll_votes.parse_waha_poll_vote_failed(failed_event()), "", 1)
+    rui = poll_votes.Voter(name="Rui", ids={"351933333333"}, mention_jid="351933333333@c.us")
+    tokens, names, jids = poll_votes.reminder_text(registry.get("key1"), [rui])
+    assert names == "Ainda falta votar na sondagem: Rui."
+    assert "frente" not in tokens and jids == ["351933333333@c.us"]
+
+
+def test_status_text_says_the_choices_are_unreadable(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["a", "b"], 1_700_000_000)
+    registry.record_vote(poll_votes.parse_waha_poll_vote_failed(failed_event()), "", 1)
+    rui = poll_votes.Voter(name="Rui", ids={"351933333333"})
+    text = poll_votes.status_text(registry.get("key1"), [rui])
+    assert "1 pessoas votaram" in text and "não me deixa ver as escolhas" in text
+    assert "a: 0" not in text and "Falta votar: Rui." in text
+
+
+def test_status_text_mixes_known_and_unknown_votes(tmp_path):
+    registry = poll_votes.PollRegistry(tmp_path / "votes.json")
+    registry.register(CHAT, "key1", ["sim", "não"], 1_700_000_000)
+    registry.record_vote(poll_votes.parse_waha_poll_vote(vote_event()), "Alice", 1)
+    registry.record_vote(poll_votes.parse_waha_poll_vote_failed(failed_event()), "", 1)
+    text = poll_votes.status_text(registry.get("key1"), [])
+    assert text.splitlines()[0].endswith("2 pessoas votaram (de 1 não consigo ver a escolha):")
+    assert "sim: 1 (Alice)" in text
+
+
+def test_reminders_stop_after_48_hours():
+    created = 1_700_000_000
+    cfg = _remind_cfg(stop_after_hours=48)
+    at = lambda hours: datetime.datetime.fromtimestamp(created + hours * 3600, tz=LISBON)
+    poll = {"created_at": created, "reminded_slots": [], "last_reminder_at": None}
+    assert poll_votes.due_slot(poll, at(42.5), cfg) == created + 42 * 3600
+    assert poll_votes.due_slot(poll, at(48), cfg) is None

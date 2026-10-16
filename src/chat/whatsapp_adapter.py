@@ -885,13 +885,16 @@ class WhatsAppAdapter:
         """
         from src.chat import poll_votes
 
-        if event.get("event") in poll_votes.POLL_VOTE_FAILED_EVENTS:
+        failed = event.get("event") in poll_votes.POLL_VOTE_FAILED_EVENTS
+        if failed:
             logger.warning("WAHA reported a failed poll vote: %s",
                            json.dumps(event.get("payload", {}), ensure_ascii=False)[:300])
-            return {"poll_vote_failed": True}
         if self.poll_registry is None:
-            return None
-        vote = poll_votes.parse_waha_poll_vote(event)
+            return {"poll_vote_failed": True} if failed else None
+        # A failed vote still says who tapped: recorded as "voted, choice unknown"
+        # so the reminders skip them (src/chat/poll_votes.py).
+        vote = (poll_votes.parse_waha_poll_vote_failed(event) if failed
+                else poll_votes.parse_waha_poll_vote(event))
         if vote is None:
             return None
         name = self._name_for_jid(vote.voter_id)
@@ -901,9 +904,12 @@ class WhatsAppAdapter:
         if recorded:
             logger.info("poll vote recorded: %s on %s", name or vote.voter_id,
                         vote.poll_id)
-        return {"chat_id": vote.chat_id, "poll_id": vote.poll_id,
-                "voter": name or vote.voter_id, "options": list(vote.options),
-                "recorded": bool(recorded)}
+        result = {"chat_id": vote.chat_id, "poll_id": vote.poll_id,
+                  "voter": name or vote.voter_id, "options": list(vote.options),
+                  "recorded": bool(recorded)}
+        if failed:
+            result["poll_vote_failed"] = True
+        return result
 
     def _bot_local_ids(self) -> set:
         """The local parts of every bot identity, for the electorate filter."""

@@ -939,8 +939,21 @@ exists for messages. `src/chat/poll_votes.py` is the whole feature, and it is
 **stdlib-only and torch-free**: the Pi gateway imports it to journal the events,
 so it must stay out of the model stack (`tests/gateway/test_torch_free.py`).
 
-**Unverified WAHA assumptions** (ships `enabled: false` until a real event is
-captured on the Pi and its shape matches the parser): the event is named
+**On since 2026-10-16, counting failed votes.** The first real events (the
+"almoço natal" poll, 2026-10-15) all arrived as `poll.vote.failed`: NOWEB
+decrypts a vote by looking up the poll message by id alone, which only its
+persistent store can do, and the session runs without it. A failed event still
+carries **who** tapped (`vote.from`, an `@lid` matching the message log's
+`sender_id`), so `parse_waha_poll_vote_failed` records it as `unknown: true`
+with no options. That counts as voted for the reminders and is never tallied;
+`status_text` says the choices are unreadable. A decrypted vote is never replaced
+by an unknown one, and a retraction is indistinguishable from a vote (accepted).
+Turning the WAHA store on would give real tallies; Gustavo chose not to touch the
+live session for now. Polls posted while this was off are seeded with
+`scripts/seed_poll_votes.py` (from `data/polls.jsonl` plus a grep of the logged
+failed votes). Reminders: every 6 h for 48 h, 10:00 to 22:00, straight to the group.
+
+**WAHA assumptions, as first written** (before the first real event): the event is named
 `poll.vote` (with `poll.vote.failed` when a vote cannot be decrypted); the
 payload shape — `payload.poll.id` for the poll, `payload.vote` for the voter — is
 from WAHA's public docs, not this repo, and which of `vote.from` / `vote.to` /

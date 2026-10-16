@@ -830,19 +830,20 @@ whatsapp:
   # WAHA's poll.vote events and forwards them; the PC records who voted in
   # data/poll_votes.json and, in prod only, @-mentions the non-voters every
   # interval_hours until everyone has, the poll is older than
-  # stop_after_hours, or nobody can be identified. Off until a real event is
-  # captured on the Pi and its shape matches the parser. WAHA must run the
-  # NOWEB persistent store (config.noweb.store.enabled) or no vote ever arrives.
+  # stop_after_hours, or nobody can be identified. Without WAHA's NOWEB
+  # persistent store (config.noweb.store.enabled) every vote arrives as
+  # poll.vote.failed: we see who tapped, not the choice, so reminders work and
+  # "quem está a ganhar?" only gives the count.
   poll_votes:
-    enabled: false
+    enabled: true                 # 2026-10-16: on, counting WAHA's failed votes as "voted, choice unknown"
     store: data/poll_votes.json
     electorate_days: 60
     status_max_age_hours: 168
     remind:
       enabled: true
-      dry_run: true
+      dry_run: false
       interval_hours: 6
-      stop_after_hours: 24
+      stop_after_hours: 48          # every 6 h for 48 h (Gustavo, 2026-10-16)
       min_gap_hours: 3
       send_between: ["10:00", "22:00"]
 
