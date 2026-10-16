@@ -241,9 +241,13 @@ subject only exists in the lines above it, it is BANTER.
 Then, on a SECOND line, write "Q: " followed by the message rewritten as a
 standalone question or request, with every pronoun and ellipsis resolved from the
 recent conversation, naming the people it is about. "eu", "me", "mim", "I" and
-"me" are the person who wrote the message. This is used to search the
-group's memory, so it must stand on its own without the conversation:
+"me" are the person who wrote the message. "tu", "te", "ti", "contigo", "você"
+and "you" are the bot itself, because the message is addressed to it: write
+"a Kaya" for them, never a member's name, even when the conversation above is
+about somebody else. This is used to search the group's memory, so it must stand
+on its own without the conversation:
   "e ele?" -> Q: o Bernardo também faz isso?
+  "quem fez merda tu ou o fred?" -> Q: quem fez asneira, a Kaya ou o Frederico?
   "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
   "quem é o Peter?" -> Q: quem é o Peter?
   "do que se trata a minha start up?" -> Q: do que se trata a startup do Pedro?

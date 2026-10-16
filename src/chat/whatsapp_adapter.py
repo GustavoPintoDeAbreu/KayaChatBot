@@ -590,8 +590,13 @@ class WhatsAppAdapter:
         self.log_messages = bool(wcfg.get("log_messages", True))
         self.history_turns = int(wcfg.get("history_turns", 10))
         self.send_seen = bool(wcfg.get("send_seen", True))
-        self.deferred_max_age_hours = float(
-            (wcfg.get("deferred_reply") or {}).get("max_age_hours", 12))
+        dcfg = wcfg.get("deferred_reply") or {}
+        self.deferred_max_age_hours = float(dcfg.get("max_age_hours", 12))
+        # A deferred message older than this is answered with a note saying so:
+        # on 16 Oct a 17:23 question got a 23:44 roast that read as if nothing
+        # had been said in between.
+        self.deferred_late_note_s = float(dcfg.get("late_note_after_minutes", 30)) * 60
+        self.deferred_timezone = str(dcfg.get("timezone", "Europe/Lisbon"))
         # Messages older than this (unix seconds) are ignored — set on startup so a
         # reconnecting WAHA replaying backlog doesn't make the bot answer stale msgs.
         self.ignore_before_ts = 0
@@ -688,6 +693,7 @@ class WhatsAppAdapter:
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self._responder_takes_links = _accepts_kwarg(responder, "link_context")
         self._responder_takes_chat_id = _accepts_kwarg(responder, "chat_id")
+        self._responder_takes_late_note = _accepts_kwarg(responder, "late_note")
         self.tts_synthesize = tts_synthesize
         # What a reply sounds like is not what it looks like: emoji, markdown and
         # URLs are read out loud by Piper. Injected like tts_synthesize so the
@@ -1231,6 +1237,37 @@ class WhatsAppAdapter:
             if candidate in self.contacts:
                 return self.contacts[candidate]
         return ""
+
+    def late_note(self, msg: InboundMessage, now: Optional[float] = None) -> str:
+        """The prompt line for a message answered late, or "".
+
+        Only for a deferred message (the gateway held it while the PC was off)
+        older than ``deferred_reply.late_note_after_minutes``. A fresh one, or a
+        short outage, reads as an ordinary reply.
+        """
+        if not msg.deferred or not msg.timestamp:
+            return ""
+        now = time.time() if now is None else now
+        age = now - msg.timestamp
+        if age < self.deferred_late_note_s:
+            return ""
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(self.deferred_timezone)
+        sent = datetime.datetime.fromtimestamp(msg.timestamp, tz)
+        today = datetime.datetime.fromtimestamp(now, tz).date()
+        when = sent.strftime("%H:%M")
+        if sent.date() != today:
+            when = ("de ontem às " if sent.date() == today - datetime.timedelta(days=1)
+                    else sent.strftime("de %d/%m às ")) + when
+        else:
+            when = "das " + when
+        ago = (f"há {round(age / 3600)} horas" if age >= 5400
+               else f"há {round(age / 60)} minutos")
+        return (f"Esta mensagem é {when} ({ago}). Estavas desligado quando chegou e só a "
+                "vês agora, por isso respondes com atraso e o grupo pode já ter seguido "
+                "em frente: não respondas como se tivesse acabado de chegar, e podes "
+                "dizer que respondes tarde.")
 
     def quoted_context(self, msg: InboundMessage) -> str:
         """The message this one replies to, as a line to put above it.
@@ -1811,6 +1848,9 @@ class WhatsAppAdapter:
                 excerpt for _, excerpt in self._read_links(msg.quoted_text, {}) if excerpt)
         if link_context and self._responder_takes_links:
             kwargs["link_context"] = link_context
+        late = self.late_note(msg)
+        if late and self._responder_takes_late_note:
+            kwargs["late_note"] = late
         asked = f"{quoted}\n{text}" if quoted else text
         return PendingReply(msg=msg, speaker=speaker, text=text, asked=asked,
                             recent=recent, kwargs=kwargs)

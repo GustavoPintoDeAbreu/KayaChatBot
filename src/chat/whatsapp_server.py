@@ -224,7 +224,7 @@ engine.system_prompt_factory = _prompt_for_turn
 
 def _responder(message: str, speaker: str, recent_lines, scope=None,
                exclude_from=None, summary: str = "", link_context: str = "",
-               chat_id: str = ""):
+               chat_id: str = "", late_note: str = ""):
     """Answer one message, returning the text AND how it was routed.
 
     ``respond`` (rather than ``generate_reply``) so the adapter can act on routed
@@ -236,11 +236,12 @@ def _responder(message: str, speaker: str, recent_lines, scope=None,
     already carries verbatim. ``summary`` is this chat's rolling summary of the
     turns that have already scrolled out of that window. ``chat_id`` is the chat
     to read when building a poll: community sub-groups share one log file.
+    ``late_note`` marks a message the gateway held while the PC was off.
     """
     return engine.respond(
         message, speaker, recent_lines, _system_prompt,
         scope=scope, exclude_from=exclude_from, summary=summary,
-        link_context=link_context, chat_id=chat_id,
+        link_context=link_context, chat_id=chat_id, late_note=late_note,
     )
 
 
