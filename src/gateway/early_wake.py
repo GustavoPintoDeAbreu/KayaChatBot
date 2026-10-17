@@ -1,7 +1,7 @@
 """Wake the PC earlier than its scheduled wake, when the idea pipeline asks.
 
 The PC's nightly shutdown honours a wake request the idea pipeline writes
-(``~/.wake-at``) and posts the chosen time as ``wake_at`` with
+(``~/.idea-wake-at``) and posts the chosen time as ``wake_at`` with
 ``/pc/going-down``. The gateway keeps it in the journal's meta table, so a
 restart does not lose it, and when the time is due it writes the same
 ``pc-wake.request`` file ``/homelabon`` writes, so the existing

@@ -1374,7 +1374,7 @@ power:
   timezone: "Europe/Lisbon"
   wake_time: "07:00"
   wol_lead_minutes: 5
-  # An early wake the idea pipeline asks for (its ~/.wake-at) is honoured only
+  # An early wake the idea pipeline asks for (its ~/.idea-wake-at) is honoured only
   # at least this long before wake_time: the PC still gives up that long before 07:00.
   early_wake_margin_minutes: 60
   shutdown:

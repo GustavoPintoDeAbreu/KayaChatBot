@@ -18,7 +18,7 @@
 # `cancel` file (written by the power listener) stops the wait.
 #
 # --after-early-wake: ten minutes after a boot that was an early wake for the
-# idea pipeline (its ~/.wake-at, honoured by the previous night's shutdown),
+# idea pipeline (its ~/.idea-wake-at, honoured by the previous night's shutdown),
 # run the same postponing loop: the PC powers off again once idle, and honours
 # a new request when it does. The day has started by then and the PC stays on.
 #
@@ -68,7 +68,7 @@ MANUAL_UPDATE_MINUTES="${POWER_MANUAL_UPDATE_MINUTES:-30}"
 MANUAL_MAX_WAIT_MINUTES="${POWER_MANUAL_MAX_WAIT_MINUTES:-720}"
 # The idea pipeline's wake request (epoch seconds on the first line) and the
 # marker of the early wake this boot followed, written at poweroff.
-WAKE_REQUEST_FILE="${POWER_WAKE_REQUEST_FILE:-$USER_HOME/.wake-at}"
+WAKE_REQUEST_FILE="${POWER_WAKE_REQUEST_FILE:-$USER_HOME/.idea-wake-at}"
 EARLY_WAKE_FILE="${POWER_EARLY_WAKE_FILE:-/var/lib/kaya-power/early-wake}"
 
 say() { echo "[kaya-shutdown] $*"; }

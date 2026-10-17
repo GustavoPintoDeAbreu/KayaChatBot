@@ -154,7 +154,7 @@ up for a night; remove it afterwards. To go back to turning it off by hand, set
 ## Waking early for the idea pipeline
 
 The idea pipeline (a sibling project) waits on Claude's quota at night. When the
-quota runs out it writes a wake request — `~/.wake-at`, the epoch seconds on the
+quota runs out it writes a wake request — `~/.idea-wake-at`, the epoch seconds on the
 first line (override the path with `POWER_WAKE_REQUEST_FILE` in
 `/etc/kaya-power.env`) — and the nightly shutdown honours it: the PC wakes at
 the reset time instead of 07:00.
