@@ -1,7 +1,9 @@
 """The Pi gateway's two apps: webhook -> journal, offline reply, media, status."""
 import asyncio
+import datetime
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -19,6 +21,13 @@ ALICE = "351911111111@c.us"
 POWER = {"timezone": "Europe/Lisbon", "wake_time": "07:00", "wol_lead_minutes": 5,
          "shutdown": {"sun": "23:00", "mon": "23:00", "tue": "23:00", "wed": "23:00",
                       "thu": "23:00", "fri": "02:00", "sat": "02:00"}}
+
+_TZ = ZoneInfo("Europe/Lisbon")
+
+
+def _at(day, hour, minute=0) -> datetime.datetime:
+    """October 2026, Europe/Lisbon: Wednesday is the 21st, before the 25th DST change."""
+    return datetime.datetime(2026, 10, day, hour, minute, tzinfo=_TZ)
 
 
 class Clock:
@@ -138,6 +147,53 @@ def test_going_down_needs_the_relay_token(rig):
     assert client.post("/pc/going-down").status_code == 401
     assert client.post("/pc/going-down", headers={"X-Relay-Token": "relay"}).json() == {"ok": True}
     assert monitor.state is PcState.GOING_DOWN
+
+
+def test_going_down_with_wake_at_schedules_an_early_wake(rig):
+    gateway, clock, monitor, _, _ = rig
+    clock.value = _at(21, 23, 30).timestamp()
+    client = TestClient(gateway.internal_app)
+    body = client.post("/pc/going-down", json={"wake_at": int(_at(22, 3, 0).timestamp())},
+                       headers={"X-Relay-Token": "relay"}).json()
+    assert body == {"ok": True, "wake_at": int(_at(22, 3, 0).timestamp())}
+    assert gateway.early_wake.pending() == _at(22, 3, 0).timestamp()
+    assert monitor.state is PcState.GOING_DOWN
+
+
+def test_going_down_without_a_body_clears_the_early_wake(rig):
+    gateway, clock, _, _, _ = rig
+    clock.value = _at(21, 23, 30).timestamp()
+    client = TestClient(gateway.internal_app)
+    client.post("/pc/going-down", json={"wake_at": int(_at(22, 3, 0).timestamp())},
+                headers={"X-Relay-Token": "relay"})
+    assert gateway.early_wake.pending() is not None
+    body = client.post("/pc/going-down", headers={"X-Relay-Token": "relay"}).json()
+    assert body == {"ok": True}
+    assert gateway.early_wake.pending() is None
+
+
+def test_going_down_with_a_bad_body_still_announces(rig):
+    gateway, clock, monitor, _, _ = rig
+    clock.value = _at(21, 23, 30).timestamp()
+    client = TestClient(gateway.internal_app)
+    response = client.post("/pc/going-down", content="not json",
+                           headers={"X-Relay-Token": "relay",
+                                    "Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert monitor.state is PcState.GOING_DOWN
+
+
+def test_early_wake_is_in_the_internal_status_only(rig):
+    gateway, clock, _, _, _ = rig
+    clock.value = _at(21, 23, 30).timestamp()
+    client = TestClient(gateway.internal_app)
+    client.post("/pc/going-down", json={"wake_at": int(_at(22, 3, 0).timestamp())},
+                headers={"X-Relay-Token": "relay"})
+    internal = TestClient(gateway.internal_app).get("/status").json()
+    assert internal["early_wake"] == _at(22, 3, 0).isoformat()
+    public = TestClient(gateway.public_app).get("/status").json()
+    assert "early_wake" not in public
 
 
 def test_public_app_serves_the_page_and_a_reduced_status(rig):
