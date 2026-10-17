@@ -37,6 +37,15 @@ def _sched() -> PowerSchedule:
     return PowerSchedule.from_config(_POWER)
 
 
+def _at(day, hour, minute=0) -> datetime.datetime:
+    """October 2026, Europe/Lisbon: Wednesday is the 21st, before the 25th DST change."""
+    return datetime.datetime(2026, 10, day, hour, minute, tzinfo=TZ)
+
+
+def _epoch(moment: datetime.datetime) -> int:
+    return int(moment.timestamp())
+
+
 def _naive(year, month, day, hour, minute):
     """Helper: create a naive datetime, interpreted as Europe/Lisbon."""
     return datetime.datetime(year, month, day, hour, minute)
@@ -166,6 +175,74 @@ class TestManualOff:
             self._manual().next_shutdown(_naive(2026, 10, 4, 12, 0))
 
 
+# ── early wake ───────────────────────────────────────────────────────────
+
+class TestEarlyWake:
+    def test_honoured_inside_the_window(self):
+        """Wed 23:30, asked for Thu 03:00 → honoured."""
+        now = _at(21, 23, 30)
+        requested = _at(22, 3, 0)
+        assert _sched().early_wake(now, requested) == requested
+
+    def test_boundary_one_hour_before_wake(self):
+        """Exactly one hour before 07:00 is honoured; one minute after is not."""
+        now = _at(21, 23, 30)
+        assert _sched().early_wake(now, _at(22, 6, 0)) == _at(22, 6, 0)
+        assert _sched().early_wake(now, _at(22, 6, 1)) is None
+
+    def test_after_the_wake_is_ignored(self):
+        now = _at(22, 3, 0)
+        assert _sched().early_wake(now, _at(22, 8, 0)) is None
+
+    def test_past_request_is_ignored(self):
+        now = _at(21, 23, 30)
+        assert _sched().early_wake(now, _at(21, 23, 0)) is None
+
+    def test_before_the_window_is_ignored(self):
+        now = _at(21, 22, 30)
+        assert _sched().early_wake(now, _at(22, 3, 0)) is None
+
+    def test_friday_window_starts_at_two(self):
+        """Friday 23:30 is still on; the window opens Saturday 02:00."""
+        assert _sched().early_wake(_at(23, 23, 30), _at(24, 3, 0)) is None
+        assert _sched().early_wake(_at(24, 2, 30), _at(24, 4, 0)) == _at(24, 4, 0)
+
+    def test_no_shutdown_schedule_never_honours(self):
+        sched = PowerSchedule.from_config({**_POWER, "shutdown": {}})
+        assert sched.early_wake(_at(21, 23, 30), _at(22, 3, 0)) is None
+
+    def test_margin_comes_from_config(self):
+        sched = PowerSchedule.from_config({**_POWER, "early_wake_margin_minutes": 30})
+        now = _at(21, 23, 30)
+        assert sched.early_wake(now, _at(22, 6, 20)) == _at(22, 6, 20)
+        assert sched.early_wake(now, _at(22, 6, 31)) is None
+
+
+class TestReadWakeRequest:
+    def test_missing_file(self, tmp_path):
+        from src.gateway.schedule import read_wake_request
+        assert read_wake_request(str(tmp_path / "nope")) is None
+
+    def test_integer(self, tmp_path):
+        from src.gateway.schedule import read_wake_request
+        path = tmp_path / "wake-at"
+        path.write_text("1792100000\n", encoding="utf-8")
+        assert read_wake_request(str(path)) == 1792100000.0
+
+    def test_first_line_only(self, tmp_path):
+        from src.gateway.schedule import read_wake_request
+        path = tmp_path / "wake-at"
+        path.write_text("1792100000.5\nextra", encoding="utf-8")
+        assert read_wake_request(str(path)) == 1792100000.5
+
+    @pytest.mark.parametrize("text", ["", "abc", "nan", "inf", "-5"])
+    def test_invalid(self, tmp_path, text):
+        from src.gateway.schedule import read_wake_request
+        path = tmp_path / "wake-at"
+        path.write_text(text, encoding="utf-8")
+        assert read_wake_request(str(path)) is None
+
+
 # ── CLI smoke ────────────────────────────────────────────────────────────
 
 class TestCLISmoke:
@@ -195,3 +272,63 @@ class TestCLISmoke:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == "*-*-* 06:55:00"
+
+    def test_early_wake_epoch(self, tmp_path):
+        repo = Path(__file__).parent.parent.parent
+        request = tmp_path / "wake-at"
+        request.write_text(f"{_epoch(_at(22, 3, 0))}\n", encoding="utf-8")
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "src.gateway.schedule",
+                "--config", str(repo / "config.yaml"),
+                "--now", str(_epoch(_at(21, 23, 30))),
+                "--wake-request", str(request),
+                "early-wake-epoch",
+            ],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == str(_epoch(_at(22, 3, 0)))
+
+    def test_early_wake_epoch_ignored(self, tmp_path):
+        repo = Path(__file__).parent.parent.parent
+        request = tmp_path / "wake-at"
+        request.write_text(f"{_epoch(_at(22, 6, 30))}\n", encoding="utf-8")
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "src.gateway.schedule",
+                "--config", str(repo / "config.yaml"),
+                "--now", str(_epoch(_at(21, 23, 30))),
+                "--wake-request", str(request),
+                "early-wake-epoch",
+            ],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == ""
+
+    def test_early_wake_epoch_needs_the_file(self):
+        repo = Path(__file__).parent.parent.parent
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "src.gateway.schedule",
+                "--config", str(repo / "config.yaml"),
+                "early-wake-epoch",
+            ],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        assert result.returncode == 2
+
+    def test_next_wake_epoch_honours_now(self):
+        repo = Path(__file__).parent.parent.parent
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "src.gateway.schedule",
+                "--config", str(repo / "config.yaml"),
+                "--now", str(_epoch(_at(21, 23, 30))),
+                "next-wake-epoch",
+            ],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == str(_epoch(_at(22, 7, 0)))

@@ -1,0 +1,8 @@
+[Unit]
+Description=Ten minutes after boot, check whether this boot was an early wake
+
+[Timer]
+OnBootSec=10min
+
+[Install]
+WantedBy=timers.target

@@ -43,6 +43,7 @@ from src.chat.whatsapp_adapter import (
     parse_waha_message,
 )
 from src.gateway.autoreply import OfflineResponder
+from src.gateway.early_wake import EarlyWake
 from src.gateway.forwarder import Forwarder
 from src.gateway.birthdays import BirthdayGreeter
 from src.gateway.homelab import HomelabPower
@@ -145,6 +146,8 @@ class Gateway:
                                    media_base_url=settings.media_base_url, now=now)
         self.responder = OfflineResponder(self.journal, self._send_text, self.schedule,
                                           self.monitor, now=now)
+        self.early_wake = EarlyWake(self.journal, self.monitor, self.schedule,
+                                    settings.data_dir, now=now)
         if homelab:
             homelab.attach(journal=self.journal, monitor=self.monitor, send_text=self._send_text,
                            data_dir=settings.data_dir, now=now)
@@ -319,6 +322,8 @@ class Gateway:
             "outage": self.responder.outage(),
             "journal": self.journal.stats(),
             "birthdays": self.birthdays.status() if self.birthdays else None,
+            "early_wake": (datetime.datetime.fromtimestamp(pending, self.schedule.timezone).isoformat()
+                           if (pending := self.early_wake.pending()) is not None else None),
         }
 
     def _build_public_app(self) -> FastAPI:
@@ -335,14 +340,15 @@ class Gateway:
         @app.get("/status")
         def public_status() -> JSONResponse:
             body = {key: value for key, value in self.status().items()
-                    if key not in ("journal", "birthdays")}
+                    if key not in ("journal", "birthdays", "early_wake")}
             return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
         return app
 
     def _build_internal_app(self) -> FastAPI:
-        """What the LAN sees: WAHA's webhook, media for the PC, the shutdown notice,
-        and the power updates the PC's shutdown script posts while it waits."""
+        """What the LAN sees: WAHA's webhook, media for the PC, the shutdown notice
+        (with an optional early wake), and the power updates the PC's shutdown
+        script posts while it waits."""
         app = FastAPI(title="Kaya gateway", docs_url=None, redoc_url=None, openapi_url=None)
         settings = self.settings
 
@@ -363,11 +369,24 @@ class Gateway:
             return FileResponse(entry.media_path, media_type=entry.media_mime or None)
 
         @app.post("/pc/going-down")
-        def going_down(x_relay_token: str = Header(default="")):
+        async def going_down(request: Request, x_relay_token: str = Header(default="")):
             if not settings.relay_token or x_relay_token != settings.relay_token:
                 raise HTTPException(status_code=401, detail="invalid relay token")
+            # The PC may add the early wake it chose ({"wake_at": epoch}); a bad
+            # body must never stop the going-down notice itself.
+            wake_at = None
+            raw = await request.body()
+            if raw.strip():
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    logger.warning("going-down body is not JSON, no early wake")
+                else:
+                    if isinstance(body, dict):
+                        wake_at = body.get("wake_at")
             self.monitor.announce_going_down()
-            return {"ok": True}
+            honoured = self.early_wake.accept(wake_at)
+            return {"ok": True, **({"wake_at": int(honoured)} if honoured is not None else {})}
 
         @app.post("/pc/degraded")
         def degraded(x_relay_token: str = Header(default="")):
@@ -423,10 +442,11 @@ class Gateway:
         return app
 
     async def start_background(self) -> None:
-        """Start the PC monitor, the forwarder, and the homelab watcher."""
+        """Start the PC monitor, the forwarder, the early-wake watcher, and the homelab watcher."""
         self._stop.clear()
         self._tasks = [asyncio.create_task(self.monitor.run(self._stop)),
-                       asyncio.create_task(self.forwarder.run(self._stop))]
+                       asyncio.create_task(self.forwarder.run(self._stop)),
+                       asyncio.create_task(self.early_wake.watch(self._stop))]
         if self.homelab:
             self._tasks.append(asyncio.create_task(self.homelab.watch(self._stop)))
         if self.birthdays:

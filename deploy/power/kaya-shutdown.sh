@@ -4,7 +4,7 @@
 # kaya-shutdown-manual.service, started by the PC's power listener when the
 # owner confirms a /homelaboff. See README.md in this directory.
 #
-#   kaya-shutdown.sh [--dry-run | --manual | --report]
+#   kaya-shutdown.sh [--dry-run | --manual | --report | --after-early-wake]
 #
 # Scheduled mode: while anything says the PC is in use, the shutdown is
 # POSTPONED: checked again every POWER_RETRY_MINUTES until the PC is idle, then
@@ -16,6 +16,11 @@
 # (capped at POWER_MANUAL_MAX_WAIT_MINUTES). `.stay-on` does not block it: he
 # asked for it. GPU use while Kaya is finishing a reply counts as hers. A
 # `cancel` file (written by the power listener) stops the wait.
+#
+# --after-early-wake: ten minutes after a boot that was an early wake for the
+# idea pipeline (its ~/.wake-at, honoured by the previous night's shutdown),
+# run the same postponing loop: the PC powers off again once idle, and honours
+# a new request when it does. The day has started by then and the PC stays on.
 #
 # --report prints what would hold the PC up, one tab-separated line per reason,
 # and exits: the power listener serves it to the gateway.
@@ -30,6 +35,7 @@ case "${1:-}" in
   --dry-run) DRY_RUN=1 ;;
   --manual) MODE=manual ;;
   --report) MODE=report ;;
+  --after-early-wake) MODE=early ;;
 esac
 ENV_FILE="${KAYA_POWER_ENV:-/etc/kaya-power.env}"
 # shellcheck disable=SC1090
@@ -60,6 +66,10 @@ STATE_DIR="${POWER_STATE_DIR:-/run/kaya-power}"
 MANUAL_CHECK_SECONDS="${POWER_MANUAL_CHECK_SECONDS:-60}"
 MANUAL_UPDATE_MINUTES="${POWER_MANUAL_UPDATE_MINUTES:-30}"
 MANUAL_MAX_WAIT_MINUTES="${POWER_MANUAL_MAX_WAIT_MINUTES:-720}"
+# The idea pipeline's wake request (epoch seconds on the first line) and the
+# marker of the early wake this boot followed, written at poweroff.
+WAKE_REQUEST_FILE="${POWER_WAKE_REQUEST_FILE:-$USER_HOME/.wake-at}"
+EARLY_WAKE_FILE="${POWER_EARLY_WAKE_FILE:-/var/lib/kaya-power/early-wake}"
 
 say() { echo "[kaya-shutdown] $*"; }
 hhmm() { date -d "@$1" +%H:%M; }
@@ -156,10 +166,25 @@ kernel_problem() {
   }
 }
 
+# The schedule CLI. POWER_NOW_EPOCH pins its clock (tests only).
+schedule_cli() {
+  (cd "$SCHEDULE_REPO" && "$SCHEDULE_PY" -m src.gateway.schedule --config config.yaml \
+    ${POWER_NOW_EPOCH:+--now "$POWER_NOW_EPOCH"} "$@" 2>/dev/null)
+}
+
 # The digits of the next wake time, or nothing.
 next_wake_epoch() {
   local epoch
-  epoch="$(cd "$SCHEDULE_REPO" && "$SCHEDULE_PY" -m src.gateway.schedule --config config.yaml next-wake-epoch 2>/dev/null)"
+  epoch="$(schedule_cli next-wake-epoch)"
+  [[ "$epoch" =~ ^[0-9]+$ ]] && echo "$epoch"
+}
+
+# The digits of the early wake the idea pipeline asked for, when the schedule
+# honours it, or nothing (no request, or the request is ignored).
+early_wake_epoch() {
+  [ -f "$WAKE_REQUEST_FILE" ] || return 0
+  local epoch
+  epoch="$(schedule_cli --wake-request "$WAKE_REQUEST_FILE" early-wake-epoch)"
   [[ "$epoch" =~ ^[0-9]+$ ]] && echo "$epoch"
 }
 
@@ -180,6 +205,20 @@ notify_owner() {
 # the RTC alarm, the poweroff. FINAL_TEXT is one last WhatsApp update.
 power_off_now() {
   local waited=0 pending
+  local alarm="$wake_epoch" early="" body=()
+  # Only the scheduled and early modes honour the request: a manual shutdown is
+  # the owner asking for the PC off now, and it clears a stale marker.
+  if [ "$MODE" = scheduled ] || [ "$MODE" = early ]; then
+    early="$(early_wake_epoch)"
+  fi
+  if [ -n "$early" ]; then
+    alarm="$early"
+    mkdir -p "$(dirname "$EARLY_WAKE_FILE")" && echo "$early" > "$EARLY_WAKE_FILE"
+    body=(-H 'Content-Type: application/json' --data "{\"wake_at\": $early}")
+    say "the idea pipeline asked to wake at $(hhmm "$early"): waking then, not at the scheduled time"
+  else
+    rm -f "$EARLY_WAKE_FILE"
+  fi
   while [ "$waited" -lt 600 ]; do
     pending="$(pending_replies)"
     [ -z "$pending" ] || [ "$pending" = 0 ] && break
@@ -187,13 +226,13 @@ power_off_now() {
     sleep 15; waited=$((waited + 15))
   done
   if [ -n "$GATEWAY_URL" ]; then
-    curl -fsS --max-time 5 -X POST -H "X-Relay-Token: $RELAY_TOKEN" "$GATEWAY_URL/pc/going-down" >/dev/null 2>&1 \
+    curl -fsS --max-time 5 -X POST -H "X-Relay-Token: $RELAY_TOKEN" "${body[@]}" "$GATEWAY_URL/pc/going-down" >/dev/null 2>&1 \
       && say "told the gateway we are going down" \
       || say "could not reach the gateway (it will notice within 90 s)"
   fi
-  if [ -n "$wake_epoch" ]; then
-    rtcwake -m no -t "$wake_epoch" >/dev/null 2>&1 \
-      && say "RTC alarm set for $(date -d "@$wake_epoch")" \
+  if [ -n "$alarm" ]; then
+    rtcwake -m no -t "$alarm" >/dev/null 2>&1 \
+      && say "RTC alarm set for $(date -d "@$alarm")" \
       || say "could not set the RTC alarm"
   fi
   [ -n "${1:-}" ] && notify_owner "$1" 1
@@ -305,8 +344,25 @@ manual_main() {
   power_off_now "Powering off now. /homelabon wakes it."
 }
 
+# Ten minutes after an early wake: consume the marker, and run the same
+# postponing loop below — the PC powers off again once idle, and honours a new
+# request when it does.
+early_main() {
+  local requested
+  requested="$(head -n1 "$EARLY_WAKE_FILE" 2>/dev/null)"
+  rm -f "$EARLY_WAKE_FILE"
+  if ! [[ "$requested" =~ ^[0-9]+$ ]]; then
+    say "not an early wake: nothing to do"; exit 0
+  fi
+  if [ "$(schedule_cli is-on)" != false ]; then
+    say "the day has started: the PC stays on"; exit 0
+  fi
+  say "woke early for the idea pipeline (asked for $(hhmm "$requested")): powering off again once idle"
+}
+
 [ "$MODE" = report ] && { report; exit 0; }
 [ "$MODE" = manual ] && { manual_main; exit 0; }
+[ "$MODE" = early ] && early_main
 
 # The kernel GRUB boots next (the newest installed) must have an nvidia module,
 # or tomorrow's boot comes up without a GPU driver and the bot is gone. A kernel
@@ -333,6 +389,8 @@ while true; do
   wait_until_idle
   if [ "$DRY_RUN" = 1 ]; then
     say "dry run: the PC is idle and would shut down now"
+    early="$(early_wake_epoch)"
+    [ -n "$early" ] && say "dry run: would wake at $(hhmm "$early") for the idea pipeline, not at the scheduled time"
     exit 0
   fi
   as_user notify-send -u critical "O PC vai desligar-se" \
