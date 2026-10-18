@@ -29,6 +29,12 @@ services:
       - IDEA_INBOX_URL=${IDEA_INBOX_URL:-}
       - IDEA_INBOX_TOKEN=${IDEA_INBOX_TOKEN:-}
       - IDEA_OWNER_NUMBERS=${IDEA_OWNER_NUMBERS:-}
+      # The owner's other DMs (voice notes, plain text) go to lab-assistant's inbox
+      # (src/gateway/assistant_tap.py), which hands Kaya's back through /assistant/handback.
+      # Empty ASSISTANT_INBOX_URL turns the tap off. assistant-inbox joins pi_default.
+      - ASSISTANT_INBOX_URL=${ASSISTANT_INBOX_URL:-}
+      - ASSISTANT_INBOX_TOKEN=${ASSISTANT_INBOX_TOKEN:-}
+      - ASSISTANT_OWNER_NUMBERS=${ASSISTANT_OWNER_NUMBERS:-}
       # The owner's /homelaboff and /homelabon DMs (src/gateway/homelab.py). Empty turns them off.
       - HOMELAB_OWNER_NUMBERS=${HOMELAB_OWNER_NUMBERS:-}
       - HOMELAB_PC_POWER_URL=${HOMELAB_PC_POWER_URL:-}
