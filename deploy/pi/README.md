@@ -29,6 +29,13 @@ They are switched on during the cutover and never run in two places at once.
      (`src/gateway/idea_tap.py`, on when `IDEA_INBOX_URL` is set). They are not
      journaled, not sent to the PC and never become Kaya's memory. The pipeline's
      own `💡[idea-` messages are dropped when WAHA echoes them back.
+   - **The owner's other DMs go to the lab assistant** (after the idea and homelab
+     taps): voice notes, and plain text that is no `/command` and no reply to one of
+     Kaya's messages, go to lab-assistant's inbox with the audio already downloaded
+     (`src/gateway/assistant_tap.py`, on when `ASSISTANT_INBOX_URL` is set). What the
+     assistant decides is Kaya's comes back as text through `POST /assistant/handback`
+     (relay token) and is journaled from here on like any owner DM. Its own `🤖`
+     echoes are dropped. If its inbox is down, the message stays Kaya's.
 2. The gateway journals it. The UNIQUE key is event type plus message id, which
    also absorbs WAHA's habit of delivering every event twice.
 3. It downloads any media, and decides whether the message is **addressed** to

@@ -84,9 +84,15 @@ def test_an_idea_goes_to_the_inbox_and_not_to_kaya(rig):
 
 def test_status_and_numbered_answers_are_ideas_too(rig):
     gateway, inbox, _ = rig
-    assert _post(gateway, _message("i2", "/ideas"))["idea"] == "forwarded"
+    assert _post(gateway, _message("i2", "/idea list"))["idea"] == "forwarded"
     assert _post(gateway, _message("i3", "/IDEA 4 use sqlite"))["idea"] == "forwarded"
     assert len(inbox.received) == 2
+
+
+def test_slash_ideas_is_no_longer_claimed(rig):
+    gateway, inbox, _ = rig
+    assert "idea" not in _post(gateway, _message("i4", "/ideas"))
+    assert inbox.received == []
 
 
 def test_a_quoted_reply_to_a_pipeline_question_is_an_answer(rig):

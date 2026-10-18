@@ -246,7 +246,10 @@ his DM (gateway `src/gateway/homelab.py`, never reaches Kaya) asks what is runni
 `yes` the PC's `kaya-power-listener` starts `kaya-shutdown.sh --manual`, which waits for jobs
 and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN; `/homelabrc [home]` starts a Claude Remote Control
 session on the PC in `~/Desktop` (or `~`) and replies with its link; a terminal-less sudo asks him on WhatsApp
-(`yes 1234`) before falling back to the password (`deploy/power/README.md`). `kaya-going-down.service` tells the Pi at
+(`yes 1234`) before falling back to the password (`deploy/power/README.md`). Since 2026-10-18
+his other DMs (voice notes, plain text) go to **lab-assistant** (`src/gateway/assistant_tap.py`,
+`~/Desktop/lab-assistant`), which answers lab questions itself and hands questions about the group
+back to Kaya as text (`POST /assistant/handback`); `/ideas` is no longer claimed (`/idea list`). `kaya-going-down.service` tells the Pi at
 every poweroff, which keeps the offline reply on "volto às 07:00" rather than
 "estou em baixo" (`config.yaml` → `power`, the one source for the Pi's
 Wake-on-LAN timer, the offline reply and the shutdown timer;

@@ -47,6 +47,7 @@ from src.gateway.early_wake import EarlyWake
 from src.gateway.forwarder import Forwarder
 from src.gateway.birthdays import BirthdayGreeter
 from src.gateway.homelab import HomelabPower
+from src.gateway.assistant_tap import ASLEEP_TEXT, AssistantTap, handback_event
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.chat.poll_votes import (POLL_VOTE_EVENTS, POLL_VOTE_FAILED_EVENTS,
                                  parse_waha_poll_vote)
@@ -118,12 +119,14 @@ class Gateway:
                  fetch_media: Optional[Callable[[str], Awaitable[Tuple[bytes, str]]]] = None,
                  idea_tap: Optional[IdeaTap] = None,
                  homelab: Optional[HomelabPower] = None,
+                 assistant_tap: Optional[AssistantTap] = None,
                  send_mentions: Optional[Callable[[str, str, list], Any]] = None,
                  fetch_birthdays: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                  now: Callable[[], float] = time.time) -> None:
         self.settings = settings
         self.idea_tap = idea_tap
         self.homelab = homelab
+        self.assistant_tap = assistant_tap
         self._now = now
         with open(settings.config_path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
@@ -216,8 +219,11 @@ class Gateway:
             self._bot_jids |= found
             self.journal.set_meta("bot_jids", json.dumps(sorted(self._bot_jids)))
 
-    async def handle_webhook(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Journal one WAHA event, fetch its media, maybe reply offline, wake the forwarder."""
+    async def handle_webhook(self, event: Dict[str, Any], *, taps: bool = True) -> Dict[str, Any]:
+        """Journal one WAHA event, fetch its media, maybe reply offline, wake the forwarder.
+
+        ``taps=False`` (a message the assistant handed back) skips the idea, homelab and
+        assistant taps: it is Kaya's by then."""
         event_type = event.get("event")
         if event_type not in _EVENT_TYPES:
             return {"ignored": event_type}
@@ -244,12 +250,11 @@ class Gateway:
             msg = parse_waha_message(event)
             if msg is None:
                 return {"ignored": "unparseable"}
-            routed = await self._route_idea(msg)
-            if routed is not None:
-                return routed
-            routed = await self._route_homelab(msg)
-            if routed is not None:
-                return routed
+            if taps:
+                routed = (await self._route_idea(msg) or await self._route_homelab(msg)
+                          or await self._route_assistant(msg, event))
+                if routed is not None:
+                    return routed
             chat_id, sender_id, wa_ts = msg.chat_id, msg.sender_id, msg.timestamp
             addressed = is_addressed(msg, self._bot_jids, self._respond_on_mention,
                                      self._respond_on_reply, self._whitelist_enabled,
@@ -301,6 +306,27 @@ class Gateway:
         if self.idea_tap.should_warn(msg):
             await asyncio.to_thread(self._send_text, msg.chat_id, IDEA_OFFLINE_TEXT, msg.message_id)
         return {"idea": "inbox-offline"}
+
+    async def _route_assistant(self, msg: InboundMessage, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Hand the owner's DM to the lab assistant's inbox; None leaves it to Kaya
+        (also when the inbox is down, so Kaya still answers)."""
+        kind = self.assistant_tap.classify(msg) if self.assistant_tap else None
+        if kind is None:
+            return None
+        if kind == "echo":
+            return {"assistant": "echo"}
+        audio, mime = b"", ""
+        if self.assistant_tap.is_voice(msg):
+            try:
+                audio, mime = await self._fetch_media(msg.media_url)
+            except Exception as exc:  # noqa: BLE001 — without the audio it is Kaya's voice note
+                logger.warning("assistant: voice note %s not fetched: %s", msg.message_id, exc)
+                return None
+        if not await self.assistant_tap.forward(msg, event, audio, mime):
+            return None
+        if self.monitor.state is not PcState.ONLINE and self.assistant_tap.should_warn(msg):
+            await asyncio.to_thread(self._send_text, msg.chat_id, ASLEEP_TEXT, msg.message_id)
+        return {"assistant": "forwarded"}
 
     async def _route_homelab(self, msg: InboundMessage) -> Optional[Dict[str, Any]]:
         """The owner's /homelaboff and /homelabon, and their replies; None leaves it to Kaya."""
@@ -357,6 +383,19 @@ class Gateway:
             if settings.webhook_token and x_webhook_token != settings.webhook_token:
                 raise HTTPException(status_code=401, detail="invalid webhook token")
             return await self.handle_webhook(await request.json())
+
+        @app.post("/assistant/handback")
+        async def assistant_handback(request: Request, x_relay_token: str = Header(default="")):
+            """The lab assistant decided a message is Kaya's: journal it as the owner's text DM."""
+            if not settings.relay_token or x_relay_token != settings.relay_token:
+                raise HTTPException(status_code=401, detail="invalid relay token")
+            body = await request.json()
+            event, text = body.get("event") or {}, str(body.get("text") or "").strip()
+            msg = parse_waha_message(event) if event.get("event") == "message" else None
+            if msg is None or not text or self.assistant_tap is None or msg.is_group \
+                    or not self.assistant_tap._is_owner(msg):
+                raise HTTPException(status_code=400, detail="not an owner DM")
+            return await self.handle_webhook(handback_event(event, text, self._now()), taps=False)
 
         @app.get("/media/{seq}/{name}")
         def media(seq: int, name: str, x_api_key: str = Header(default="")):
@@ -480,7 +519,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(Gateway(GatewaySettings.from_env(), idea_tap=IdeaTap.from_env(os.environ),
-                        homelab=HomelabPower.from_env(os.environ)).serve())
+                        homelab=HomelabPower.from_env(os.environ),
+                        assistant_tap=AssistantTap.from_env(os.environ)).serve())
 
 
 if __name__ == "__main__":
