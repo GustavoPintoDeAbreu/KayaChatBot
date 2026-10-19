@@ -223,6 +223,8 @@ services:
       - KAYA_WHATSAPP_WEBHOOK_TOKEN=${KAYA_WHATSAPP_WEBHOOK_TOKEN:-}
       # Shared secret for POST /whatsapp/relay, which the Pi gateway calls.
       - KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:-}
+      # X-Kaya-Token for POST /mcp, the groups read-only for the lab assistant.
+      - KAYA_MCP_TOKEN=${KAYA_MCP_TOKEN:-}
     # Serves the Gradio UI AND the WhatsApp webhook on one loaded model.
     command: python -m src.chat.whatsapp_server
 
