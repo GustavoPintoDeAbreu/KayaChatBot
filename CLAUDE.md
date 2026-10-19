@@ -78,7 +78,10 @@ must fine-tune" as a claim needing evidence, not a given. Full results:
 receives WhatsApp and journals every event (and its media) for **7 days** while
 the PC may be off (`deploy/pi/README.md`). Nothing on the Pi talks to a cloud
 service except the Cloudflare tunnel, which carries the landing page and `/app`.
-Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles).
+Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles). One owner-approved exception (2026-10-19): when Gustavo points his lab assistant at a group for
+context, the local model reads it through `/mcp`, and an idea it starts for him (which becomes a private
+GitHub PR, possibly planned by Claude) may carry a **summary** of the friends' points: no names, no
+quotes, nothing off-topic. The rule is in the server's `instructions`.
 
 ---
 
@@ -249,7 +252,12 @@ session on the PC in `~/Desktop` (or `~`) and replies with its link; a terminal-
 (`yes 1234`) before falling back to the password (`deploy/power/README.md`). Since 2026-10-18
 his other DMs (voice notes, plain text) go to **lab-assistant** (`src/gateway/assistant_tap.py`,
 `~/Desktop/lab-assistant`), which answers lab questions itself and hands questions about the group
-back to Kaya as text (`POST /assistant/handback`); `/ideas` is no longer claimed (`/idea list`). `kaya-going-down.service` tells the Pi at
+back to Kaya as text (`POST /assistant/handback`); `/ideas` is no longer claimed (`/idea list`). Since 2026-10-19 the assistant also **reads the groups** through `POST /mcp` on this server
+(`src/chat/chats_mcp.py`): he says "check the kaya bot chat" for the friends' reactions, and it reads
+that chat instead of handing the note to Kaya, which is what it did before (Kaya answered with gossip).
+Read-only, groups only (never a DM file), LAN only, `X-Kaya-Token` = `KAYA_MCP_TOKEN` or 503. Hand-rolled
+JSON-RPC rather than the MCP SDK, which would pull httpx2/opentelemetry/pyjwt into this image and clash
+with gradio's `mcp<2` extra. `kaya-going-down.service` tells the Pi at
 every poweroff, which keeps the offline reply on "volto às 07:00" rather than
 "estou em baixo" (`config.yaml` → `power`, the one source for the Pi's
 Wake-on-LAN timer, the offline reply and the shutdown timer;
