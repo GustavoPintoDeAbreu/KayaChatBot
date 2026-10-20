@@ -162,7 +162,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
 scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
-sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check, kaya-power-listener (:8099, /homelaboff, /homelabrc) and the nightly shutdown when idle (power.shutdown)
+sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check, kaya-power-listener (:8099, /homelaboff, /homelabrc) and the nightly shutdown when idle (power.shutdown) and the boot Remote Control session in ~/Desktop (kaya-rc-autostart)
 pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
 ~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)

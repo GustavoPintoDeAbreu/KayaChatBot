@@ -14,12 +14,14 @@ if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now kaya-shutdown.timer kaya-early-wake.timer kaya-boot-check.service 2>/dev/null || true
   systemctl disable --now kaya-power-listener.service 2>/dev/null || true
   systemctl disable kaya-going-down.service 2>/dev/null || true
+  systemctl disable kaya-rc-autostart.service 2>/dev/null || true
   rm -f /etc/systemd/system/kaya-shutdown.{timer,service} /usr/local/sbin/kaya-shutdown.sh \
         /etc/systemd/system/kaya-early-wake.{timer,service} \
         /etc/systemd/system/kaya-going-down.service /usr/local/sbin/kaya-going-down.sh \
         /etc/systemd/system/kaya-boot-check.service /usr/local/sbin/kaya-boot-check.sh \
         /usr/local/sbin/kaya-power-listener /etc/systemd/system/kaya-power-listener.service \
         /etc/systemd/system/kaya-shutdown-manual.service \
+        /etc/systemd/system/kaya-rc-autostart.service \
         /etc/apt/apt.conf.d/51kaya-no-kernel /usr/local/sbin/kaya-sudo-approve
   sed -i '/kaya-sudo-approve/d' /etc/pam.d/sudo
   systemctl daemon-reload
@@ -35,6 +37,7 @@ install -m 0755 "$REPO/deploy/power/kaya-shutdown.sh" /usr/local/sbin/kaya-shutd
 install -m 0755 "$REPO/deploy/power/kaya_power_listener.py" /usr/local/sbin/kaya-power-listener
 install -m 0644 "$REPO/deploy/power/kaya-power-listener.service" /etc/systemd/system/kaya-power-listener.service
 install -m 0644 "$REPO/deploy/power/kaya-shutdown-manual.service" /etc/systemd/system/kaya-shutdown-manual.service
+install -m 0644 "$REPO/deploy/power/kaya-rc-autostart.service" /etc/systemd/system/kaya-rc-autostart.service
 
 # A sudo with no terminal (Claude sessions, Remote Control) asks the owner on
 # WhatsApp first (kaya_sudo_approve.py). default=ignore: if the script is missing,
@@ -92,6 +95,7 @@ POWER_GATEWAY_URL=http://192.168.1.238:8088
 POWER_LISTEN_PORT=8099
 POWER_ALLOWED_IPS=192.168.1.238
 POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d
+POWER_RC_AUTOSTART=desktop
 KAYA_RELAY_TOKEN=${KAYA_RELAY_TOKEN:-}
 ENV
   chmod 600 /etc/kaya-power.env
@@ -100,7 +104,8 @@ ENV
 else
   # An older file: add the keys later releases introduced, leaving every existing line alone.
   for line in POWER_LISTEN_PORT=8099 POWER_ALLOWED_IPS=192.168.1.238 \
-              POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d; do
+              POWER_DEV_GPU_UUID=GPU-ab32b3d2-3bab-2b24-9749-1caa6400f82d \
+              POWER_RC_AUTOSTART=desktop; do
     grep -q "^${line%%=*}=" /etc/kaya-power.env || { echo "$line" >> /etc/kaya-power.env; echo "added $line"; }
   done
 fi
@@ -117,6 +122,7 @@ systemctl daemon-reload
 # Enabled without --now: a long oneshot at boot must not delay the boot itself.
 [ -n "$oncalendar" ] && systemctl enable kaya-early-wake.timer
 systemctl enable kaya-boot-check.service
+systemctl enable kaya-rc-autostart.service
 systemctl enable --now kaya-going-down.service
 systemctl enable --now kaya-power-listener.service
 systemctl restart kaya-power-listener.service

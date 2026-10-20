@@ -1,0 +1,12 @@
+[Unit]
+Description=At boot, start the Claude Remote Control session /homelabrc starts (POWER_RC_AUTOSTART, ~/Desktop)
+Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
+Wants=network-online.target
+After=network-online.target systemd-user-sessions.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 /usr/local/sbin/kaya-power-listener --rc-autostart
+
+[Install]
+WantedBy=multi-user.target

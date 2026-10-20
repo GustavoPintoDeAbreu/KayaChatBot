@@ -173,6 +173,7 @@ class FakeSessions:
         self.active = set()
         self.journal = ""
         self.start_rc = 0
+        self.stop_rc = 0
         self.dies = False
 
     def __call__(self, argv, timeout):
@@ -188,9 +189,23 @@ class FakeSessions:
         if argv[0] == "journalctl":
             return subprocess.CompletedProcess(argv, 0, stdout=self.journal)
         if argv[0] == "systemctl" and "stop" in argv:
-            self.active.discard(argv[-1])
-            return subprocess.CompletedProcess(argv, 0)
+            if self.stop_rc == 0:
+                self.active.discard(argv[-1])
+            return subprocess.CompletedProcess(argv, self.stop_rc, stdout="", stderr="stop failed")
         raise AssertionError(argv)
+
+
+class FlakySessions(FakeSessions):
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+
+    def __call__(self, argv, timeout):
+        if argv[0] == "systemd-run" and self.failures:
+            self.failures -= 1
+            self.calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no user manager")
+        return super().__call__(argv, timeout)
 
 
 class Clock:
@@ -307,3 +322,150 @@ def test_http_rc_routes_are_behind_the_same_auth(tmp_path):
     finally:
         server.shutdown()
         thread.join()
+
+
+def test_config_reads_rc_autostart(tmp_path):
+    config = listener.ListenerConfig.load(str(tmp_path / "missing"), {})
+    assert config.rc_autostart == "desktop"
+    env_file = tmp_path / "kaya-power.env"
+    env_file.write_text("POWER_RC_AUTOSTART=\n")
+    assert listener.ListenerConfig.load(str(env_file), {}).rc_autostart == ""
+    env_file.write_text("POWER_RC_AUTOSTART=home\n")
+    assert listener.ListenerConfig.load(str(env_file), {}).rc_autostart == "home"
+
+
+def test_rc_restart_stops_then_starts(tmp_path):
+    run = FakeSessions()
+    run.active = {"claude-rc-desktop.service"}
+    run.journal = JOURNAL
+    sessions = _sessions(tmp_path, run)
+    assert sessions.restart("desktop") == (200, {"restarted": True, "stopped": True,
+                                                 "name": "homelab-desktop", "url": URL})
+    stop = run.calls.index(["systemctl", "--machine=gustavo@", "--user", "stop",
+                            "claude-rc-desktop.service"])
+    start = next(i for i, call in enumerate(run.calls) if call[0] == "systemd-run")
+    assert stop < start
+
+
+def test_rc_restart_without_a_session_just_starts(tmp_path):
+    run = FakeSessions()
+    run.journal = JOURNAL
+    sessions = _sessions(tmp_path, run)
+    assert sessions.restart("desktop") == (200, {"restarted": True, "stopped": False,
+                                                 "name": "homelab-desktop", "url": URL})
+    assert not any("stop" in call for call in run.calls)
+
+
+def test_rc_restart_unknown_dir_and_failures(tmp_path):
+    run = FakeSessions()
+    sessions = _sessions(tmp_path, run)
+    assert sessions.restart("etc") == (400, {"error": "unknown dir 'etc'"})
+    assert run.calls == []
+    run.active = {"claude-rc-desktop.service"}
+    run.stop_rc = 1
+    assert sessions.restart("desktop") == (500, {"restarted": False, "stopped": False,
+                                                 "error": "stop failed"})
+    assert not any(call[0] == "systemd-run" for call in run.calls)
+    run.stop_rc = 0
+    run.start_rc = 1
+    assert sessions.restart("desktop") == (500, {"restarted": False, "stopped": True,
+                                                 "error": "no user manager"})
+
+
+def test_rc_autostart_starts_once_and_counts_a_running_session_as_done(tmp_path):
+    run = FakeSessions()
+    run.journal = JOURNAL
+    sessions = _sessions(tmp_path, run)
+    assert listener.autostart(sessions, "desktop") == 0
+    starts = [call for call in run.calls if call[0] == "systemd-run"]
+    assert len(starts) == 1
+    assert "--unit=claude-rc-desktop.service" in starts[0]
+    assert "--working-directory=/home/gustavo/Desktop" in starts[0]
+    assert listener.autostart(sessions, "desktop") == 0
+    assert len([call for call in run.calls if call[0] == "systemd-run"]) == 1
+    assert not any("stop" in call for call in run.calls)
+
+
+def test_rc_autostart_retries_until_the_user_manager_is_up(tmp_path):
+    run = FlakySessions(2)
+    run.journal = JOURNAL
+    clock = Clock()
+    sessions = _sessions(tmp_path, run, clock)
+    assert listener.autostart(sessions, "desktop", attempts=6, delay=20.0) == 0
+    assert len([call for call in run.calls if call[0] == "systemd-run"]) == 3
+    assert clock.value >= 1_790_000_000 + 40
+
+
+def test_rc_autostart_gives_up(tmp_path):
+    run = FakeSessions()
+    run.start_rc = 1
+    sessions = _sessions(tmp_path, run)
+    assert listener.autostart(sessions, "desktop", attempts=3, delay=5.0) == 1
+    assert len([call for call in run.calls if call[0] == "systemd-run"]) == 3
+
+
+def test_rc_autostart_disabled_or_unknown(tmp_path):
+    run = FakeSessions()
+    sessions = _sessions(tmp_path, run)
+    assert listener.autostart(sessions, "") == 0
+    assert run.calls == []
+    assert listener.autostart(sessions, "/etc") == 2
+    assert not any(call[0] == "systemd-run" for call in run.calls)
+
+
+def test_main_rc_autostart_needs_no_token(tmp_path, monkeypatch):
+    env_file = tmp_path / "kaya-power.env"
+    env_file.write_text("POWER_RC_AUTOSTART=home\n")
+    monkeypatch.setenv("KAYA_POWER_ENV", str(env_file))
+    monkeypatch.delenv("KAYA_RELAY_TOKEN", raising=False)
+    monkeypatch.delenv("POWER_RC_AUTOSTART", raising=False)
+    recorded = []
+
+    def fake_autostart(sessions, name, attempts=listener.RC_AUTOSTART_ATTEMPTS,
+                       delay=listener.RC_AUTOSTART_DELAY_SECONDS):
+        recorded.append((sessions, name))
+        return 0
+
+    monkeypatch.setattr(listener, "autostart", fake_autostart)
+    with pytest.raises(SystemExit) as exit:
+        listener.main(["--rc-autostart"])
+    assert exit.value.code == 0
+    sessions, name = recorded[0]
+    assert name == "home"
+    assert isinstance(sessions, listener.RemoteSessions)
+    with pytest.raises(SystemExit) as exit:
+        listener.main(["--bogus"])
+    assert exit.value.code == 2
+
+
+def test_http_rc_from_loopback_but_power_stays_pi_only(tmp_path):
+    run = FakeSessions()
+    run.journal = JOURNAL
+    config = _config(tmp_path, allowed_ips={"192.168.1.238"})
+    server = listener.make_server(config, listener.PowerControl(config, FakeRun()),
+                                  _sessions(tmp_path, run))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert _request(server, "/rc/status") == (200, {"running": []})
+        assert _request(server, "/rc/restart?dir=desktop", method="POST") == (
+            200, {"restarted": True, "stopped": False, "name": "homelab-desktop", "url": URL})
+        assert _request(server, "/rc/status", token="wrong") == (401, {"error": "invalid token"})
+        assert _request(server, "/power/status") == (403, {"error": "forbidden"})
+        assert _request(server, "/power/off", method="POST")[0] == 403
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_rc_autostart_unit_and_install():
+    unit = (MODULE_PATH.parent / "kaya-rc-autostart.service").read_text(encoding="utf-8")
+    assert "--rc-autostart" in unit
+    assert "Type=exec" in unit
+    assert "WantedBy=multi-user.target" in unit
+    assert not any(line.startswith("Restart=") for line in unit.splitlines())
+    install = (MODULE_PATH.parent / "install.sh").read_text(encoding="utf-8")
+    assert "systemctl enable kaya-rc-autostart.service" in install
+    assert "enable --now kaya-rc-autostart" not in install
+    assert "/etc/systemd/system/kaya-rc-autostart.service" in install
+    assert "POWER_RC_AUTOSTART=desktop" in install

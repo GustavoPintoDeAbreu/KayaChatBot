@@ -15,6 +15,7 @@ edited by hand:
 | PC | `kaya-shutdown.timer` → `kaya-shutdown.sh` at the earliest time of each evening | `sudo deploy/power/install.sh` |
 | PC | `kaya-power-listener.service` → `/usr/local/sbin/kaya-power-listener` on port 8099 (the Pi's `/homelaboff` trigger) | `sudo deploy/power/install.sh` |
 | PC | `kaya-shutdown-manual.service` → `kaya-shutdown.sh --manual`, started by the listener | `sudo deploy/power/install.sh` |
+| PC | `kaya-rc-autostart.service` → `kaya-power-listener --rc-autostart` at every boot (the ~/Desktop Remote Control session) | `sudo deploy/power/install.sh` |
 | PC | `kaya-early-wake.timer` → `kaya-shutdown.sh --after-early-wake`, 10 min after boot | `sudo deploy/power/install.sh` |
 | Pi | `pc-wake.timer` (Wake-on-LAN, 5 min before wake time) | `scripts/deploy_pi.sh` |
 | Pi | the gateway's offline reply ("volto às 07:00") | read at gateway start |
@@ -91,14 +92,24 @@ IP and token checks:
   `https://claude.ai/code/session_…` link, which the gateway sends back.
   The directory is fixed by `dir`; a path is never taken from the request.
 - One session per directory: a second start gets 409 ("already running").
-  `--spawn=session` exits when that session ends, and nothing restarts it or
-  starts one at boot.
+  `--spawn=session` exits when that session ends, and nothing restarts it.
+- `kaya-rc-autostart.service` starts `homelab-desktop` once per boot through the
+  same starter. It retries 6 times, 20 s apart, while the user manager or the
+  network is not up yet, and treats an already running session as done.
+  `POWER_RC_AUTOSTART` in `/etc/kaya-power.env` picks the dir (`desktop` by
+  default, `home`), and an empty value turns autostart off.
+- A session he ends stays ended until the next boot, `/homelabrc`, or a restart.
 - `POST /rc/stop?dir=…` stops the unit; `GET /rc/status` lists what is running.
+- `POST /rc/restart?dir=…` stops the session if it is running and starts a new
+  one. The reply is `{"restarted", "stopped", "name", "url"}`.
+- `/rc/*` is also accepted from loopback (`127.0.0.1`) with the same relay
+  token, for the PC's lab-assistant. `/power/*` stays Pi-only.
 - `POWER_RC_CLAUDE` overrides the claude binary (default `~/.local/bin/claude`).
 - The directory must already be trusted by Claude Code (run `claude` there once):
   with no terminal there is nobody to answer the trust prompt, and the session dies.
 
-Logs: `journalctl --user -u claude-rc-home -u claude-rc-desktop`.
+Logs: `journalctl --user -u claude-rc-home -u claude-rc-desktop` and
+`journalctl -u kaya-rc-autostart`.
 
 ## Approving sudo from the phone
 
@@ -137,7 +148,8 @@ postpones while the PC is in use:
 - the keyboard or mouse was used in the last 30 minutes (GNOME's idle monitor);
 - a Claude Code session wrote to its transcript in the last 30 minutes
   (`~/.claude/projects/*/*.jsonl`): a Remote Control session from the phone
-  touches no keyboard;
+  touches no keyboard. The boot session does not keep the PC on by itself, only
+  a session someone is using (writing its transcript) does;
 - a CI job, a `qwen-impl` run, or a job container (`kaya-train`, `kaya-data`,
   `kaya-infer`, `kaya-llama-bench`, `kaya-sim`) is running;
 - a GPU is at 30% utilisation or more on two readings 5 s apart.

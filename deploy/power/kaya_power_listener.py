@@ -1,12 +1,19 @@
 """The PC's end of /homelaboff and /homelabrc: an authenticated LAN trigger.
 
-The gateway on the Pi is the only allowed client (its IP plus KAYA_RELAY_TOKEN,
-read from /etc/kaya-power.env). It never powers anything off itself: it only
-starts kaya-shutdown-manual.service, reports what is running, or writes the
-cancel file the shutdown script checks. For /homelabrc it starts or stops a
-Claude Remote Control session as POWER_USER, in a fixed directory, inside that
-user's systemd manager (never as root). Stdlib only; runs as root under the
-system python3.
+The gateway on the Pi is allowed by IP plus KAYA_RELAY_TOKEN (read from
+/etc/kaya-power.env). It never powers anything off itself: it only starts
+kaya-shutdown-manual.service, reports what is running, or writes the cancel
+file the shutdown script checks. For /homelabrc it starts or stops a Claude
+Remote Control session as POWER_USER, in a fixed directory, inside that user's
+systemd manager (never as root).
+
+/rc/* is also accepted from loopback, with the same token, so the PC's own
+lab-assistant can use it; /power/* stays Pi-only.
+
+--rc-autostart (run once per boot by kaya-rc-autostart.service) starts the
+POWER_RC_AUTOSTART session through the same RemoteSessions.start.
+
+Stdlib only; runs as root under the system python3.
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ import pwd
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +38,9 @@ Runner = Callable[[List[str], float], subprocess.CompletedProcess]
 RC_DIRS = {"home": "", "desktop": "Desktop"}
 RC_URL = re.compile(r"https://claude\.ai/code/\S+")
 RC_WAIT_SECONDS = 20.0
+LOOPBACK = {"127.0.0.1", "::1"}
+RC_AUTOSTART_ATTEMPTS = 6
+RC_AUTOSTART_DELAY_SECONDS = 20.0
 
 
 def read_env_file(path: str) -> Dict[str, str]:
@@ -59,6 +70,7 @@ class ListenerConfig:
     state_dir: str = "/run/kaya-power"
     user: str = "gustavo"
     claude: str = ""
+    rc_autostart: str = "desktop"
 
     @classmethod
     def load(cls, env_file: str, environ: Mapping[str, str]) -> "ListenerConfig":
@@ -72,6 +84,7 @@ class ListenerConfig:
             state_dir=merged.get("POWER_STATE_DIR", "/run/kaya-power"),
             user=merged.get("POWER_USER", "gustavo"),
             claude=merged.get("POWER_RC_CLAUDE", ""),
+            rc_autostart=merged.get("POWER_RC_AUTOSTART", "desktop"),
         )
 
 
@@ -163,6 +176,7 @@ class RemoteSessions:
         self.sleep = sleep
         self.now = now
         self.home = home or _home(config.user)
+        self._lock = threading.RLock()
 
     def _systemctl(self, *args: str) -> List[str]:
         return ["systemctl", f"--machine={self.config.user}@", "--user", *args]
@@ -186,42 +200,84 @@ class RemoteSessions:
     def start(self, name: str) -> Tuple[int, Dict[str, Any]]:
         if name not in RC_DIRS:
             return 400, {"error": f"unknown dir {name!r}"}
-        session = f"homelab-{name}"
-        if self._active(name):
-            return 409, {"started": False, "name": session}
-        claude = self.config.claude or os.path.join(self.home, ".local/bin/claude")
-        directory = os.path.join(self.home, RC_DIRS[name]) if RC_DIRS[name] else self.home
-        path = f"{self.home}/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
-        since = self.now() - 1
-        argv = ["systemd-run", f"--machine={self.config.user}@", "--user",
-                f"--unit={self.unit(name)}", "--collect", f"--working-directory={directory}",
-                f"--setenv=PATH={path}", claude, "remote-control", "--spawn=session",
-                "--name", session]
-        result = self.run(argv, 15)
-        if result.returncode != 0:
-            return 500, {"started": False, "error": (result.stderr or result.stdout).strip()[-300:]}
-        deadline = self.now() + RC_WAIT_SECONDS
-        while True:
-            output = self._journal(name, since)
-            match = RC_URL.search(output)
-            if match:
-                return 200, {"started": True, "name": session, "url": match.group(0)}
-            if not self._active(name):
-                lines = [line for line in output.splitlines() if line.strip()][-5:]
-                return 500, {"started": False, "error": "\n".join(lines) or "exited at once"}
-            if self.now() >= deadline:
-                return 200, {"started": True, "name": session, "url": None}
-            self.sleep(1)
+        with self._lock:
+            session = f"homelab-{name}"
+            if self._active(name):
+                return 409, {"started": False, "name": session}
+            claude = self.config.claude or os.path.join(self.home, ".local/bin/claude")
+            directory = os.path.join(self.home, RC_DIRS[name]) if RC_DIRS[name] else self.home
+            path = f"{self.home}/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
+            since = self.now() - 1
+            argv = ["systemd-run", f"--machine={self.config.user}@", "--user",
+                    f"--unit={self.unit(name)}", "--collect", f"--working-directory={directory}",
+                    f"--setenv=PATH={path}", claude, "remote-control", "--spawn=session",
+                    "--name", session]
+            result = self.run(argv, 15)
+            if result.returncode != 0:
+                return 500, {"started": False, "error": (result.stderr or result.stdout).strip()[-300:]}
+            deadline = self.now() + RC_WAIT_SECONDS
+            while True:
+                output = self._journal(name, since)
+                match = RC_URL.search(output)
+                if match:
+                    return 200, {"started": True, "name": session, "url": match.group(0)}
+                if not self._active(name):
+                    lines = [line for line in output.splitlines() if line.strip()][-5:]
+                    return 500, {"started": False, "error": "\n".join(lines) or "exited at once"}
+                if self.now() >= deadline:
+                    return 200, {"started": True, "name": session, "url": None}
+                self.sleep(1)
 
     def stop(self, name: str) -> Tuple[int, Dict[str, Any]]:
         if name not in RC_DIRS:
             return 400, {"error": f"unknown dir {name!r}"}
-        if not self._active(name):
-            return 404, {"stopped": False}
-        result = self.run(self._systemctl("stop", self.unit(name)), 30)
-        if result.returncode != 0:
-            return 500, {"stopped": False, "error": result.stderr.strip()[-300:]}
-        return 200, {"stopped": True}
+        with self._lock:
+            if not self._active(name):
+                return 404, {"stopped": False}
+            result = self.run(self._systemctl("stop", self.unit(name)), 30)
+            if result.returncode != 0:
+                return 500, {"stopped": False, "error": result.stderr.strip()[-300:]}
+            return 200, {"stopped": True}
+
+    def restart(self, name: str) -> Tuple[int, Dict[str, Any]]:
+        if name not in RC_DIRS:
+            return 400, {"error": f"unknown dir {name!r}"}
+        with self._lock:
+            was_running = self._active(name)
+            if was_running:
+                status, body = self.stop(name)
+                if status == 500:
+                    return 500, {"restarted": False, "stopped": False, "error": body.get("error", "")}
+                was_running = status == 200
+            status, body = self.start(name)
+        return status, {"restarted": status == 200, "stopped": was_running,
+                        **{key: value for key, value in body.items() if key != "started"}}
+
+
+def autostart(sessions: RemoteSessions, name: str, attempts: int = RC_AUTOSTART_ATTEMPTS,
+              delay: float = RC_AUTOSTART_DELAY_SECONDS) -> int:
+    def log(message: str) -> None:
+        sys.stderr.write("[kaya-rc-autostart] " + message + "\n")
+    if name == "":
+        log("POWER_RC_AUTOSTART is empty: not starting a session")
+        return 0
+    for attempt in range(1, attempts + 1):
+        status, body = sessions.start(name)
+        if status == 200:
+            log(f"started {body['name']}: {body['url']}" if body.get("url")
+                else f"started {name} (no link yet)")
+            return 0
+        if status == 409:
+            log(f"{body['name']} is already running")
+            return 0
+        if status == 400:
+            log(body["error"])
+            return 2
+        log(f"attempt {attempt}/{attempts} failed: {body.get('error', '')}")
+        if attempt < attempts:
+            sessions.sleep(delay)
+    log(f"giving up after {attempts} attempts")
+    return 1
 
 
 def make_handler(config: ListenerConfig, control: PowerControl,
@@ -235,8 +291,9 @@ def make_handler(config: ListenerConfig, control: PowerControl,
             self.end_headers()
             self.wfile.write(data)
 
-        def _authorized(self) -> bool:
-            if self.client_address[0] not in config.allowed_ips:
+        def _authorized(self, path: str) -> bool:
+            address = self.client_address[0]
+            if address not in config.allowed_ips and not (path.startswith("/rc/") and address in LOOPBACK):
                 self._reply(403, {"error": "forbidden"})
                 return False
             token = self.headers.get("X-Relay-Token", "")
@@ -246,7 +303,7 @@ def make_handler(config: ListenerConfig, control: PowerControl,
             return True
 
         def do_GET(self) -> None:
-            if not self._authorized():
+            if not self._authorized(urlsplit(self.path).path):
                 return
             if self.path == "/power/status":
                 status, body = control.status()
@@ -258,7 +315,7 @@ def make_handler(config: ListenerConfig, control: PowerControl,
                 self._reply(404, {"error": "not found"})
 
         def do_POST(self) -> None:
-            if not self._authorized():
+            if not self._authorized(urlsplit(self.path).path):
                 return
             if self.path == "/power/off":
                 status, body = control.start_off()
@@ -266,10 +323,11 @@ def make_handler(config: ListenerConfig, control: PowerControl,
             elif self.path == "/power/cancel":
                 status, body = control.cancel()
                 self._reply(status, body)
-            elif sessions and urlsplit(self.path).path in ("/rc/start", "/rc/stop"):
+            elif sessions and urlsplit(self.path).path in ("/rc/start", "/rc/stop", "/rc/restart"):
                 url = urlsplit(self.path)
                 name = parse_qs(url.query).get("dir", ["home"])[0]
-                action = sessions.start if url.path == "/rc/start" else sessions.stop
+                action = {"/rc/start": sessions.start, "/rc/stop": sessions.stop,
+                          "/rc/restart": sessions.restart}[url.path]
                 status, body = action(name)
                 self._reply(status, body)
             else:
@@ -286,8 +344,14 @@ def make_server(config: ListenerConfig, control: PowerControl,
     return ThreadingHTTPServer((config.host, config.port), make_handler(config, control, sessions))
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
     config = ListenerConfig.load(os.environ.get("KAYA_POWER_ENV", "/etc/kaya-power.env"), os.environ)
+    if args == ["--rc-autostart"]:
+        sys.exit(autostart(RemoteSessions(config), config.rc_autostart))
+    if args:
+        sys.stderr.write("usage: kaya-power-listener [--rc-autostart]\n")
+        sys.exit(2)
     if not config.token:
         sys.stderr.write("KAYA_RELAY_TOKEN is empty: refusing to serve an unauthenticated listener\n")
         sys.exit(2)
