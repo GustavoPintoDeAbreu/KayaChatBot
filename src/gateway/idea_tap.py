@@ -9,7 +9,7 @@ and so never becomes something "the group said" in Kaya's memory.
 
 It claims, in DMs only:
 
-- the owner's ``/idea`` and ``/ideas`` messages (new idea, status, answers);
+- the owner's ``/idea`` messages (new idea, ``/idea list``, ``/idea pending``, answers);
 - the owner's replies that quote one of the pipeline's ``💡[idea-N]`` messages,
   which is how questions get answered;
 - the pipeline's own ``💡[idea-`` messages coming back as ``from_me`` echoes,
@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 IDEA_TAG = "💡[idea-"
 OFFLINE_TEXT = ("💡 A caixa de ideias está desligada agora; a ideia não foi guardada. "
                 "Manda outra vez mais tarde.")
-_COMMANDS = ("/idea", "/ideas")
+# `/ideas` was dropped on 2026-10-18 (the listing is `/idea list`); it is Kaya's again.
+_COMMANDS = ("/idea",)
 
 Post = Callable[[str, Dict[str, Any], Dict[str, str]], Awaitable[int]]
 

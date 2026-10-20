@@ -11,10 +11,11 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 PY="${POWER_PYTHON:-python3}"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  systemctl disable --now kaya-shutdown.timer kaya-boot-check.service 2>/dev/null || true
+  systemctl disable --now kaya-shutdown.timer kaya-early-wake.timer kaya-boot-check.service 2>/dev/null || true
   systemctl disable --now kaya-power-listener.service 2>/dev/null || true
   systemctl disable kaya-going-down.service 2>/dev/null || true
   rm -f /etc/systemd/system/kaya-shutdown.{timer,service} /usr/local/sbin/kaya-shutdown.sh \
+        /etc/systemd/system/kaya-early-wake.{timer,service} \
         /etc/systemd/system/kaya-going-down.service /usr/local/sbin/kaya-going-down.sh \
         /etc/systemd/system/kaya-boot-check.service /usr/local/sbin/kaya-boot-check.sh \
         /usr/local/sbin/kaya-power-listener /etc/systemd/system/kaya-power-listener.service \
@@ -72,9 +73,11 @@ if [ -n "$oncalendar" ]; then
     echo "[Install]"
     echo "WantedBy=timers.target"
   } > /etc/systemd/system/kaya-shutdown.timer
+  install -m 0644 "$REPO/deploy/power/kaya-early-wake.service" /etc/systemd/system/kaya-early-wake.service
+  install -m 0644 "$REPO/deploy/power/kaya-early-wake.timer" /etc/systemd/system/kaya-early-wake.timer
 else
-  systemctl disable --now kaya-shutdown.timer 2>/dev/null || true
-  rm -f /etc/systemd/system/kaya-shutdown.{timer,service}
+  systemctl disable --now kaya-shutdown.timer kaya-early-wake.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/kaya-shutdown.{timer,service} /etc/systemd/system/kaya-early-wake.{timer,service}
   echo "no shutdown times in config.yaml: no shutdown timer, the PC is turned off by hand"
 fi
 
@@ -111,6 +114,8 @@ fi
 
 systemctl daemon-reload
 [ -n "$oncalendar" ] && systemctl enable --now kaya-shutdown.timer
+# Enabled without --now: a long oneshot at boot must not delay the boot itself.
+[ -n "$oncalendar" ] && systemctl enable kaya-early-wake.timer
 systemctl enable kaya-boot-check.service
 systemctl enable --now kaya-going-down.service
 systemctl enable --now kaya-power-listener.service

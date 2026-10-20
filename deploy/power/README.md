@@ -15,6 +15,7 @@ edited by hand:
 | PC | `kaya-shutdown.timer` → `kaya-shutdown.sh` at the earliest time of each evening | `sudo deploy/power/install.sh` |
 | PC | `kaya-power-listener.service` → `/usr/local/sbin/kaya-power-listener` on port 8099 (the Pi's `/homelaboff` trigger) | `sudo deploy/power/install.sh` |
 | PC | `kaya-shutdown-manual.service` → `kaya-shutdown.sh --manual`, started by the listener | `sudo deploy/power/install.sh` |
+| PC | `kaya-early-wake.timer` → `kaya-shutdown.sh --after-early-wake`, 10 min after boot | `sudo deploy/power/install.sh` |
 | Pi | `pc-wake.timer` (Wake-on-LAN, 5 min before wake time) | `scripts/deploy_pi.sh` |
 | Pi | the gateway's offline reply ("volto às 07:00") | read at gateway start |
 
@@ -149,6 +150,53 @@ for 2 minutes, then powers off; `kaya-going-down.service` does the rest. Its
 decisions are in `journalctl -u kaya-shutdown`. `touch ~/.stay-on` keeps the PC
 up for a night; remove it afterwards. To go back to turning it off by hand, set
 `power.shutdown: {}` and rerun `install.sh`, which removes the timer.
+
+## Waking early for the idea pipeline
+
+The idea pipeline (a sibling project) waits on Claude's quota at night. When the
+quota runs out it writes a wake request — `~/.idea-wake-at`, the epoch seconds on the
+first line (override the path with `POWER_WAKE_REQUEST_FILE` in
+`/etc/kaya-power.env`) — and the nightly shutdown honours it: the PC wakes at
+the reset time instead of 07:00.
+
+A request is honoured only when it is inside the night window (the PC is
+scheduled off at `now`), after `now`, and at least
+`power.early_wake_margin_minutes` (60) before the next scheduled wake — the PC
+still gives up that long before 07:00. The check is one function,
+`PowerSchedule.early_wake` in `src/gateway/schedule.py`, used by both machines
+so they cannot disagree.
+
+The flow:
+
+1. `kaya-shutdown.sh`, once idle, asks the schedule for the early wake. When it
+   honours one, it writes `/var/lib/kaya-power/early-wake` (the marker of the
+   early wake this boot followed) and sends `{"wake_at": <epoch>}` with
+   `/pc/going-down`. `kaya-going-down.sh` reads the same marker and sends the
+   same time, whichever of the two runs last.
+2. The gateway (`src/gateway/early_wake.py`) keeps the accepted time in the
+   journal's meta table, so a restart does not lose it, and when it is due it
+   writes the same `pc-wake.request` file `/homelabon` writes, so the existing
+   `pc-wake-request.path` unit sends the Wake-on-LAN.
+3. The PC boots, and ten minutes later `kaya-early-wake.timer` runs
+   `kaya-shutdown.sh --after-early-wake`: it consumes the marker and runs the
+   same postponing loop, so the PC powers off again once idle — and honours a
+   new request when it does, so the cycle repeats. By then the day has usually
+   started, in which case it just leaves the PC on.
+
+`/homelaboff` (the manual mode) never honours a request: the owner asked for the
+PC off now, and it clears a stale marker.
+
+The RTC alarm is set to the early time as a backup, but the board's 06:55
+Resume-by-Alarm wins over `rtcwake` (see Waking up), so the Pi's packet is the
+real early wake. If the Pi misses it, the PC wakes at the normal time.
+
+**Known side effect:** labwatch's `boot_source`
+(`labwatch/collectors/power_schedule.py` in the telemetry repo) labels any boot
+between midnight and 06:50 "early", so an early wake raises the "PC woke outside
+its schedule" alert until labwatch learns about it (a separate PR there).
+
+Its decisions are in `journalctl -u kaya-early-wake` and
+`journalctl -u kaya-shutdown`.
 
 ## Waking up
 

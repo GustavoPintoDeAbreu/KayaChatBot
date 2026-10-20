@@ -40,6 +40,7 @@ from src.chat.waha_client import WahaClient, MockWahaClient
 from src.chat import metrics
 from src.chat import feedback
 from src.chat import poll_votes
+from src.chat import chats_mcp
 from src.chat.web_search import CITATION_PREFIX
 
 # WAHA event names that carry an emoji reaction (engine-dependent spelling).
@@ -803,6 +804,14 @@ def _check_relay_token(token: str) -> None:
         raise HTTPException(status_code=503, detail="relay disabled (KAYA_RELAY_TOKEN unset)")
     if token != RELAY_TOKEN:
         raise HTTPException(status_code=401, detail="invalid relay token")
+
+
+# The groups, read-only, for the lab assistant (src/chat/chats_mcp.py). Off until
+# KAYA_MCP_TOKEN is set; the PC's port is LAN-only (the tunnel is the Pi's).
+_chat_log_dir = Path(_wcfg.get("message_log_dir", "data/live_messages"))
+_chat_log_dir = _chat_log_dir if _chat_log_dir.is_absolute() else Path(config_path).parent / _chat_log_dir
+app.include_router(chats_mcp.router(chats_mcp.ChatLog(_chat_log_dir, Path(_wcfg["chat_names_file"])),
+                                    lambda: os.environ.get("KAYA_MCP_TOKEN", "")))
 
 
 if not MOCK_MODE:

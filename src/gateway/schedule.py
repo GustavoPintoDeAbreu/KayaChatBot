@@ -10,16 +10,19 @@ describe it ("Friday we stay up until two"), and it keeps a late night one entry
 An empty ``shutdown`` means no automatic shutdown: the PC only wakes on schedule
 and is turned off by hand.
 
-    python -m src.gateway.schedule [--config config.yaml] ACTION
+    python -m src.gateway.schedule [--config config.yaml] [--now EPOCH] [--wake-request PATH] ACTION
     ACTION: oncalendar-shutdown | oncalendar-wake | next-wake-epoch | next-shutdown | is-on
+            | early-wake-epoch
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import math
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Any, Dict, Iterator, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -37,6 +40,7 @@ class PowerSchedule:
     wake_time: datetime.time
     wol_lead: datetime.timedelta
     shutdown: Dict[int, datetime.time]
+    early_wake_margin: datetime.timedelta = datetime.timedelta(minutes=60)
 
     @classmethod
     def from_config(cls, power: Dict[str, Any]) -> "PowerSchedule":
@@ -50,6 +54,8 @@ class PowerSchedule:
             wake_time=datetime.time.fromisoformat(str(power.get("wake_time", "07:00"))),
             wol_lead=datetime.timedelta(minutes=float(power.get("wol_lead_minutes", 5))),
             shutdown=shutdown,
+            early_wake_margin=datetime.timedelta(
+                minutes=float(power.get("early_wake_margin_minutes", 60))),
         )
 
     def _local(self, moment: datetime.datetime) -> datetime.datetime:
@@ -91,6 +97,27 @@ class PowerSchedule:
         if not upcoming:
             raise ValueError("no shutdown is scheduled")
         return min(upcoming)
+
+    def early_wake(self, now: datetime.datetime, requested: datetime.datetime
+                   ) -> Optional[datetime.datetime]:
+        """The early wake to honour, or None when the request stays ignored.
+
+        A request is honoured only inside the night window (the PC is scheduled
+        off at ``now``), for a time after ``now``, and at least
+        ``early_wake_margin`` before the next scheduled wake — the PC still
+        gives up that long before 07:00.
+        """
+        if not self.shutdown:
+            return None
+        local_now = self._local(now)
+        local_requested = self._local(requested)
+        if self.is_scheduled_on(local_now):
+            return None
+        if local_requested <= local_now:
+            return None
+        if local_requested > self.next_wake(local_now) - self.early_wake_margin:
+            return None
+        return local_requested
 
     def shutdown_oncalendar(self) -> List[str]:
         """systemd ``OnCalendar=`` values: e.g. ``["Sat,Sun 02:00", "Mon..Fri 23:00"]``."""
@@ -163,15 +190,45 @@ def load_schedule(config_path: str) -> PowerSchedule:
     return PowerSchedule.from_config(config.get("power") or {})
 
 
+def read_wake_request(path: str) -> Optional[float]:
+    """The epoch the idea pipeline asked to wake at, from its first line.
+
+    The file is written by the idea pipeline (a sibling project) and read by
+    both machines; a missing or unreadable file means no request.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines:
+        return None
+    try:
+        value = float(lines[0].strip())
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
 def main() -> None:
     """Print one schedule value; used by the systemd installers and the shutdown script."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--now", type=float, default=None,
+                        help="pin the clock to this epoch (tests)")
+    parser.add_argument("--wake-request", default=None,
+                        help="the wake request file for early-wake-epoch")
     parser.add_argument("action", choices=["oncalendar-shutdown", "oncalendar-wake",
-                                           "next-wake-epoch", "next-shutdown", "is-on"])
+                                           "next-wake-epoch", "next-shutdown", "is-on",
+                                           "early-wake-epoch"])
     args = parser.parse_args()
     schedule = load_schedule(args.config)
-    now = datetime.datetime.now(schedule.timezone)
+    if args.now is not None:
+        now = datetime.datetime.fromtimestamp(args.now, schedule.timezone)
+    else:
+        now = datetime.datetime.now(schedule.timezone)
     if args.action == "oncalendar-shutdown":
         print("\n".join(schedule.shutdown_oncalendar()))
     elif args.action == "oncalendar-wake":
@@ -180,6 +237,15 @@ def main() -> None:
         print(int(schedule.next_wake(now).timestamp()))
     elif args.action == "next-shutdown":
         print(schedule.next_shutdown(now).isoformat())
+    elif args.action == "early-wake-epoch":
+        if args.wake_request is None:
+            parser.error("early-wake-epoch needs --wake-request")
+        requested = read_wake_request(args.wake_request)
+        if requested is not None:
+            honoured = schedule.early_wake(
+                now, datetime.datetime.fromtimestamp(requested, schedule.timezone))
+            if honoured is not None:
+                print(math.ceil(honoured.timestamp()))
     else:
         print("true" if schedule.is_scheduled_on(now) else "false")
 
