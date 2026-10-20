@@ -750,6 +750,8 @@ whatsapp:
   # answered on return, quoting the original, if it is younger than this.
   deferred_reply:
     max_age_hours: 12
+    late_note_after_minutes: 30     # older than this, the prompt says the reply is late
+    timezone: "Europe/Lisbon"
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"
   replies_dir: "data/whatsapp_replies"        # the bot's replies + verdicts (src/chat/reply_review.py)
