@@ -307,3 +307,28 @@ def test_the_manual_report_ignores_claude_sessions(rig):
     session.write_text("{}\n")
     result = _run_script(env, "--report")
     assert "Claude Code session" not in result.stdout
+
+
+def test_a_fresh_stay_on_holds_the_scheduled_shutdown(rig):
+    env, tmp_path = rig
+    (tmp_path / "stay-on").write_text("")
+    env["POWER_STOP_BEFORE_WAKE_MINUTES"] = "100000"        # past the deadline: one check, then give up
+    result = _run_script(env, "--dry-run")
+    assert "giving up tonight" in result.stdout and "stay-on exists" in result.stdout
+    assert "Broken pipe" not in result.stderr
+    assert _poweroffs(tmp_path) == []
+
+
+def test_a_stale_stay_on_holds_nothing(rig):
+    """An orphaned .stay-on kept the PC on two nights (2026-10-20/21); it is never deleted here."""
+    env, tmp_path = rig
+    flag = tmp_path / "stay-on"
+    flag.write_text("")
+    old = time.time() - 21 * 3600
+    os.utime(flag, (old, old))
+    result = _run_script(env, "--dry-run")
+    assert "dry run: the PC is idle and would shut down now" in result.stdout
+    assert "ignoring stale" in result.stdout + result.stderr
+    assert flag.exists()
+    report = _run_script(env, "--report")
+    assert "is stale" in report.stdout and "busy\t" not in report.stdout

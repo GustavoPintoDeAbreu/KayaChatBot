@@ -58,6 +58,10 @@ SCHEDULE_REPO="${POWER_REPO:-$USER_HOME/kaya-prod}"
 RETRY_MINUTES="${POWER_RETRY_MINUTES:-10}"
 STOP_BEFORE_WAKE_MINUTES="${POWER_STOP_BEFORE_WAKE_MINUTES:-60}"
 STAY_ON_FILE="${POWER_STAY_ON_FILE:-$USER_HOME/.stay-on}"
+# A .stay-on untouched for this long no longer holds the PC: `touch ~/.stay-on` keeps it
+# up for one night, and the idea pipeline refreshes its own file while it holds it. An
+# orphaned file kept the PC on two nights (2026-10-20/21). Never deleted from here.
+STAY_ON_MAX_HOURS="${POWER_STAY_ON_MAX_HOURS:-20}"
 DOCKER="${DOCKER_BIN:-/snap/bin/docker}"
 GPU_RECHECK_SECONDS="${POWER_GPU_RECHECK_SECONDS:-5}"
 BOOT_DIR="${POWER_BOOT_DIR:-/boot}"
@@ -111,13 +115,24 @@ claude_active_minutes() {
   [ -n "$newest" ] && echo $(( ($(date +%s) - ${newest%.*}) / 60 ))
 }
 
+# Whether .stay-on exists and was touched within STAY_ON_MAX_HOURS.
+stay_on_fresh() {
+  [ -n "$(find "$STAY_ON_FILE" -maxdepth 0 -mmin "-$((STAY_ON_MAX_HOURS * 60))" 2>/dev/null)" ]
+}
+
+stay_on_since() { date -r "$STAY_ON_FILE" '+%Y-%m-%d %H:%M' 2>/dev/null; }
+
 # Echoes every reason the PC counts as in use, one per line. Scheduled mode
 # blocks on .stay-on and on Claude Code sessions; manual mode does not — the
 # owner asked for it.
 busy_reasons() {
   local mode="${1:-scheduled}"
   if [ "$mode" = scheduled ] && [ -e "$STAY_ON_FILE" ]; then
-    echo "$STAY_ON_FILE exists"
+    if stay_on_fresh; then
+      echo "$STAY_ON_FILE exists"
+    else
+      say "ignoring stale $STAY_ON_FILE from $(stay_on_since) (older than ${STAY_ON_MAX_HOURS} h)" >&2
+    fi
   fi
   if [ "$mode" = scheduled ]; then
     local claude; claude="$(claude_active_minutes)"
@@ -154,7 +169,8 @@ busy_reasons() {
 }
 
 # The first reason only: the scheduled loop's interface.
-busy_reason() { busy_reasons scheduled | head -n1; }
+# Collected first: piping into head -n1 made the rest of the echoes hit a closed pipe.
+busy_reason() { local all; all="$(busy_reasons scheduled)"; printf '%s\n' "${all%%$'\n'*}"; }
 
 # The newest installed kernel that has no nvidia module, or nothing.
 kernel_problem() {
@@ -283,7 +299,12 @@ report() {
     printf 'note\tkernel %s has no nvidia module: a shutdown would be refused\n' "$problem"
   fi
   if [ -e "$STAY_ON_FILE" ]; then
-    printf 'note\t%s exists (ignored when you ask)\n' "$STAY_ON_FILE"
+    if stay_on_fresh; then
+      printf 'note\t%s exists (ignored when you ask)\n' "$STAY_ON_FILE"
+    else
+      printf 'note\t%s is stale (from %s, older than %s h): it holds nothing\n' \
+        "$STAY_ON_FILE" "$(stay_on_since)" "$STAY_ON_MAX_HOURS"
+    fi
   fi
   local pending; pending="$(pending_replies)"
   if [ -n "$pending" ] && [ "$pending" -gt 0 ]; then
