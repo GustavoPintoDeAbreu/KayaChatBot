@@ -132,8 +132,11 @@ process, so batch root steps into one command. `install.sh --uninstall` removes 
 `install.sh` turns it into `kaya-shutdown.timer` → `kaya-shutdown.sh`, which
 postpones while the PC is in use:
 
-- `~/.stay-on` exists. The idea pipeline holds it while any idea has work left,
-  so the PC goes off after the pipeline finishes, not between two of its jobs;
+- `~/.stay-on` exists and was touched in the last 20 hours. The idea pipeline holds
+  it while any idea has work left (and refreshes it every poll), so the PC goes off
+  after the pipeline finishes, not between two of its jobs. An older file holds
+  nothing and is logged as stale, never deleted: an orphaned one kept the PC on the
+  nights of 2026-10-20 and 21 (`POWER_STAY_ON_MAX_HOURS`);
 - the keyboard or mouse was used in the last 30 minutes (GNOME's idle monitor);
 - a Claude Code session wrote to its transcript in the last 30 minutes
   (`~/.claude/projects/*/*.jsonl`): a Remote Control session from the phone
@@ -144,11 +147,11 @@ postpones while the PC is in use:
 
 It checks again every 10 minutes and stops retrying 1 hour before the next wake,
 leaving the PC on for the day (`POWER_RETRY_MINUTES`, `POWER_IDLE_MINUTES`,
-`POWER_CLAUDE_IDLE_MINUTES`, `POWER_STOP_BEFORE_WAKE_MINUTES` in
+`POWER_CLAUDE_IDLE_MINUTES`, `POWER_STOP_BEFORE_WAKE_MINUTES`, `POWER_STAY_ON_MAX_HOURS` in
 `/etc/kaya-power.env` override the defaults). Once idle it warns on the desktop
 for 2 minutes, then powers off; `kaya-going-down.service` does the rest. Its
 decisions are in `journalctl -u kaya-shutdown`. `touch ~/.stay-on` keeps the PC
-up for a night; remove it afterwards. To go back to turning it off by hand, set
+up for one night (20 h); touch it again for another. To go back to turning it off by hand, set
 `power.shutdown: {}` and rerun `install.sh`, which removes the timer.
 
 ## Waking early for the idea pipeline
