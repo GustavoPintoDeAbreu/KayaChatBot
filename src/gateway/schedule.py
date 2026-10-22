@@ -1,8 +1,12 @@
-"""The GPU PC's power schedule, from config.yaml ``power:``.
+"""The GPU PC's power schedule, from lab-infra's power.yaml (mounted at /lab-infra on the Pi).
 
-One block, three consumers: the PC's shutdown timer (deploy/power), the Pi's
-Wake-on-LAN timer (scripts/deploy_pi.sh) and the gateway's offline reply. Each
-derives what it needs from here rather than restating the times.
+Since 2026-10-22 the schedule is the lab's (lab-infra power.yaml, which also has this module as
+power/schedule.py); Kaya's gateway keeps this copy for her offline reply until the lab's front
+door answers it.
+
+One file, three consumers: the PC's shutdown timer and the Pi's Wake-on-LAN timer
+(both lab-infra) and the gateway's offline reply. Each derives what it needs from
+here rather than restating the times.
 
 ``shutdown`` is keyed by the EVENING it belongs to. A time before noon means
 after midnight, so ``fri: "02:00"`` fires early on Saturday. That is how people
@@ -184,10 +188,10 @@ def _systemd_days(weekdays: List[int]) -> str:
 
 
 def load_schedule(config_path: str) -> PowerSchedule:
-    """The schedule from a config.yaml, read directly (no profile machinery)."""
+    """The schedule from lab-infra's power.yaml, or from a config.yaml's ``power:`` block."""
     with open(config_path, encoding="utf-8") as handle:
         config = yaml.safe_load(handle) or {}
-    return PowerSchedule.from_config(config.get("power") or {})
+    return PowerSchedule.from_config(config["power"] or {} if "power" in config else config)
 
 
 def read_wake_request(path: str) -> Optional[float]:

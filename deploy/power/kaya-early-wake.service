@@ -1,7 +1,0 @@
-[Unit]
-Description=After an early wake for the idea pipeline, power the PC off again once idle
-Documentation=file:///home/gustavo/kaya-prod/deploy/power/README.md
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/kaya-shutdown.sh --after-early-wake

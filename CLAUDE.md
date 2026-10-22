@@ -162,7 +162,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
 scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
-sudo deploy/power/install.sh    # the PC's power units: the poweroff announcement, the boot check, kaya-power-listener (:8099, /homelaboff, /homelabrc) and the nightly shutdown when idle (power.shutdown)
+# the PC's power units (shutdown when idle, poweroff notice, boot check, /homelaboff listener, sudo approval) and the Pi's Wake-on-LAN + firewall: ~/Desktop/lab-infra (since 2026-10-22)
 pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
 ~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
@@ -241,15 +241,15 @@ Every failure returns the semantic results unchanged.
 
 The PC stopped being always on. It wakes at 07:00 (the Pi's Wake-on-LAN, the BIOS
 alarm as backup) and, since 2026-10-15, turns itself off at night once nothing is
-running: from 23:00 (02:00 after Friday and Saturday) `kaya-shutdown.sh` waits for
+running: from 23:00 (02:00 after Friday and Saturday) lab-infra's `lab-power-shutdown.sh` waits for
 the idea pipeline, Qwen runs, CI, GPU jobs, the keyboard and Claude Code sessions,
 then powers off (between 2026-10-05 and 10-15 it was turned off by hand only).
 He can also turn it off from WhatsApp: `/homelaboff` in
 his DM (gateway `src/gateway/homelab.py`, never reaches Kaya) asks what is running, and on
-`yes` the PC's `kaya-power-listener` starts `kaya-shutdown.sh --manual`, which waits for jobs
+`yes` the PC's `lab-power-listener` starts `lab-power-shutdown.sh --manual`, which waits for jobs
 and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN; `/homelabrc [home]` starts a Claude Remote Control
 session on the PC in `~/Desktop` (or `~`) and replies with its link; a terminal-less sudo asks him on WhatsApp
-(`yes 1234`) before falling back to the password (`deploy/power/README.md`). Since 2026-10-18
+(`yes 1234`) before falling back to the password (lab-infra `docs/agent/power.md`). Since 2026-10-18
 his other DMs (voice notes, plain text) go to **lab-assistant** (`src/gateway/assistant_tap.py`,
 `~/Desktop/lab-assistant`), which answers lab questions itself and hands questions about the group
 back to Kaya as text (`POST /assistant/handback`); `/ideas` is no longer claimed (`/idea list`). Since 2026-10-19 the assistant also **reads the groups** through `POST /mcp` on this server
@@ -257,11 +257,11 @@ back to Kaya as text (`POST /assistant/handback`); `/ideas` is no longer claimed
 that chat instead of handing the note to Kaya, which is what it did before (Kaya answered with gossip).
 Read-only, groups only (never a DM file), LAN only, `X-Kaya-Token` = `KAYA_MCP_TOKEN` or 503. Hand-rolled
 JSON-RPC rather than the MCP SDK, which would pull httpx2/opentelemetry/pyjwt into this image and clash
-with gradio's `mcp<2` extra. `kaya-going-down.service` tells the Pi at
+with gradio's `mcp<2` extra. lab-infra's `lab-power-going-down.service` tells the Pi at
 every poweroff, which keeps the offline reply on "volto às 07:00" rather than
-"estou em baixo" (`config.yaml` → `power`, the one source for the Pi's
-Wake-on-LAN timer, the offline reply and the shutdown timer;
-`deploy/power/README.md`). Two things follow.
+"estou em baixo" (lab-infra `power.yaml`, the one source for the Pi's
+Wake-on-LAN timer, the offline reply and the shutdown timer; the gateway mounts it at
+`/lab-infra/power.yaml`). The power code lived here in `deploy/power` until 2026-10-22. Two things follow.
 
 **WhatsApp enters through the Pi** (`src/gateway/`, `deploy/pi/`). WAHA and the
 Cloudflare tunnel run there; the gateway journals every event in SQLite, downloads

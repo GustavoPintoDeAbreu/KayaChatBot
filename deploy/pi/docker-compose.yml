@@ -44,6 +44,8 @@ services:
     volumes:
       - ./data/gateway:/data
       - ./data/runtime:/config:ro
+      # The PC's power schedule (lab-infra power.yaml, copied there by its pi/install.sh).
+      - ${LAB_INFRA_SHARED:-/home/gustavo/lab-infra/shared}:/lab-infra:ro
     ports:
       # Internal listener (webhook, media for the PC, going-down): LAN only, and
       # firewalled to the PC. The public listener (8080) has no host port at all;

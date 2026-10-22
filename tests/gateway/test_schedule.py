@@ -250,7 +250,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(Path(__file__).parent.parent.parent / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "oncalendar-shutdown",
             ],
             capture_output=True, text=True,
@@ -264,7 +264,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(Path(__file__).parent.parent.parent / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "oncalendar-wake",
             ],
             capture_output=True, text=True,
@@ -280,7 +280,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(repo / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "--now", str(_epoch(_at(21, 23, 30))),
                 "--wake-request", str(request),
                 "early-wake-epoch",
@@ -297,7 +297,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(repo / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "--now", str(_epoch(_at(21, 23, 30))),
                 "--wake-request", str(request),
                 "early-wake-epoch",
@@ -312,7 +312,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(repo / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "early-wake-epoch",
             ],
             capture_output=True, text=True, cwd=str(repo),
@@ -324,7 +324,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [
                 sys.executable, "-m", "src.gateway.schedule",
-                "--config", str(repo / "config.yaml"),
+                "--config", str(Path(__file__).parent / "power.yaml"),
                 "--now", str(_epoch(_at(21, 23, 30))),
                 "next-wake-epoch",
             ],
@@ -332,3 +332,16 @@ class TestCLISmoke:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == str(_epoch(_at(22, 7, 0)))
+
+
+# ── The schedule comes from lab-infra's power.yaml (2026-10-22) ─────────────
+
+def test_the_gateway_reads_the_labs_power_file(tmp_path):
+    from src.gateway.app import power_config
+    lab = tmp_path / "power.yaml"
+    lab.write_text('timezone: "Europe/Lisbon"\nwake_time: "06:30"\nshutdown: {mon: "23:00"}\n')
+    kaya = {"power": {"timezone": "Europe/Lisbon"}}
+    assert power_config(str(lab), kaya)["wake_time"] == "06:30"
+    assert power_config(str(tmp_path / "missing.yaml"), kaya) == {"timezone": "Europe/Lisbon"}
+    assert PowerSchedule.from_config(power_config(str(Path(__file__).parent / "power.yaml"), kaya)) \
+        .shutdown_oncalendar() == ["Sat,Sun 02:00", "Mon..Thu,Sun 23:00"]

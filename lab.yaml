@@ -25,9 +25,8 @@ provides:
   - {id: kaya.chats_mcp, kind: service, path: src/chat/chats_mcp.py, summary: "POST /mcp on the PC's Kaya server (LAN only, X-Kaya-Token = KAYA_MCP_TOKEN, off without it): the groups read-only for lab-assistant. chats(), read_chat(chat, hours, contains, limit) from the group log by a piece of the group's name, status(). Groups only, never DMs; anything that leaves a conversation gets a summary, no names or quotes"}
   - {id: kaya.idea_tap, kind: service, path: src/gateway/idea_tap.py, summary: "Hands the owner's /idea DMs and quoted 💡[idea-N] replies to idea-pipeline's inbox (/ideas is no longer a command: /idea list)"}
   - {id: kaya.config_loader, kind: lib, path: src/config_loader.py, summary: "YAML config loader with env overrides"}
-  - {id: kaya.power, kind: service, path: deploy/power, summary: "The PC's 07:00 wake (alarm backup), the nightly shutdown once idle (from 23:00, waits for ~/.stay-on, Qwen, CI, GPU, keyboard, Claude sessions), the poweroff announcement to the Pi, and the boot check"}
   - {id: kaya.sim, kind: script, path: scripts/run_conversation_sim.py, summary: "Multi-person conversation simulator over the real webhook path with mock outbound"}
-uses: [svc.llm-broker, svc.kaya-waha, svc.kaya-gateway, svc.cloudflared, svc.pc-wake, host.pc, host.pi]
+uses: [svc.llm-broker, svc.kaya-waha, svc.kaya-gateway, svc.cloudflared, svc.pc-wake, lab-infra, host.pc, host.pi]
 docs:
   - {topic: "agent guide (architecture, invariants, conventions)", path: CLAUDE.md}
   - {topic: "deployment (prod, dev, Pi)", path: DEPLOYMENT.md}
