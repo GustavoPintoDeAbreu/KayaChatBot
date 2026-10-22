@@ -118,7 +118,7 @@ and `app_up.sh`:
 | `KAYA_TUNNEL` | follows `KAYA_EDGE` | `pi` (the PC runs no connector) |
 | `KAYA_INFERENCE_BACKEND` | `gguf` | `ollama` (see CLAUDE.md, "Kaya runs on Ollama") |
 | `KAYA_PROD_OLLAMA_URL` | unused | `http://llm-broker:8080/upstream/kaya` |
-| `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused; rollback: `.../upstream/kaya-llamacpp` with backend `gguf` |
+| `KAYA_PROD_LLAMA_URL` | empty (the `llama` compose service) | unused (the broker's `kaya-llamacpp` rollback was retired 2026-10-22; see CLAUDE.md) |
 | `KAYA_PROD_WAHA_URL` | empty (`http://waha:3000`) | `http://192.168.1.238:3000` |
 | `KAYA_RELAY_TOKEN` | unused | shared secret with the Pi gateway |
 

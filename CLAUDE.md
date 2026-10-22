@@ -333,9 +333,10 @@ Three things to know:
   switch. `OllamaBackend` uses raw `/api/generate` with the HF template, which
   never triggers thinking, so the router and the reply see exactly the prompt
   llama.cpp saw.
-- **Rollback is one line.** The broker keeps `kaya-llamacpp`.
-  `KAYA_INFERENCE_BACKEND=gguf` with
-  `KAYA_PROD_LLAMA_URL=http://llm-broker:8080/upstream/kaya-llamacpp` goes back.
+- **Rollback** (the llama.cpp runtime): the broker's `kaya-llamacpp` entry was retired on
+  2026-10-22 (unused; the owner's choice). To go back, restore it from llm-broker's git history
+  (llm-broker#4), then `KAYA_INFERENCE_BACKEND=gguf` with
+  `KAYA_PROD_LLAMA_URL=http://llm-broker:8080/upstream/kaya-llamacpp`.
 
 ### The group is a Community (2026-09-29)
 
