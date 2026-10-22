@@ -86,6 +86,8 @@ class GatewaySettings:
     public_port: int
     internal_port: int
     max_media_bytes: int
+    # The PC's power schedule: lab-infra's power.yaml, mounted read-only (since 2026-10-22).
+    power_path: str = "/lab-infra/power.yaml"
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "GatewaySettings":
@@ -107,7 +109,22 @@ class GatewaySettings:
             public_port=int(env.get("GATEWAY_PUBLIC_PORT", "8080")),
             internal_port=int(env.get("GATEWAY_INTERNAL_PORT", "8088")),
             max_media_bytes=int(float(env.get("GATEWAY_MAX_MEDIA_MB", "50")) * 1024 * 1024),
+            power_path=env.get("GATEWAY_POWER_FILE", "/lab-infra/power.yaml"),
         )
+
+
+def power_config(path: str, config: Mapping[str, Any]) -> Dict[str, Any]:
+    """The PC's power schedule from lab-infra's power.yaml (the lab owns it since 2026-10-22);
+    config.yaml's ``power:`` block (Kaya's timezone only now) when the file is not mounted."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+    except OSError:
+        data = {}
+    if isinstance(data, dict) and data.get("wake_time"):
+        return data
+    logger.warning("no power schedule at %s: using config.yaml power (the offline reply may be vague)", path)
+    return dict(config.get("power") or {})
 
 
 class Gateway:
@@ -137,7 +154,7 @@ class Gateway:
         self._respond_on_reply = bool(group.get("respond_on_reply", True))
         self._whitelist_enabled = bool(whitelist.get("enabled", False))
         self._whitelist_numbers = self._load_whitelist(whitelist.get("allowed") or [])
-        self.schedule = PowerSchedule.from_config(config.get("power") or {})
+        self.schedule = PowerSchedule.from_config(power_config(settings.power_path, config))
 
         self.journal = journal or Journal(f"{settings.data_dir}/journal.sqlite3",
                                           f"{settings.data_dir}/media")

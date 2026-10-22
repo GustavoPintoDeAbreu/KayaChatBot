@@ -3,7 +3,7 @@ PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
 makes that possible from the phone, from anywhere. The gateway is the only
-client of the PC's authenticated power listener (``kaya-power-listener`` on
+client of the PC's authenticated power listener (lab-infra ``lab-power-listener`` on
 :8099), and this tap is where the two are kept apart: a message it claims is
 never journaled, never forwarded to the PC's ``/whatsapp/relay``, and never
 answered by Kaya.

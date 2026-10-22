@@ -1,6 +1,6 @@
 # The Pi: Kaya's always-on front door
 
-The GPU PC runs on a schedule (`config.yaml` → `power`), so anything that has to be
+The GPU PC runs on a schedule (lab-infra `power.yaml`), so anything that has to be
 up all the time runs on the Raspberry Pi 5 (`pi5.local`, 192.168.1.238):
 
 ```
@@ -86,13 +86,15 @@ scripts/deploy_pi.sh              # afterwards: sync code, rebuild, restart
 Pi's `.env` (the owner's number(s), comma-separated, digits only). `--init-env`
 does not copy it, so on an existing Pi add it by hand and restart the gateway.
 
-The script also installs three units on the Pi:
+Three Pi units around the gateway are the lab's since 2026-10-22 (lab-infra `pi/install.sh`):
 
-- `pc-wake.timer`: Wake-on-LAN at `power.wake_time` minus `wol_lead_minutes`.
+- `pc-wake.timer`: Wake-on-LAN at power.yaml `wake_time` minus `wol_lead_minutes`.
 - `pc-wake-request.path`/`.service`: runs the same `pc-wake.sh` when the gateway
   drops `data/gateway/pc-wake.request` — that is what `/homelabon` does.
-- `kaya-firewall.service`: ports 3000 and 8088 accept the PC only (`DOCKER-USER`,
+- `lab-firewall.service`: ports 3000 and 8088 accept the PC only (`DOCKER-USER`,
   since Docker-published ports skip `INPUT`).
+
+The gateway mounts the Pi's `~/lab-infra/shared` at `/lab-infra` for the power schedule.
 
 Useful on the Pi (`pi5 ssh`):
 

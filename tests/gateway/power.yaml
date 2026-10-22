@@ -1,0 +1,24 @@
+# The PC's power schedule: one source for three consumers, the PC's shutdown timer
+# (power/install.sh), the Pi's Wake-on-LAN timer (pi/install.sh) and Kaya's offline reply
+# ("volto às 07:00", her gateway mounts this file). Generate the systemd OnCalendar lines with
+# `python3 power/schedule.py oncalendar-shutdown`, never by hand.
+# Since 2026-10-15 these are the EARLIEST shutdown times: from then the shutdown is postponed
+# (re-checked every POWER_RETRY_MINUTES) while anything is running (the idea pipeline's
+# ~/.stay-on, a Qwen run, CI, a GPU job, the keyboard, a Claude Code session in the last 30 min,
+# the nightly security audit) and given up an hour before wake_time. After a change rerun
+# `sudo power/install.sh` (PC) and `pi/install.sh` (Pi), and redeploy Kaya's gateway.
+timezone: "Europe/Lisbon"
+wake_time: "07:00"
+wol_lead_minutes: 5
+# An early wake the idea pipeline asks for (its ~/.idea-wake-at) is honoured only
+# at least this long before wake_time: the PC still gives up that long before 07:00.
+early_wake_margin_minutes: 60
+# Keyed by the EVENING it belongs to: fri "02:00" fires early on Saturday.
+shutdown:
+  sun: "23:00"
+  mon: "23:00"
+  tue: "23:00"
+  wed: "23:00"
+  thu: "23:00"
+  fri: "02:00"
+  sat: "02:00"

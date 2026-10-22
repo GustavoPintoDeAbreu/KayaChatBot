@@ -75,9 +75,9 @@ so the landing page stays public.
 
 ## The Pi edge and the GPU broker (2026-09-24)
 
-The PC is no longer always on: it wakes at 07:00 (`config.yaml` → `power`) and,
+The PC is no longer always on: it wakes at 07:00 (lab-infra `power.yaml`) and,
 since 2026-10-15, turns itself off from 23:00 (02:00 after Friday and Saturday)
-once nothing is running (`deploy/power/README.md`). Everything that
+once nothing is running (lab-infra `docs/agent/power.md`). Everything that
 must be up all the time moved to the Raspberry Pi, and every LLM on the PC now
 loads through one broker instead of holding a GPU permanently.
 
@@ -106,8 +106,8 @@ loads through one broker instead of holding a GPU permanently.
 - **Broker**: `~/llm-broker` (its own repo, machine infrastructure, README there).
   Kaya's model loads on the first request after being evicted; nothing unloads it
   on a timer, so the only cold start is after something else borrowed GPU1.
-- **Power**: see `deploy/power/README.md`. `sudo deploy/power/install.sh` on the
-  PC; the Pi's Wake-on-LAN timer is installed by `deploy_pi.sh`.
+- **Power**: the lab's since 2026-10-22, in `~/Desktop/lab-infra` (`sudo power/install.sh` on the
+  PC, `pi/install.sh` for the Pi's Wake-on-LAN timer and firewall; `docs/agent/power.md`).
 
 Two settings in `~/kaya-prod/.env` choose the layout, read by `deploy_prod.sh`
 and `app_up.sh`:
@@ -163,8 +163,8 @@ requests `/manifest.json` at the root, which 404s harmlessly.
    3. `COMPOSE_PROFILES=tunnel,waha` on the Pi, deploy.
    4. `KAYA_EDGE=pi` and `KAYA_PROD_WAHA_URL` in `~/kaya-prod/.env`, `scripts/deploy_prod.sh`.
    5. Check `pi5 gateway`: the session is WORKING and events are arriving.
-7. **Power.** `sudo deploy/power/install.sh`, then the supervised WoL and RTC tests
-   in `deploy/power/README.md`.
+7. **Power.** lab-infra: `sudo power/install.sh` and `pi/install.sh`, then the supervised WoL and
+   RTC tests in its `docs/agent/power.md`.
 
 **Rollback**, from any step: restore the ingress rules above to
 `http://kaya-prod:7860` / `http://kaya-dev:7861`, set `COMPOSE_PROFILES=` on the

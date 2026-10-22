@@ -5,8 +5,8 @@
 #   scripts/deploy_pi.sh [--init-env]
 #
 # Copies the gateway's code and config.yaml to pi5:~/kaya-gateway, the runtime
-# whitelist from ~/kaya-prod/data, installs the Wake-on-LAN timer and the LAN
-# firewall, then rebuilds and restarts the containers. Which of WAHA and the
+# whitelist from ~/kaya-prod/data, then rebuilds and restarts the containers (the
+# Wake-on-LAN timer and the LAN firewall are lab-infra's pi/install.sh since 2026-10-22). Which of WAHA and the
 # tunnel run is decided by COMPOSE_PROFILES in the Pi's deploy/pi/.env.
 #
 # --init-env writes that .env from ~/kaya-prod/.env when it does not exist yet
@@ -43,8 +43,6 @@ if [[ "${1:-}" == "--init-env" ]]; then
                  KAYA_WEB_USER KAYA_WEB_PASS CLOUDFLARE_TUNNEL_TOKEN; do
         echo "$key=$(value "$key")"
       done
-      echo "PC_MAC=b4:2e:99:92:4f:be"
-      echo "PC_BROADCAST=192.168.1.255"
     } | ssh "$PI" "umask 077 && cat > $REMOTE_DIR/deploy/pi/.env"
     echo "🔐 wrote $REMOTE_DIR/deploy/pi/.env (COMPOSE_PROFILES empty: gateway only)"
   fi
@@ -56,64 +54,9 @@ if [[ -f "$PROD_DIR/data/whatsapp_whitelist.json" ]]; then
   scp -q "$PROD_DIR/data/whatsapp_whitelist.json" "$PI:$REMOTE_DIR/deploy/pi/data/runtime/whatsapp_whitelist.json"
 fi
 
-echo "⏰ Installing the Wake-on-LAN timer and the firewall ..."
-wake_calendar="$(python3 -m src.gateway.schedule --config config.yaml oncalendar-wake)"
-ssh "$PI" "sudo tee /etc/systemd/system/pc-wake.service >/dev/null" <<UNIT
-[Unit]
-Description=Wake the GPU PC (Wake-on-LAN), per config.yaml power
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/home/gustavo/$REMOTE_DIR/deploy/pi/pc-wake.sh
-UNIT
-ssh "$PI" "sudo tee /etc/systemd/system/pc-wake.timer >/dev/null" <<UNIT
-[Unit]
-Description=Wake the GPU PC every morning (generated from config.yaml power)
-
-[Timer]
-OnCalendar=$wake_calendar
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-UNIT
-ssh "$PI" "sudo tee /etc/systemd/system/pc-wake-request.path >/dev/null" <<UNIT
-[Unit]
-Description=Wake the GPU PC when the gateway asks (/homelabon)
-
-[Path]
-PathExists=/home/gustavo/$REMOTE_DIR/deploy/pi/data/gateway/pc-wake.request
-Unit=pc-wake-request.service
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-ssh "$PI" "sudo tee /etc/systemd/system/pc-wake-request.service >/dev/null" <<UNIT
-[Unit]
-Description=Wake the GPU PC on the gateway's request
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/rm -f /home/gustavo/$REMOTE_DIR/deploy/pi/data/gateway/pc-wake.request
-ExecStart=/home/gustavo/$REMOTE_DIR/deploy/pi/pc-wake.sh
-UNIT
-ssh "$PI" "sudo tee /etc/systemd/system/kaya-firewall.service >/dev/null" <<UNIT
-[Unit]
-Description=Restrict the Pi's WAHA and gateway ports to the GPU PC
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/home/gustavo/$REMOTE_DIR/deploy/pi/kaya-firewall.sh
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-ssh "$PI" "sudo systemctl daemon-reload && sudo systemctl enable --now pc-wake.timer >/dev/null && sudo systemctl enable --now pc-wake-request.path >/dev/null && sudo systemctl enable --now kaya-firewall.service >/dev/null"
+# The Wake-on-LAN timer and the LAN firewall are the lab's since 2026-10-22: lab-infra pi/install.sh.
+ssh "$PI" "test -f lab-infra/shared/power.yaml" \
+  || echo "⚠️  lab-infra/shared/power.yaml missing on the Pi: run lab-infra pi/install.sh (offline reply falls back)"
 
 ssh "$PI" "test -f $REMOTE_DIR/deploy/pi/.env" \
   || { echo "❌ $REMOTE_DIR/deploy/pi/.env missing: run with --init-env" >&2; exit 1; }
