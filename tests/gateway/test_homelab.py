@@ -16,7 +16,7 @@ from src.gateway.homelab import (
     ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
-    RC_USAGE, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
+    RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
 )
 from src.gateway.monitor import PcMonitor, PcState
@@ -284,23 +284,54 @@ def test_own_echo_is_dropped(rig):
     assert sent == [] and pc.calls == [] and gateway.journal.pending_count() == 0
 
 
-def test_homelabon_requests_wake_and_reports_online(rig):
-    gateway, clock, monitor, sent, _, homelab = rig
+def test_homelabon_requests_wake_and_reports_online_with_a_claude_session(rig):
+    gateway, clock, monitor, sent, pc, homelab = rig
     monitor.observe(PcState.OFFLINE)
     assert _post(gateway, _message("h27", "/homelabon")) == {"homelab": "on-requested"}
     assert sent[0][1] == f"{HOMELAB_TAG} " + WAKE_SENT
     request = Path(gateway.settings.data_dir) / "pc-wake.request"
     assert request.exists()
     monitor.observe(PcState.ONLINE)
-    homelab.tick()
-    assert sent[1][1] == f"{HOMELAB_TAG} " + PC_ONLINE
-    assert OWNER not in homelab._waking
+    assert homelab.tick() == [OWNER]
+    assert OWNER not in homelab._waking and len(sent) == 1
+    # the boot already started the session: the listener answers 409 with its link
+    pc.status_by_path["/rc/start"] = (409, {"started": False, "name": "homelab-desktop", "url": RC_URL})
+    asyncio.run(homelab.announce_online(OWNER))
+    link = SESSION_LINK.format(name="homelab-desktop", url=RC_URL)
+    assert sent[1][1] == f"{HOMELAB_TAG} {PC_ONLINE}\n{link}"
+    assert pc.calls[-1][1].endswith("/rc/start?dir=desktop")
 
 
-def test_homelabon_when_already_on(rig):
-    gateway, _, _, sent, _, _ = rig
+def test_homelabon_retries_the_session_right_after_boot(rig):
+    _, _, _, sent, pc, homelab = rig
+    waits = []
+
+    async def pause(seconds):
+        waits.append(seconds)
+        pc.status_by_path["/rc/start"] = (200, {"started": True, "name": "homelab-desktop", "url": None})
+    homelab.pause = pause
+    pc.status_by_path["/rc/start"] = (500, {"started": False, "error": "Unit claude-rc-desktop.service exists"})
+    asyncio.run(homelab.announce_online(OWNER))
+    assert waits == [20.0]
+    assert sent[-1][1].endswith(SESSION_STARTING.format(name="homelab-desktop"))
+    pc.status_by_path["/rc/start"] = (500, {"started": False, "error": "line one\nno user manager"})
+
+    async def no_luck(seconds):
+        waits.append(seconds)
+    homelab.pause = no_luck
+    asyncio.run(homelab.announce_online(OWNER))
+    assert waits == [20.0, 20.0, 20.0]
+    assert sent[-1][1].endswith(SESSION_FAILED.format(error="no user manager"))
+
+
+def test_homelabon_when_already_on_starts_or_finds_the_session(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/rc/start"] = (200, {"started": True, "name": "homelab-desktop", "url": RC_URL})
     assert _post(gateway, _message("h28", "/homelabon")) == {"homelab": "on-already"}
-    assert sent[0][1] == f"{HOMELAB_TAG} " + ALREADY_ON
+    assert sent[0][1] == f"{HOMELAB_TAG} {ALREADY_ON}\n" + SESSION_LINK.format(name="homelab-desktop", url=RC_URL)
+    pc.raises = True
+    assert _post(gateway, _message("h28b", "/homelabon")) == {"homelab": "on-already"}
+    assert sent[1][1] == f"{HOMELAB_TAG} {ALREADY_ON}\n" + SESSION_FAILED.format(error="ConnectError")
 
 
 def test_homelabon_times_out(rig):

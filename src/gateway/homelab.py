@@ -34,7 +34,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -81,6 +81,14 @@ RC_STOPPED = "{name} stopped."
 RC_NOT_RUNNING = "No {name} session is running."
 RC_FAILED = "Couldn't start {name} ({error})."
 RC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
+# /homelabon also hands back a Claude session in ~/Desktop (the owner's wish, 2026-10-22): the boot
+# starts one (lab-infra lab-power-rc-autostart); this makes sure it runs and sends its link.
+SESSION_LINK = "Claude session {name}: {url}"
+SESSION_STARTING = "Claude session {name} is starting. Open it from the Claude app → Code."
+SESSION_FAILED = "No Claude session ({error}). /homelabrc starts one."
+SESSION_DIR = "desktop"
+SESSION_ATTEMPTS = 3
+SESSION_RETRY_SECONDS = 20.0
 SUDO_TTL_SECONDS = 600.0
 SUDO_ASK = ("sudo on the PC:\n{command}\nin {cwd}, from {origin}\n\n"
             'Reply "yes {code}" to allow it, "no {code}" to refuse (10 min).')
@@ -121,6 +129,7 @@ class HomelabPower:
     pc_power_url: str
     token: str
     call: Optional[Call] = None
+    pause: Callable[[float], Awaitable[None]] = asyncio.sleep   # the wait between session retries
     _seen: Set[str] = field(default_factory=set)
     _pending: Dict[str, float] = field(default_factory=dict)      # chat_id -> asked at
     _waking: Dict[str, float] = field(default_factory=dict)       # chat_id -> requested at
@@ -324,7 +333,8 @@ class HomelabPower:
 
     async def _on(self, msg: InboundMessage) -> Dict[str, Any]:
         if self._monitor.state is PcState.ONLINE:
-            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_ON, msg.message_id)
+            line = await self._session_line()
+            await asyncio.to_thread(self._say, msg.chat_id, f"{ALREADY_ON}\n{line}", msg.message_id)
             return {"homelab": "on-already"}
         try:
             self._wake_request.write_text(str(self._now()))
@@ -375,6 +385,31 @@ class HomelabPower:
             text, result = RC_FAILED.format(name=name, error=error), "rc-failed"
         await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
         return {"homelab": result}
+
+    async def _session_line(self, attempts: int = 1) -> str:
+        """Make sure the ~/Desktop session runs and say where it is. A 409 is the session the boot
+        already started (the listener sends its link); a failure right after boot is retried, since
+        the boot's own start may still be running."""
+        name = f"homelab-{SESSION_DIR}"
+        error = ""
+        for attempt in range(attempts):
+            if attempt:
+                await self.pause(SESSION_RETRY_SECONDS)
+            try:
+                status, body = await self._request("POST", f"/rc/start?dir={SESSION_DIR}")
+            except (httpx.HTTPError, OSError) as exc:
+                error = type(exc).__name__
+                continue
+            if status in (200, 409):
+                url = body.get("url")
+                return SESSION_LINK.format(name=name, url=url) if url else SESSION_STARTING.format(name=name)
+            error = (str(body.get("error") or f"HTTP {status}").strip().splitlines() or ["?"])[-1][:120]
+        return SESSION_FAILED.format(error=error)
+
+    async def announce_online(self, chat: str) -> None:
+        """The PC asked for with /homelabon is up: say so, with its Claude session."""
+        line = await self._session_line(SESSION_ATTEMPTS)
+        await asyncio.to_thread(self._say, chat, f"{PC_ONLINE}\n{line}")
 
     def _expire_sudo(self) -> None:
         for request in self._sudo.values():
@@ -440,10 +475,13 @@ class HomelabPower:
             self._set_active("")
         return sent
 
-    def tick(self) -> None:
+    def tick(self) -> List[str]:
+        """Expire what is due; returns the chats whose /homelabon wake just came up (``watch``
+        announces them with their Claude session)."""
+        online = []
         for chat, started in list(self._waking.items()):
             if self._monitor.state is PcState.ONLINE:
-                self._say(chat, PC_ONLINE)
+                online.append(chat)
                 del self._waking[chat]
             elif self._now() - started > WAKE_TIMEOUT_SECONDS:
                 self._say(chat, WAKE_TIMEOUT)
@@ -452,11 +490,14 @@ class HomelabPower:
                  if self._now() - asked > CONFIRM_TTL_SECONDS]
         for chat in stale:
             del self._pending[chat]
+        return online
 
     async def watch(self, stop: asyncio.Event, interval: float = 10.0) -> None:
         """Report wake results and drop expired confirmations until *stop* is set."""
         while not stop.is_set():
-            await asyncio.to_thread(self.tick)
+            for chat in await asyncio.to_thread(self.tick):
+                # its own task: a retry after boot must not hold up the other checks
+                asyncio.create_task(self.announce_online(chat))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
             except asyncio.TimeoutError:

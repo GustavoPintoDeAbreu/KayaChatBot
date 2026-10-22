@@ -247,7 +247,7 @@ then powers off (between 2026-10-05 and 10-15 it was turned off by hand only).
 He can also turn it off from WhatsApp: `/homelaboff` in
 his DM (gateway `src/gateway/homelab.py`, never reaches Kaya) asks what is running, and on
 `yes` the PC's `lab-power-listener` starts `lab-power-shutdown.sh --manual`, which waits for jobs
-and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN; `/homelabrc [home]` starts a Claude Remote Control
+and Kaya's replies, then powers off; `/homelabon` sends Wake-on-LAN and, once the PC is up (or at once if it already is), replies with the `~/Desktop` Claude session's link (the boot starts it; 409 carries the link); `/homelabrc [home]` starts a Claude Remote Control
 session on the PC in `~/Desktop` (or `~`) and replies with its link; a terminal-less sudo asks him on WhatsApp
 (`yes 1234`) before falling back to the password (lab-infra `docs/agent/power.md`). Since 2026-10-18
 his other DMs (voice notes, plain text) go to **lab-assistant** (`src/gateway/assistant_tap.py`,
