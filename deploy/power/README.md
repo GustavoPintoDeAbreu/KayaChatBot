@@ -145,6 +145,13 @@ postpones while the PC is in use:
   `kaya-infer`, `kaya-llama-bench`, `kaya-sim`) is running;
 - a GPU is at 30% utilisation or more on two readings 5 s apart.
 
+**The security audit is the last job** (lab-audit, since 2026-10-22). The first time the PC is
+idle, the script starts the user unit `lab-audit.service` (once per night) and goes back to
+waiting: "a security audit is running" holds the poweroff for up to `POWER_AUDIT_MAX_MINUTES`
+(120). An audit can start security ideas, whose `.stay-on` then holds the PC as usual. A
+weeknight poweroff can therefore move from 23:00 to about 01:00. `POWER_AUDIT_UNIT=` (empty)
+turns this off; lab-audit's own `lab-audit.timer` runs it at 05:00 when the PC never went idle.
+
 It checks again every 10 minutes and stops retrying 1 hour before the next wake,
 leaving the PC on for the day (`POWER_RETRY_MINUTES`, `POWER_IDLE_MINUTES`,
 `POWER_CLAUDE_IDLE_MINUTES`, `POWER_STOP_BEFORE_WAKE_MINUTES`, `POWER_STAY_ON_MAX_HOURS` in

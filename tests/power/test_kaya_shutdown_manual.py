@@ -60,6 +60,15 @@ def _write_fakes(tmp_path):
         # Kaya's card (GPU1); FAKE_DEV_GPU_UTIL the dev card (GPU0, POWER_DEV_GPU_UUID below).
         'printf "GPU-kaya, %s\\nGPU-dev, %s\\n" "${FAKE_GPU_UTIL:-0}" "${FAKE_DEV_GPU_UTIL:-0}"\n')
     (bin_dir / "nvidia-smi").chmod(0o755)
+    # systemctl: `is-active` prints FAKE_AUDIT_STATE (default inactive); everything is logged.
+    (bin_dir / "systemctl").write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\t%s\\n\' systemctl "$*" >> "${FAKE_LOG:?}"\n'
+        'if [[ "$*" == *"is-active"* ]]; then\n'
+        '  state="${FAKE_AUDIT_STATE:-inactive}"\n'
+        '  if [ -n "${FAKE_AUDIT_STATE_FILE:-}" ] && [ -f "$FAKE_AUDIT_STATE_FILE" ]; then state="$(cat "$FAKE_AUDIT_STATE_FILE")"; fi\n'
+        '  echo "$state"; [ "$state" = active ]; exit $?\n'
+        'fi\n')
+    (bin_dir / "systemctl").chmod(0o755)
     (bin_dir / "curl").write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\t%s\\n\' curl "$*" >> "${FAKE_LOG:?}"\n'
         'if [[ "$*" == *"relay/status"* ]]; then\n'
@@ -279,7 +288,9 @@ def test_scheduled_dry_run_is_unchanged(rig):
     assert result.returncode == 0
     assert "dry run: the PC is idle and would shut down now" in result.stdout
     assert _poweroffs(tmp_path) == []
-    assert not any(name == "systemctl" for name, _ in _fakes(tmp_path))
+    # only read-only checks (is the audit running?); nothing started, nothing powered off
+    assert all("is-active" in rest for name, rest in _fakes(tmp_path) if name == "systemctl")
+    assert "would start the security audit" in result.stdout
 
 
 def test_a_recent_claude_session_holds_the_scheduled_shutdown(rig):

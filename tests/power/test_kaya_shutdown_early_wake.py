@@ -159,3 +159,45 @@ def test_after_early_wake_gives_up_before_the_morning(early):
     assert result.returncode == 0
     assert "giving up tonight" in result.stdout
     assert _poweroffs(tmp_path) == []
+
+
+def _audit_starts(tmp_path):
+    return [rest for name, rest in _fakes(tmp_path) if name == "systemctl" and "--user start" in rest]
+
+
+def test_the_security_audit_runs_once_as_the_last_job(early):
+    env, tmp_path = early
+    result = _run_script(env)
+    assert result.returncode == 0
+    assert len(_audit_starts(tmp_path)) == 1 and "lab-audit.service" in _audit_starts(tmp_path)[0]
+    assert "starting the security audit" in result.stdout
+    assert len(_poweroffs(tmp_path)) == 1
+    flat = [f"{name} {rest}" for name, rest in _fakes(tmp_path)]
+    start = next(i for i, line in enumerate(flat) if "--user start" in line)
+    poweroff = next(i for i, line in enumerate(flat) if line.startswith("systemctl poweroff"))
+    assert start < poweroff
+
+
+def test_a_running_audit_holds_the_poweroff(early):
+    env, tmp_path = early
+    env["FAKE_AUDIT_STATE"] = "activating"                   # a oneshot unit while it runs
+    env["POWER_STOP_BEFORE_WAKE_MINUTES"] = "100000"         # past the deadline: one check, then give up
+    result = _run_script(env)
+    assert "a security audit is running" in result.stdout and "giving up tonight" in result.stdout
+    assert _poweroffs(tmp_path) == []
+
+
+def test_the_audit_cap_lets_the_poweroff_go(early):
+    env, tmp_path = early
+    env["FAKE_AUDIT_STATE"] = "activating"
+    env["POWER_AUDIT_MAX_MINUTES"] = "0"
+    result = _run_script(env)
+    assert len(_poweroffs(tmp_path)) == 1 and "security audit is running" not in result.stdout
+
+
+def test_no_audit_unit_means_no_audit(early):
+    env, tmp_path = early
+    env["POWER_AUDIT_UNIT"] = ""
+    result = _run_script(env)
+    assert _audit_starts(tmp_path) == [] and len(_poweroffs(tmp_path)) == 1
+    assert "security audit" not in result.stdout

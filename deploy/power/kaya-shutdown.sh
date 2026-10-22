@@ -62,6 +62,12 @@ STAY_ON_FILE="${POWER_STAY_ON_FILE:-$USER_HOME/.stay-on}"
 # up for one night, and the idea pipeline refreshes its own file while it holds it. An
 # orphaned file kept the PC on two nights (2026-10-20/21). Never deleted from here.
 STAY_ON_MAX_HOURS="${POWER_STAY_ON_MAX_HOURS:-20}"
+# lab-audit's nightly audit runs as the last job before a scheduled poweroff: once the PC is idle,
+# the user unit is started (once per night) and counts as busy for up to AUDIT_MAX_MINUTES.
+# Empty POWER_AUDIT_UNIT turns it off.
+AUDIT_UNIT="${POWER_AUDIT_UNIT-lab-audit.service}"
+AUDIT_MAX_MINUTES="${POWER_AUDIT_MAX_MINUTES:-120}"
+AUDIT_STARTED_AT=""
 DOCKER="${DOCKER_BIN:-/snap/bin/docker}"
 GPU_RECHECK_SECONDS="${POWER_GPU_RECHECK_SECONDS:-5}"
 BOOT_DIR="${POWER_BOOT_DIR:-/boot}"
@@ -81,6 +87,33 @@ hhmm() { date -d "@$1" +%H:%M; }
 as_user() {
   sudo -u "$USER_NAME" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" \
     DISPLAY=:0 "$@"
+}
+
+user_systemctl() {
+  as_user env XDG_RUNTIME_DIR="/run/user/$USER_UID" systemctl --user "$@"
+}
+
+# "a security audit is running (N min)" while the unit runs and is under the cap, else nothing.
+# A oneshot unit is "activating" while it runs. The cap counts from our own start; an audit
+# started elsewhere (the 05:00 timer) is bounded by its own budget and TimeoutStartSec.
+audit_running() {
+  [ -n "$AUDIT_UNIT" ] || return 0
+  case "$(user_systemctl is-active "$AUDIT_UNIT" 2>/dev/null)" in
+    active|activating|reloading) ;;
+    *) return 0 ;;
+  esac
+  local now; now="$(date +%s)"
+  [ -n "$AUDIT_STARTED_AT" ] || AUDIT_STARTED_AT="$now"
+  local mins=$(( (now - AUDIT_STARTED_AT) / 60 ))
+  [ "$mins" -lt "$AUDIT_MAX_MINUTES" ] && echo "a security audit is running ($mins min)"
+}
+
+# Start tonight's audit once; true when it was started now.
+start_audit_once() {
+  [ -n "$AUDIT_UNIT" ] && [ -z "$AUDIT_STARTED_AT" ] || return 1
+  AUDIT_STARTED_AT="$(date +%s)"
+  user_systemctl start --no-block "$AUDIT_UNIT" 2>/dev/null || { say "could not start $AUDIT_UNIT"; return 1; }
+  say "idle: starting the security audit ($AUDIT_UNIT) as the last job, up to $AUDIT_MAX_MINUTES min"
 }
 
 idle_ms() {
@@ -142,6 +175,7 @@ busy_reasons() {
   if [ -n "$idle" ] && [ "$idle" -lt $((IDLE_MINUTES * 60000)) ]; then
     echo "keyboard/mouse used $((idle / 60000)) min ago"
   fi
+  audit_running
   pgrep -f 'Runner.Worker' >/dev/null && echo "a CI job is running"
   pgrep -f 'qwen-code/bin/qwen-(impl|bench)' >/dev/null && echo "a Qwen implementation run is active"
   local jobs
@@ -409,10 +443,14 @@ fi
 while true; do
   wait_until_idle
   if [ "$DRY_RUN" = 1 ]; then
+    [ -n "$AUDIT_UNIT" ] && say "dry run: would start the security audit ($AUDIT_UNIT) first"
     say "dry run: the PC is idle and would shut down now"
     early="$(early_wake_epoch)"
     [ -n "$early" ] && say "dry run: would wake at $(hhmm "$early") for the idea pipeline, not at the scheduled time"
     exit 0
+  fi
+  if start_audit_once; then
+    continue   # the audit is a busy reason now; poweroff comes after it
   fi
   as_user notify-send -u critical "O PC vai desligar-se" \
     "Desliga-se dentro de $((WARN_SECONDS / 60)) minutos (horário). Mexe no rato para adiar." \
