@@ -7,14 +7,13 @@ up all the time runs on the Raspberry Pi 5 (`pi5.local`, 192.168.1.238):
 WhatsApp ──▶ WAHA (Pi) ──▶ gateway (Pi) ──journal──▶ POST /whatsapp/relay ──▶ kaya-prod (PC)
                                │   ▲                                            │
        internet ──▶ cloudflared (Pi) ──▶ gateway :8080   /  and  /status        │
-                                   └──▶ PC :7860   /app  (Gradio, login)        │
                                                                                 ▼
                                WAHA (Pi) ◀──────────── replies ──────── kaya-prod
 ```
 
 | Container | What it does | Port |
 |---|---|---|
-| `kaya-gateway` | Journals every WhatsApp event in SQLite. Downloads media at once, because WAHA deletes it after 180 s. Forwards events to the PC one at a time, in order. Buffers them while the PC is off and replays them when it is back. Sends the offline reply. Serves `/` and `/status`. | 8080 public (tunnel only), 8088 LAN (PC only) |
+| `kaya-gateway` | Journals every WhatsApp event in SQLite. Downloads media at once, because WAHA deletes it after 180 s. Forwards events to the PC one at a time, in order. Buffers them while the PC is off and replays them when it is back. Sends the offline reply. Serves the showcase page `/`, its images `/assets/<name>` and `/status`. | 8080 public (tunnel only), 8088 LAN (PC only) |
 | `kaya-waha` | WhatsApp (NOWEB), `noweb-arm-2026.8.2`, the version prod ran | 3000 LAN (PC only) |
 | `kaya-cloudflared` | The public tunnel for `sigmakayachat.pt`, its only connector since 2026-09-25 | none |
 
