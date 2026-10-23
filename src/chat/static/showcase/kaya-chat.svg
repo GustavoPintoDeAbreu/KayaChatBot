@@ -17,8 +17,7 @@
   <text x="468" y="208" font-size="13" fill="#1b1f27">Ficou combinado repetir em outubro.</text>
   <rect x="48" y="232" width="300" height="84" rx="10" fill="#f7f6f3" stroke="#e2dfd8"/>
   <text x="64" y="252" font-size="13" fill="#1d5c63">Vasco</text>
-  <polygon points="72,284 72,300 86,292" fill="#1d5c63"/>
-  <line x1="98" y1="292" x2="98" y2="292" stroke="#5f6672"/>
+  <path d="M72,284 L72,300 L86,292 Z" fill="#1d5c63"/>
   <line x1="98" y1="286" x2="98" y2="298" stroke="#5f6672"/>
   <line x1="106" y1="282" x2="106" y2="302" stroke="#5f6672"/>
   <line x1="114" y1="288" x2="114" y2="296" stroke="#5f6672"/>
@@ -38,13 +37,11 @@
   <line x1="226" y1="287" x2="226" y2="297" stroke="#5f6672"/>
   <line x1="234" y1="284" x2="234" y2="300" stroke="#5f6672"/>
   <line x1="242" y1="288" x2="242" y2="296" stroke="#5f6672"/>
-  <line x1="250" y1="282" x2="250" y2="302" stroke="#5f6672"/>
-  <line x1="258" y1="286" x2="258" y2="298" stroke="#5f6672"/>
-  <text x="278" y="296" font-size="12" fill="#5f6672">0:14</text>
+  <line x1="250" y1="283" x2="250" y2="301" stroke="#5f6672"/>
+  <text x="262" y="296" font-size="12" fill="#5f6672">0:14</text>
   <rect x="452" y="332" width="300" height="64" rx="10" fill="#dcf3e4"/>
   <text x="468" y="352" font-size="13" fill="#2e7d4f">Kaya</text>
-  <polygon points="472,372 472,388 486,380" fill="#2e7d4f"/>
-  <line x1="498" y1="380" x2="498" y2="380" stroke="#2e7d4f"/>
+  <path d="M472,372 L472,388 L486,380 Z" fill="#2e7d4f"/>
   <line x1="498" y1="374" x2="498" y2="386" stroke="#2e7d4f"/>
   <line x1="506" y1="370" x2="506" y2="390" stroke="#2e7d4f"/>
   <line x1="514" y1="376" x2="514" y2="384" stroke="#2e7d4f"/>
@@ -64,7 +61,6 @@
   <line x1="626" y1="375" x2="626" y2="385" stroke="#2e7d4f"/>
   <line x1="634" y1="372" x2="634" y2="388" stroke="#2e7d4f"/>
   <line x1="642" y1="376" x2="642" y2="384" stroke="#2e7d4f"/>
-  <line x1="650" y1="370" x2="650" y2="390" stroke="#2e7d4f"/>
-  <line x1="658" y1="374" x2="658" y2="386" stroke="#2e7d4f"/>
-  <text x="678" y="384" font-size="12" fill="#2e7d4f">0:09</text>
+  <line x1="650" y1="371" x2="650" y2="389" stroke="#2e7d4f"/>
+  <text x="662" y="384" font-size="12" fill="#2e7d4f">0:09</text>
 </svg>

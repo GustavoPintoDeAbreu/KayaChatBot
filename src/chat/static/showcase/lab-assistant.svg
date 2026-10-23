@@ -9,8 +9,7 @@
   <circle cx="72" cy="38" r="3" fill="#e2dfd8"/>
   <text x="400" y="43" font-size="14" fill="#5f6672" text-anchor="middle">Assistant</text>
   <rect x="452" y="84" width="300" height="76" rx="10" fill="#f7f6f3" stroke="#e2dfd8"/>
-  <polygon points="472,110 472,126 486,118" fill="#5f6672"/>
-  <line x1="498" y1="118" x2="498" y2="118" stroke="#5f6672"/>
+  <path d="M472,110 L472,126 L486,118 Z" fill="#5f6672"/>
   <line x1="498" y1="112" x2="498" y2="124" stroke="#5f6672"/>
   <line x1="506" y1="108" x2="506" y2="128" stroke="#5f6672"/>
   <line x1="514" y1="114" x2="514" y2="122" stroke="#5f6672"/>
