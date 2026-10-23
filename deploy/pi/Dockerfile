@@ -11,9 +11,11 @@ COPY src/gateway src/gateway
 COPY src/chat/whatsapp_adapter.py src/chat/stt.py src/chat/waha_client.py \
      src/chat/documents.py src/chat/feedback.py src/chat/memory.py src/chat/response_utils.py \
      src/chat/scope.py src/chat/channels.py src/chat/birthdays.py \
-     src/chat/poll_votes.py src/chat/
+     src/chat/poll_votes.py src/chat/static_assets.py src/chat/
 COPY src/chat/static/landing.html src/chat/static/landing.html
+COPY src/chat/static/showcase src/chat/static/showcase
 COPY src/data/message_log.py src/data/
 COPY config.yaml config.yaml
-ENV PYTHONUNBUFFERED=1 GATEWAY_CONFIG=/app/config.yaml GATEWAY_LANDING_HTML=/app/src/chat/static/landing.html
+ENV PYTHONUNBUFFERED=1 GATEWAY_CONFIG=/app/config.yaml GATEWAY_LANDING_HTML=/app/src/chat/static/landing.html \
+    GATEWAY_ASSETS_DIR=/app/src/chat/static/showcase
 CMD ["python", "-m", "src.gateway.app"]

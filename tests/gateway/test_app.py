@@ -48,9 +48,14 @@ def rig(tmp_path):
     }))
     landing = tmp_path / "landing.html"
     landing.write_text("<html>kaya</html>")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "demo.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+    (assets / "notes.txt").write_text("x")
     settings = GatewaySettings.from_env({
         "GATEWAY_DATA_DIR": str(tmp_path / "data"), "GATEWAY_CONFIG": str(config),
         "GATEWAY_LANDING_HTML": str(landing), "GATEWAY_WHITELIST": str(tmp_path / "none.json"),
+        "GATEWAY_ASSETS_DIR": str(assets),
         "KAYA_RELAY_TOKEN": "relay", "KAYA_WAHA_API_KEY": "waha-key",
         "KAYA_WHATSAPP_WEBHOOK_TOKEN": "hook",
     })
@@ -205,6 +210,35 @@ def test_public_app_serves_the_page_and_a_reduced_status(rig):
     assert status.json()["pc_online"] is True and "journal" not in status.json()
     assert client.get("/docs").status_code == 404
     assert client.post("/waha/webhook", json={}).status_code in (404, 405)
+
+
+def test_public_app_serves_showcase_assets(rig):
+    gateway, *_ = rig
+    client = TestClient(gateway.public_app)
+    ok = client.get("/assets/demo.svg")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("image/svg+xml")
+    assert ok.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in ok.headers["content-security-policy"]
+    assert "<svg" in ok.text
+
+
+def test_public_app_refuses_other_asset_names(rig):
+    gateway, *_ = rig
+    client = TestClient(gateway.public_app)
+    for name in ("missing.svg", "notes.txt", "Demo.svg", ".hidden.svg",
+                 "..%2Fconfig.yaml"):
+        assert client.get(f"/assets/{name}").status_code == 404, name
+
+
+def test_assets_are_not_on_the_internal_app(rig):
+    gateway, *_ = rig
+    client = TestClient(gateway.internal_app)
+    assert client.get("/assets/demo.svg").status_code == 404
+
+
+def test_settings_default_assets_dir():
+    assert GatewaySettings.from_env({}).assets_dir == "src/chat/static/showcase"
 
 
 def test_background_tasks_start_and_stop(rig):

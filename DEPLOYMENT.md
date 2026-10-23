@@ -18,13 +18,10 @@ Browser (any computer)
 Cloudflare Tunnel  ──►  cloudflared container (no inbound ports on the box)
    │  http://kaya-prod:7860  (compose network)
    ▼
-kaya-prod / kaya-dev container — one process, three routes
+kaya-prod / kaya-dev container — one process, two routes
    │
-   ├─ /             public landing page, no login
+   ├─ /             public showcase page, no login
    │                src/chat/static/landing.html
-   │
-   ├─ /app          Gradio chat, username/password       [the protection layer]
-   │                KAYA_WEB_USER / KAYA_WEB_PASS
    │
    └─ /whatsapp/*   WAHA webhook — open by necessity
    ▼
@@ -33,14 +30,10 @@ RAG (GPU) ──► generation backend
                 └─ gguf: llama.cpp `llama` container over HTTP (~15× faster) — the default for BOTH prod and dev
 ```
 
-**The password on `/app` is the only thing guarding the group's memory.** There
-used to be a second layer — Cloudflare Access, an emailed one-time code — and
-the diagram above used to claim the Gradio password sat behind it. It did not:
-`mount_gradio_app` was called without `auth=`, and prod runs `whatsapp_server`
-rather than `web_app.__main__`, so the configured credentials were never
-applied. That is fixed, and Cloudflare Access was then removed deliberately: one
-real layer, no code in your inbox. If you re-enable Access, scope it to `/app`
-so the landing page stays public.
+**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was
+removed: the friends never used it. `web_app.py` is still the dev UI
+(`kaya-dev`). `tests/test_landing_page.py` fails if `whatsapp_server` mounts it
+again.
 
 - **dev**: `dev.kaya.example.com` → `kaya-dev:7861`
 - **prod**: `kaya.example.com` → `kaya-prod:7860`
@@ -86,13 +79,11 @@ loads through one broker instead of holding a GPU permanently.
                             │  https://sigmakayachat.pt
                             ▼
    ┌──────────── Raspberry Pi 5 (192.168.1.238, always on) ─────────────┐
-   │ cloudflared ──▶ gateway :8080   /  (landing)   /status             │
-   │      │                                                              │
-   │      └──(path ^/app)──────────────────────────────┐                │
+   │ cloudflared ──▶ gateway :8080   /  (showcase)  /status             │
    │ WAHA :3000 ──▶ gateway :8088 journal (SQLite, media, 7 days)       │
    │                    │ forwarder, in order, retried                  │
-   └────────────────────┼───────────────────────────────┼───────────────┘
-                        ▼ POST /whatsapp/relay           ▼ /app (Gradio)
+   └────────────────────┼───────────────────────────────────────────────┘
+                        ▼ POST /whatsapp/relay
    ┌──────────── GPU PC (192.168.1.149, 07:00 to idle after 23:00) ─────┐
    │ kaya-prod :7860 ─ KAYA_OLLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
    │   replies ──▶ WAHA on the Pi         ├─ kaya (Ollama) GPU1, priority│
@@ -126,11 +117,10 @@ and `app_up.sh`:
 
 | Hostname | Path | Service |
 |---|---|---|
-| `sigmakayachat.pt` | `^/app` | `http://192.168.1.149:7860` |
 | `sigmakayachat.pt` | *(empty)* | `http://kaya-gateway:8080` |
 | `dev.sigmakayachat.pt` | *(empty)* | `http://192.168.1.149:7861` |
 
-Order matters: the `^/app` rule must be above the catch-all. Rules point at LAN
+The `^/app` rule was deleted on 2026-10-23 (no web chat). Rules point at LAN
 IPs, never at PC compose names, because the connector now runs on the Pi.
 `/whatsapp/*` on the PC is deliberately **not** published any more: WAHA reaches
 the gateway on the Pi's own compose network, and the relay is LAN-only.

@@ -3,10 +3,10 @@
 WAHA posts every WhatsApp event here. The gateway journals it, downloads its
 media at once (WAHA deletes media 180 s after receipt), sends the offline reply
 when the PC is really off, and wakes the forwarder that delivers events to the
-PC's ``/whatsapp/relay`` in order. It also serves the public landing page and
-``/status``. See deploy/pi/README.md.
+PC's ``/whatsapp/relay`` in order. It also serves the public showcase page, its
+images (``/assets/<name>``) and ``/status``. See deploy/pi/README.md.
 
-Two listeners, on purpose: the public one (landing page and a reduced status) is
+Two listeners, on purpose: the public one (showcase page, its images and a reduced status) is
 the only thing the Cloudflare tunnel reaches; the internal one (webhook, media,
 going-down) is bound to the LAN and firewalled to the PC.
 
@@ -34,6 +34,7 @@ import yaml
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from src.chat import static_assets
 from src.chat.stt import rewrite_media_url
 from src.chat.whatsapp_adapter import (
     InboundMessage,
@@ -88,6 +89,8 @@ class GatewaySettings:
     max_media_bytes: int
     # The PC's power schedule: lab-infra's power.yaml, mounted read-only (since 2026-10-22).
     power_path: str = "/lab-infra/power.yaml"
+    # The showcase page's images, served by the public app at /assets/<name>.
+    assets_dir: str = "src/chat/static/showcase"
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "GatewaySettings":
@@ -110,6 +113,7 @@ class GatewaySettings:
             internal_port=int(env.get("GATEWAY_INTERNAL_PORT", "8088")),
             max_media_bytes=int(float(env.get("GATEWAY_MAX_MEDIA_MB", "50")) * 1024 * 1024),
             power_path=env.get("GATEWAY_POWER_FILE", "/lab-infra/power.yaml"),
+            assets_dir=env.get("GATEWAY_ASSETS_DIR", "src/chat/static/showcase"),
         )
 
 
@@ -370,7 +374,7 @@ class Gateway:
         }
 
     def _build_public_app(self) -> FastAPI:
-        """What the internet sees: the landing page and a reduced status."""
+        """What the internet sees: the showcase page, its images and a reduced status."""
         app = FastAPI(title="Kaya", docs_url=None, redoc_url=None, openapi_url=None)
 
         @app.get("/", response_class=HTMLResponse)
@@ -379,6 +383,14 @@ class Gateway:
             if not page.exists():
                 raise HTTPException(status_code=404)
             return HTMLResponse(page.read_text(encoding="utf-8"))
+
+        @app.get("/assets/{name}")
+        def asset(name: str) -> FileResponse:
+            path = static_assets.asset_path(self.settings.assets_dir, name)
+            if path is None:
+                raise HTTPException(status_code=404)
+            return FileResponse(path, media_type=static_assets.media_type(path),
+                                headers=static_assets.ASSET_HEADERS)
 
         @app.get("/status")
         def public_status() -> JSONResponse:

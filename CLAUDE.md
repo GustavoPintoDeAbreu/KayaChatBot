@@ -1408,11 +1408,10 @@ Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training 
 
 | Path | Who gets in | What it is |
 |---|---|---|
-| `/` | **anyone** | the public explainer (`src/chat/static/landing.html`) — simple / in detail, EN / PT, with a login button |
-| `/app` | `KAYA_WEB_USER` + `KAYA_WEB_PASS` | the Gradio chat |
+| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
 
-**The `auth=` on `mount_gradio_app` is load-bearing and was missing until 2026-08-13.** Prod runs `whatsapp_server`, *not* `web_app.__main__`, so the credentials were set in the deployed environment and silently ignored — `GET /config` served the whole app, member profiles included, to anyone. Cloudflare Access was the only thing in front of it, which is not what this file used to claim. `tests/test_landing_page.py` parses the mount and fails if the argument disappears again (it cannot import the module: `engine = get_engine(config)` runs at import and loads the model).
+**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. `web_app.py` is still the dev UI (`kaya-dev`). `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
 
 **Prod runs from its own checkout** at `~/kaya-prod` (separate from this dev copy), with `models/` and `data/` symlinked to the shared originals — so you can develop here without touching the live site. All four live services (`kaya-prod`, `kaya-waha`, `kaya-llama`, `cloudflared`) have `restart: unless-stopped`, and Docker here is the **snap** build — the unit is `snap.docker.dockerd.service`, so `systemctl enable docker` returns `not-found` and enables nothing. With `snap.docker.dockerd` enabled the stack **auto-recovers after a reboot** (measured: daemon +7s, `kaya-llama` +13s from boot). The one way it breaks is an *explicit* `docker stop` / `app_down.sh` before shutdown — that survives the reboot as "stopped". A daemon-initiated stop during `systemctl poweroff` does not.
 
