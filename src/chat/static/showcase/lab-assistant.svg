@@ -33,11 +33,12 @@
   <line x1="658" y1="112" x2="658" y2="124" stroke="#5f6672"/>
   <text x="678" y="122" font-size="12" fill="#5f6672">0:07</text>
   <text x="472" y="150" font-size="13" fill="#5f6672" font-style="italic">Any cheap flights to Rome next month?</text>
-  <rect x="48" y="176" width="360" height="76" rx="10" fill="#dcf3e4"/>
-  <text x="64" y="200" font-size="13" fill="#1b1f27">Two return fares under €70 next month: 14–17 for €58</text>
-  <text x="64" y="220" font-size="13" fill="#1b1f27">and 21–24 for €66. Want me to keep watching them?</text>
-  <rect x="452" y="268" width="300" height="36" rx="10" fill="#f7f6f3" stroke="#e2dfd8"/>
-  <text x="468" y="291" font-size="13" fill="#1b1f27">yes</text>
-  <rect x="48" y="320" width="300" height="64" rx="10" fill="#dcf3e4"/>
-  <text x="64" y="344" font-size="13" fill="#1b1f27">Done. I will tell you if either drops.</text>
+  <rect x="48" y="176" width="360" height="92" rx="10" fill="#dcf3e4"/>
+  <text x="64" y="200" font-size="13" fill="#1b1f27">Two return fares under €70 next</text>
+  <text x="64" y="216" font-size="13" fill="#1b1f27">month: 14–17 for €58 and 21–24</text>
+  <text x="64" y="232" font-size="13" fill="#1b1f27">for €66. Want me to keep watching them?</text>
+  <rect x="452" y="284" width="300" height="36" rx="10" fill="#f7f6f3" stroke="#e2dfd8"/>
+  <text x="468" y="307" font-size="13" fill="#1b1f27">yes</text>
+  <rect x="48" y="336" width="300" height="64" rx="10" fill="#dcf3e4"/>
+  <text x="64" y="360" font-size="13" fill="#1b1f27">Done. I will tell you if either drops.</text>
 </svg>
