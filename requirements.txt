@@ -53,6 +53,7 @@ xai-sdk==1.9.1  # >=1.7 needed for xai_sdk.tools.web_search (web-search Agent To
 
 # --- Web UI ---
 gradio==6.15.1
+brotli==1.2.1  # gradio dep (brotli>=1.1.0); GHSA-9v8h-qqgm-4m35 fixed in 1.2.1
 
 # --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
 # fastapi/uvicorn/httpx ship transitively with gradio 6.15; pinned here so the
