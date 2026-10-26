@@ -2,7 +2,7 @@
 
 Four packages had audited CVEs with fixes only in newer releases; the pin must
 name the fixed version (or a floor at it) so a rebuild cannot resolve below it.
-gradio moved because 6.15.1 capped pillow below 13. The fine-tuning stack (unsloth,
+gradio is gone: every release caps pillow below 13, and only the dev UI used it. The fine-tuning stack (unsloth,
 peft, ...) must be gone, and the serving/teacher pins must stay.
 """
 
@@ -57,11 +57,10 @@ def test_audited_packages_cannot_resolve_below_the_fix(name, floor):
     )
 
 
-def test_gradio_is_off_the_release_that_capped_pillow():
-    gradio = _requirements()["gradio"]
-    assert gradio.specifier.contains("6.15.1", prereleases=True) is False, (
-        "gradio 6.15.1 declares pillow<13.0 and must not be the pin"
-    )
+def test_gradio_and_its_dev_ui_are_gone():
+    assert "gradio" not in _requirements(), "every gradio release caps pillow below 13.0"
+    assert not (ROOT / "src" / "chat" / "web_app.py").exists()
+    assert "kaya-dev:" not in (ROOT / "docker-compose.yml").read_text()
 
 
 def test_finetuning_stack_is_gone():

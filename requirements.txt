@@ -41,23 +41,18 @@ tiktoken==0.12.0
 openai==1.109.1
 xai-sdk==1.9.1  # >=1.7 needed for xai_sdk.tools.web_search (web-search Agent Tool)
 
-# --- Web UI ---
-# 6.15.1 capped pillow below 13.0 (CVE-2026-112393), so gradio moves with it.
-gradio>6.15.1
-brotli==1.2.1  # gradio dep (brotli>=1.1.0); GHSA-9v8h-qqgm-4m35 fixed in 1.2.1
-
 # --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
-# fastapi/uvicorn/httpx ship transitively with gradio 6.15; pinned here so the
-# WhatsApp webhook server + WAHA client are explicit, reproducible deps.
+# The WhatsApp webhook server + WAHA client. (The Gradio dev UI is gone since 2026-10-26:
+# every gradio release caps pillow below 13, which CVE-2026-112393 needs.)
 fastapi==0.136.3
 uvicorn==0.42.0
 httpx==0.28.1
 
 # --- Security floors (nightly lab-audit, 2026-10-26) ---
 # Transitive dependencies, named here so a rebuild cannot resolve below the fix.
-anyio>=4.14.2  # CVE-2026-63374 (fastapi, starlette, httpx, gradio, openai)
+anyio>=4.14.2  # CVE-2026-63374 (fastapi, starlette, httpx, openai)
 certifi>=2026.10.19  # GHSA-6q48-6c7w-9gw2 (httpx, requests, trafilatura)
-pillow>=13.0.0  # CVE-2026-112393 (vision.py, stickers.py, gradio)
+pillow>=13.0.0  # CVE-2026-112393 (vision.py, stickers.py)
 
 # --- Documents ---
 # PDF text extraction for documents shared in the chat (src/chat/documents.py).

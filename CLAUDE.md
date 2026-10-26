@@ -144,7 +144,6 @@ docker-compose up --build
 docker system prune  # prevent storage overload
 
 # Dev/Test (Docker)
-docker compose --profile dev up -d kaya-dev       # dev web UI on :7861, ./src mounted read-write (or use scripts/app_up.sh dev)
 docker compose --profile test run --rm kaya-test  # run the pytest suite in-container
 
 # Deployment (see DEPLOYMENT.md)
@@ -1408,13 +1407,13 @@ Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resi
 | `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
 
-**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. `web_app.py` is still the dev UI (`kaya-dev`). `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
+**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. The dev UI (`web_app.py`, `kaya-dev`) and gradio itself went on 2026-10-26: every gradio release caps pillow below 13, which CVE-2026-112393 needs. `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
 
 **Prod runs from its own checkout** at `~/kaya-prod` (separate from this dev copy), with `models/` and `data/` symlinked to the shared originals — so you can develop here without touching the live site. All four live services (`kaya-prod`, `kaya-waha`, `kaya-llama`, `cloudflared`) have `restart: unless-stopped`, and Docker here is the **snap** build — the unit is `snap.docker.dockerd.service`, so `systemctl enable docker` returns `not-found` and enables nothing. With `snap.docker.dockerd` enabled the stack **auto-recovers after a reboot** (measured: daemon +7s, `kaya-llama` +13s from boot). The one way it breaks is an *explicit* `docker stop` / `app_down.sh` before shutdown — that survives the reboot as "stopped". A daemon-initiated stop during `systemctl poweroff` does not.
 
 Prod serves generation from the `llama` compose service (`gguf` profile) with `KAYA_INFERENCE_BACKEND=gguf` set on `kaya-prod`; `deploy_prod.sh` starts the `llama` server automatically. Note: `~/kaya-prod/data/` must contain the gitignored runtime files (`rag_db/`, `group_members.json`, `whatsapp_whitelist.json`, `whatsapp_contacts.json`) — if `data/` is a real dir instead of the intended symlink to the dev copy, copy them in or RAG/whitelist gating silently fail.
 
-**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) updates `~/kaya-prod/.env` in place from whichever `prod` secrets are set, never truncating it, then calls `deploy_prod.sh` to update the live site. Both refuse an `.env` prod could not run on (`scripts/prod_env.sh check`). Before that guard, an empty-secrets run blanked `.env` and started a second WAHA (2026-10-04; DEPLOYMENT.md). `kaya-dev` (port 7861) is for occasional manual dev runs only; run one env at a time, since a served model may claim both GPUs. Full runbook in `DEPLOYMENT.md`.
+**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) updates `~/kaya-prod/.env` in place from whichever `prod` secrets are set, never truncating it, then calls `deploy_prod.sh` to update the live site. Both refuse an `.env` prod could not run on (`scripts/prod_env.sh check`). Before that guard, an empty-secrets run blanked `.env` and started a second WAHA (2026-10-04; DEPLOYMENT.md). Full runbook in `DEPLOYMENT.md`.
 
 ---
 

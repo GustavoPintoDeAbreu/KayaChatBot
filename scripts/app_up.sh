@@ -14,8 +14,12 @@
 set -euo pipefail
 
 ENV_NAME="${1:-}"
-if [[ "$ENV_NAME" != "dev" && "$ENV_NAME" != "prod" ]]; then
-  echo "Usage: $0 <dev|prod>" >&2
+if [[ "$ENV_NAME" == "dev" ]]; then
+  echo "The Gradio dev UI (kaya-dev) was removed on 2026-10-26; use kaya-sim or kaya-whatsapp." >&2
+  exit 1
+fi
+if [[ "$ENV_NAME" != "prod" ]]; then
+  echo "Usage: $0 prod" >&2
   exit 1
 fi
 

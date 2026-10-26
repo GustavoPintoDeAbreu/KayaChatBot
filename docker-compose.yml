@@ -89,52 +89,6 @@ services:
     command: python src/data/build_vector_db.py
 
   # ──────────────────────────────────────────────────────────────
-  # kaya-dev  [profile: dev]
-  # Development container: serves the Gradio web UI with ./src mounted
-  # read-write so live code edits are picked up without a rebuild.
-  # On-demand only — start via scripts/app_up.sh dev (not at boot).
-  # Runs on the DEV card, so it can run at the SAME TIME as prod.
-  # Usage: scripts/app_up.sh dev   (or: docker compose --profile dev up -d kaya-dev)
-  # ──────────────────────────────────────────────────────────────
-  kaya-dev:
-    extends:
-      service: kaya-base
-    container_name: kaya-dev
-    profiles: [dev]
-    # Override the base ./src:ro mount so edits inside the repo are live.
-    volumes:
-      - ./data:/app/data
-      - ./data/rag_db:/app/data/rag_db   # see kaya-base: symlink must be the mount source
-      - ./models:/app/models
-      - ./src:/app/src
-      - ./scripts:/app/scripts:ro
-      - ./configs:/app/configs:ro
-      - ./config.yaml:/app/config.yaml:ro
-      - ./.env:/app/.env:ro
-    # Publish on 7861 for optional LAN access; the Cloudflare Tunnel reaches the
-    # container directly over the compose network on the same port.
-    ports:
-      - "7861:7861"
-    # Bind Gradio to all interfaces inside the container so the published port
-    # and the tunnel can reach it. KAYA_WEB_USER/PASS come from .env (env_file).
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - HF_HOME=/app/models/.cache
-      - PYTHONUNBUFFERED=1
-      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-      - GRADIO_SERVER_NAME=0.0.0.0
-      - KAYA_WEB_PORT=7861
-      - KAYA_ENV=dev
-      - KAYA_VERSION=${KAYA_VERSION:-unknown}
-      # Dev generates from its OWN llama.cpp server on the dev card
-      # (`llama-bench`, profile: bench), never prod's. Start it with:
-      #   KAYA_BENCH_GGUF=gemma-4-12b-it-Q6_K.gguf KAYA_BENCH_CTX=32768 \
-      #     docker compose --profile bench up -d llama-bench
-      - KAYA_INFERENCE_BACKEND=${KAYA_DEV_INFERENCE_BACKEND:-gguf}
-      - KAYA_LLAMA_URL=${KAYA_DEV_LLAMA_URL:-http://llama-bench:8080}
-    command: python src/chat/web_app.py
-
-  # ──────────────────────────────────────────────────────────────
   # kaya-prod  [profile: prod]
   # The always-on production web app. Deployed via scripts/deploy_prod.sh
   # (from the ~/kaya-prod checkout) and kept running by restart: unless-stopped,
