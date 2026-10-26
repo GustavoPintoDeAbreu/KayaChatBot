@@ -1404,7 +1404,7 @@ Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resi
 
 | Path | Who gets in | What it is |
 |---|---|---|
-| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
+| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images and its two scripts (`scene.js`, `motion.js`, hand-written, no CDN) in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
 
 **There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. The dev UI (`web_app.py`, `kaya-dev`) and gradio itself went on 2026-10-26: every gradio release caps pillow below 13, which CVE-2026-112393 needs. `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.

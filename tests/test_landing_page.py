@@ -6,8 +6,10 @@ so it carries no real member names, no infrastructure details and no login.
 scope (`engine = get_engine(config)`), which loads the model — so the routes
 are checked by parsing the source.
 """
+import shutil
 import ast
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +25,17 @@ SERVER = BASE_DIR / "src" / "chat" / "whatsapp_server.py"
 ASSETS = BASE_DIR / "src" / "chat" / "static" / "showcase"
 
 LINKEDIN = "https://www.linkedin.com/in/gustavo-abreu-7687b0133/"
+
+SCRIPTS = ("scene.js", "motion.js")
+
+
+def _css(landing: str) -> str:
+    """The page's style block."""
+    return re.search(r"(?is)<style>(.*?)</style>", landing).group(1)
+
+
+def _script(name: str) -> str:
+    return (ASSETS / name).read_text(encoding="utf-8")
 
 SHOWN = ("kaya", "lab-assistant", "idea-pipeline", "lab-medic", "labwatch", "lab-notes",
          "redditcast", "series-watch", "flight-deals", "price-scout", "game-alerts", "subs")
@@ -144,7 +157,7 @@ def test_images_are_local_assets_that_exist(landing):
         name = src[len("/assets/"):]
         assert static_assets.asset_path(ASSETS, name) is not None, src
         referenced.add(name)
-    on_disk = {p.name for p in ASSETS.iterdir()}
+    on_disk = {p.name for p in ASSETS.iterdir() if p.suffix != ".js"}
     assert referenced == on_disk, (on_disk - referenced, referenced - on_disk)
     alts = re.findall(r'<img[^>]+alt="([^"]*)"', landing)
     assert all(alt for alt in alts)
@@ -152,6 +165,8 @@ def test_images_are_local_assets_that_exist(landing):
 
 def test_assets_are_inert_and_small():
     for path in sorted(ASSETS.iterdir()):
+        if path.suffix == ".js":  # scripts have their own tests
+            continue
         text = path.read_text(encoding="utf-8")
         assert len(text.encode("utf-8")) < 200_000, path.name
         lowered = text.lower()
@@ -196,3 +211,91 @@ def test_whatsapp_server_serves_the_showcase_assets():
     source = SERVER.read_text(encoding="utf-8")
     assert '@app.get("/assets/{name}"' in source
     assert "static_assets.asset_path(" in source
+    assert "static_assets.headers_for(path)" in source
+
+
+def test_scripts_are_local_assets_that_exist(landing):
+    srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"[^>]*>', landing)
+    assert srcs == ["/assets/scene.js", "/assets/motion.js"]
+    for src in srcs:
+        assert static_assets.asset_path(ASSETS, src[len("/assets/"):]) is not None, src
+    assert {p.name for p in ASSETS.iterdir() if p.suffix == ".js"} == set(SCRIPTS)
+    for name in SCRIPTS:
+        tag = next(line for line in landing.splitlines() if f'src="/assets/{name}"' in line)
+        assert " defer" in tag, name
+
+
+def test_scripts_stay_on_the_page():
+    banned = ("fetch(", "XMLHttpRequest", "WebSocket", "sendBeacon", "EventSource",
+              "import(", "eval(", "new Function", "innerHTML", "outerHTML",
+              "insertAdjacentHTML", "document.write", "http://", "https://",
+              "localStorage", "document.cookie")
+    for name in SCRIPTS:
+        text = _script(name)
+        assert len(text.encode("utf-8")) < 40_000, name
+        for word in banned:
+            assert word not in text, (name, word)
+
+
+def test_motion_is_optional(landing):
+    css = _css(landing)
+    assert "prefers-reduced-motion" in css
+    guard = "matchMedia('(prefers-reduced-motion: reduce)')"
+    assert guard in landing
+    for name in SCRIPTS:
+        assert guard in _script(name)
+    assert 'class="stage-fallback"' in landing
+    assert "<canvas" in landing
+    assert "scene-on" in _script("scene.js")
+    assert "scene-on" in css
+
+
+def test_no_shadows_or_blurs(landing):
+    css = _css(landing).lower()
+    for word in ("shadow", "blur", "filter"):
+        assert word not in css, word
+        for name in SCRIPTS:
+            assert word not in _script(name).lower(), (name, word)
+
+
+def test_animations_use_transforms_only(landing):
+    css = _css(landing)
+    for value in re.findall(r"transition:([^;}]+)", css):
+        stripped = re.sub(r"\([^)]*\)", "", value)
+        for part in stripped.split(","):
+            part = part.strip()
+            assert part == "none" or part.startswith("transform"), (css, part)
+    assert css.count("@keyframes") == 1
+    assert "@keyframes curtain-lift{to{transform:translate3d(0,-101%,0)}}" in css
+    for name in SCRIPTS:
+        for style in re.findall(r"\.style\.(\w+)", _script(name)):
+            assert style in {"transform", "setProperty", "width", "height"}, (name, style)
+
+
+def test_curtain_never_blocks_the_page(landing):
+    css = _css(landing)
+    assert re.search(r"\.curtain\{[^}]*pointer-events:none", css)
+    curtain_tag = re.search(r"<div id=\"curtain\"[^>]*>", landing)
+    assert curtain_tag is not None
+    assert 'id="curtain"' in curtain_tag.group(0)
+    assert 'aria-hidden="true"' in curtain_tag.group(0)
+    assert ".curtain{display:none}" in css
+
+
+def test_the_language_switch_tells_the_scene(landing):
+    assert "kaya:lang" in landing
+    for name in SCRIPTS:
+        assert "kaya:lang" in _script(name)
+
+
+def test_console_easter_egg():
+    assert "console.log('%cKaya'" in _script("motion.js")
+
+
+def test_scripts_parse():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node on this machine to syntax-check the scripts")
+    for name in SCRIPTS:
+        result = subprocess.run([node, "--check", str(ASSETS / name)], capture_output=True)
+        assert result.returncode == 0, (name, result.stderr.decode())
