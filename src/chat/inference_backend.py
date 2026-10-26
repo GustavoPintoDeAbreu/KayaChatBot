@@ -111,18 +111,8 @@ def broker_target(url: str) -> Optional[Tuple[str, str]]:
     return (match.group("base"), match.group("model")) if match else None
 
 
-def ensure_model_loaded(config: Dict[str, Any]) -> None:
-    """Make the serving model ready before GPU work. Best effort; never raises.
-
-    Behind the broker the model may be unloaded, or GPU1 may be lent to a coding
-    model or a two-card model. llama-swap would evict those by itself when Kaya is
-    requested, but it waits for their in-flight requests first, and a long agent
-    turn could then hold a WhatsApp reply for minutes. So the borrowers are
-    unloaded explicitly, then the model is loaded, and the time is recorded for
-    the broker's ``llm-use-g1``/``llm-use-big`` guards, which lend GPU1 only after
-    Kaya has been quiet for a while. Against a plain llama-server this only
-    records the time.
-    """
+def record_activity(config: Dict[str, Any]) -> None:
+    """Write the time of a GPU turn for the broker's GPU1 lending guards."""
     bcfg = (config.get("inference", {}) or {}).get("broker", {}) or {}
     activity_file = bcfg.get("activity_file", "data/kaya_last_active")
     try:
@@ -131,21 +121,84 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
     except OSError as exc:
         logger.warning("could not record activity in %s: %s", activity_file, exc)
 
+
+def _borrowers(loaded, model: str, patterns) -> List[str]:
+    """Loaded models other than Kaya that borrow GPU1. Entries are fnmatch patterns
+    ("*-g1"), so a new borrower named by the broker's convention needs no change here."""
+    return sorted(name for name in loaded
+                  if name and name != model and any(fnmatch.fnmatchcase(name, p) for p in patterns))
+
+
+def _loaded(base: str) -> set:
+    running = requests.get(f"{base}/running", headers=_UA, timeout=5).json().get("running", []) or []
+    return {entry.get("model") for entry in running if isinstance(entry, dict)}
+
+
+_lent_cache: Dict[str, Any] = {"at": 0.0, "value": False}
+
+
+def gpu1_lent(config: Dict[str, Any]) -> bool:
+    """True while another model borrows GPU1 (an idea build, a coding session).
+
+    Work that is not a reply (describing a photo nobody asked about, a bio
+    refresh) must not take the card back then: the build would be thrown off
+    and Kaya's idle clock restarted. An unreachable broker counts as lent, since
+    calling Kaya then could make llama-swap swap her in. A plain llama-server is
+    never lent. ``KAYA_GPU1_LENT=1|0`` forces the answer (the simulator).
+    Cached for ``inference.broker.lent_cache_seconds`` (10).
+    """
+    forced = os.environ.get("KAYA_GPU1_LENT", "").strip()
+    if forced in ("0", "1"):
+        return forced == "1"
     target = broker_target(resolve_server_url(config))
     if target is None:
-        return
+        return False
+    bcfg = (config.get("inference", {}) or {}).get("broker", {}) or {}
+    ttl = float(bcfg.get("lent_cache_seconds", 10))
+    now = time.monotonic()
+    if _lent_cache["at"] and now - _lent_cache["at"] < ttl:
+        return _lent_cache["value"]
     base, model = target
+    try:
+        value = bool(_borrowers(_loaded(base), model, bcfg.get("evict_before_use", []) or []))
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("broker unreachable (%s); treating GPU1 as lent", exc)
+        value = True
+    _lent_cache.update(at=now, value=value)
+    return value
+
+
+def ensure_model_loaded(config: Dict[str, Any], urgent: bool = True) -> bool:
+    """Make the serving model ready before GPU work. Best effort; never raises.
+
+    ``urgent`` (a reply, or anything somebody is waiting for): behind the broker
+    the model may be unloaded, or GPU1 may be lent to a coding model or a
+    two-card model. llama-swap would evict those by itself when Kaya is
+    requested, but it waits for their in-flight requests first, and a long agent
+    turn could then hold a WhatsApp reply for minutes. So the borrowers are
+    unloaded explicitly, then the model is loaded, and the time is recorded for
+    the broker's ``llm-use-g1``/``llm-use-big`` guards, which lend GPU1 only after
+    Kaya has been quiet for a while. Against a plain llama-server this only
+    records the time. Returns True.
+
+    Not urgent (enrichment nobody asked for): never evicts and never records
+    activity (2026-10-26: only a reply takes the card back). Returns whether
+    the model may be called now, i.e. GPU1 is not lent.
+    """
+    if not urgent:
+        return not gpu1_lent(config)
+    record_activity(config)
+    target = broker_target(resolve_server_url(config))
+    if target is None:
+        return True
+    base, model = target
+    bcfg = (config.get("inference", {}) or {}).get("broker", {}) or {}
     ollama = resolve_backend(config) == "ollama"
     try:
-        running = requests.get(f"{base}/running", headers=_UA, timeout=5).json().get("running", []) or []
-        loaded = {entry.get("model") for entry in running if isinstance(entry, dict)}
-        # Entries are fnmatch patterns ("*-g1"), so a new borrower named by the
-        # broker's convention is covered without a config change here.
-        patterns = bcfg.get("evict_before_use", []) or []
-        for borrower in sorted(name for name in loaded if name):
-            if borrower != model and any(fnmatch.fnmatchcase(borrower, p) for p in patterns):
-                logger.info("unloading %s to take GPU1 back", borrower)
-                requests.post(f"{base}/api/models/unload/{borrower}", headers=_UA, timeout=60)
+        for borrower in _borrowers(_loaded(base), model, bcfg.get("evict_before_use", []) or []):
+            logger.info("unloading %s to take GPU1 back", borrower)
+            requests.post(f"{base}/api/models/unload/{borrower}", headers=_UA, timeout=60)
+        _lent_cache.update(at=0.0, value=False)
         load_timeout = float(bcfg.get("load_timeout", 300))
         if ollama:
             # A generate with no prompt loads the model and returns; /api/version
@@ -158,6 +211,7 @@ def ensure_model_loaded(config: Dict[str, Any]) -> None:
                          headers=_UA, timeout=load_timeout).raise_for_status()
     except (requests.RequestException, ValueError) as exc:
         logger.warning("broker preparation failed (%s); generating anyway", exc)
+    return True
 
 
 def _templated_prompt(tokenizer, messages: List[Dict[str, str]], strip_bos: bool = False) -> str:

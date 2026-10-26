@@ -299,12 +299,32 @@ inside it for Kaya). `KAYA_INFERENCE_BACKEND=ollama` plus
 `KAYA_OLLAMA_URL=http://llm-broker:8080/upstream/kaya` makes the backend, vision
 and documents load Kaya on demand. Kaya has priority on GPU1 and **no idle timer**: it is evicted only when
 something borrows GPU1 (any `*-g1` model, or `big`/`qwen-long` across both cards), which
-`llm-use-g1`/`llm-use-big` allow only after Kaya has been quiet for 15 min
-(`data/kaya_last_active`). `inference_backend.ensure_model_loaded` runs before
-every GPU turn, outside the GPU lock: it unloads those borrowers explicitly
+`llm-use-g1`/`llm-use-big` allow only after Kaya has been quiet for 5 min
+(`KAYA_IDLE_MIN`, 15 until 2026-10-26; `data/kaya_last_active`). `inference_backend.ensure_model_loaded` runs before
+every reply, outside the GPU lock: it unloads those borrowers explicitly
 (`inference.broker.evict_before_use`, fnmatch patterns),
 because llama-swap waits for their in-flight requests before evicting and a long
-agent turn would otherwise hold a WhatsApp reply for minutes. Whisper is loaded
+agent turn would otherwise hold a WhatsApp reply for minutes.
+
+**Only a reply takes GPU1 back (2026-10-26).** Until then every photo, sticker,
+voice note and document in the group, addressed or not, called
+`ensure_model_loaded` while it was read, so a sticker threw an idea build off the
+card and restarted the idle clock. Now `ensure_model_loaded(urgent=False)` never
+evicts and never writes the activity file; it only reports `not gpu1_lent()`
+(a borrower loaded, or the broker unreachable). While GPU1 is lent, a message
+that will not be answered (`WhatsAppAdapter._answer_expected`) is logged with a
+placeholder (`[Imagem: (ainda por ver)]`, `[Áudio: (ainda por ouvir)]`,
+`[Documento: x (ainda por ler)]`), its media copied to `data/enrichment/`, and
+queued (`src/chat/enrichment.py`). It is filled in right before a reply in that
+chat (its voice notes and the quoted message, after taking the card back),
+after any reply, and whenever a 2-minute poll finds GPU1 free; the log gets an
+amendment record (`MessageLog.amend`, laid over the original by `read`) and the
+session window `replace_line`. Ingest holds a chat at its oldest pending message
+for up to `ingest_hold_hours` (12) and turns a later fill into a chunk of its own;
+`strip_pending` keeps placeholders out of chunks and the summary. `bio_refresh`
+and link synopses skip while GPU1 is lent, and Whisper unloads after 4 idle
+minutes so it is gone before the card is lent again. `KAYA_GPU1_LENT=0|1` forces
+the answer; `/whatsapp/relay/status` reports `pending_enrichment`. Whisper is loaded
 lazily and freed after `chat.audio.whisper_idle_unload_minutes`;
 `rag.embedding_device` picks where bge-m3 lives, and it stays `null` (the GPU):
 a query encodes in 105 ms there and 881 ms on CPU, several times per turn.

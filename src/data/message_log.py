@@ -174,9 +174,27 @@ class MessageLog:
                                reply_to_id, reply_to_text, sender_id, sender_phone,
                                reply_to_bot)
 
+    def amend(self, *, chat_id: str, message_id: str, sender: str, text: str,
+              timestamp: Optional[int], scope: str, reply_to_id: str = "",
+              reply_to_text: str = "", sender_id: str = "", sender_phone: str = "",
+              reply_to_bot: bool = False) -> bool:
+        """Replace a logged message's text, e.g. a photo's placeholder by its description.
+
+        The log stays append-only: a full record with the same ``id`` and the
+        ORIGINAL timestamp is appended, marked ``"amends": true``, and ``read``
+        lays it over the original wherever that sits. An empty ``text`` hides the
+        message (a voice note that could not be transcribed was never logged
+        before deferral existed, 2026-10-26). Bypasses the replay dedupe.
+        """
+        uid = message_uid(chat_id, message_id or text[:64])
+        with _append_lock:
+            return self._write(uid, chat_id, sender, text, timestamp, scope,
+                               reply_to_id, reply_to_text, sender_id, sender_phone,
+                               reply_to_bot, extra={"amends": True})
+
     def _write(self, uid, chat_id, sender, text, timestamp, scope,
                reply_to_id, reply_to_text, sender_id, sender_phone,
-               reply_to_bot=False) -> bool:
+               reply_to_bot=False, extra: Optional[Dict[str, Any]] = None) -> bool:
         """Serialise and append one record. Callers must hold ``_append_lock``."""
 
         record = {
@@ -196,6 +214,8 @@ class MessageLog:
             record["reply_to_text"] = reply_to_text
             if reply_to_bot:
                 record["reply_to_bot"] = True
+        if extra:
+            record.update(extra)
         try:
             path = self.path_for(scope)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,21 +228,53 @@ class MessageLog:
             return False
 
     def read(self, scope: str, after_ts: int = 0) -> Iterator[Dict[str, Any]]:
-        """Yield logged messages for a scope newer than ``after_ts``, in order."""
+        """Yield logged messages for a scope newer than ``after_ts``, in order.
+
+        Amendments (``amend``) are laid over the record they replace, which keeps
+        its place; the amendment lines themselves are not yielded, and a message
+        amended to empty text is skipped.
+        """
         path = self.path_for(scope)
         if not path.exists():
             return
         try:
-            with open(path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if int(rec.get("timestamp") or 0) > after_ts:
-                        yield rec
+            records = list(_records(path, after_ts))
         except OSError as exc:
             logger.warning("Could not read %s: %s", path, exc)
+            return
+        yield from apply_amendments(records)
+
+
+def _records(path: Path, after_ts: int) -> Iterator[Dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if int(rec.get("timestamp") or 0) > after_ts:
+                yield rec
+
+
+def apply_amendments(records: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+    """Base records in order, each with its latest amendment laid over it.
+
+    An amendment always wins, wherever it sits in the file, so a base line
+    replayed after the fill cannot undo it.
+    """
+    amended: Dict[str, Dict[str, Any]] = {}
+    for rec in records:
+        if rec.get("amends"):
+            amended[rec.get("id")] = rec
+    for rec in records:
+        if rec.get("amends"):
+            continue
+        fix = amended.get(rec.get("id"))
+        if fix is not None:
+            rec = {**rec, **{k: v for k, v in fix.items() if k != "amends"}}
+        if not (rec.get("text") or "").strip():
+            continue
+        yield rec

@@ -180,6 +180,26 @@ class KeyedSessionMemory:
             history.append(line)
             store.save(history[-self.max_lines:])
 
+    def replace_line(self, chat_id: str, old: str, new: Optional[str]) -> bool:
+        """Swap the newest exact copy of ``old`` for ``new`` (``None`` drops it).
+
+        A photo logged as "[Imagem: (ainda por ver)]" while GPU1 was lent gets its
+        description here once it is filled (src/chat/enrichment.py). False when
+        the line has already scrolled out of the window.
+        """
+        with self._chat_lock(chat_id):
+            store = self._store(chat_id)
+            history = store.load() or []
+            for index in range(len(history) - 1, -1, -1):
+                if history[index] == old:
+                    if new is None:
+                        del history[index]
+                    else:
+                        history[index] = new
+                    store.save(history[-self.max_lines:])
+                    return True
+            return False
+
 
 class ChatPreferences:
     """Sticky per-chat settings, currently just the reply modality.
