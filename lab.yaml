@@ -7,7 +7,7 @@ name: Kaya
 summary: "WhatsApp chatbot for a friends' group: local Gemma model with RAG over the group's history, voice in and out, images, documents, web search for world questions. The brain runs on the PC; the WhatsApp front door on the Pi."
 repo: GustavoPintoDeAbreu/KayaChatBot
 runs:
-  - {host: pc, kind: container, name: kaya-prod, deploy: ".github/workflows/deploy-prod.yml (reviewer-gated) -> scripts/deploy_prod.sh"}
+  - {host: pc, kind: container, name: kaya-prod, deploy: ".github/workflows/deploy-prod.yml (reviewer-gated) -> scripts/deploy_prod.sh", paths: ["*", "!src/gateway/*", "!deploy/pi/*", "!*.md", "!docs/*", "!tests/*", "!.github/*"]}
   - {host: pi, kind: container, name: kaya-gateway, deploy: scripts/deploy_pi.sh}
   - {host: pi, kind: container, name: kaya-waha, deploy: scripts/deploy_pi.sh}
   - {host: pi, kind: container, name: kaya-cloudflared, deploy: scripts/deploy_pi.sh}
