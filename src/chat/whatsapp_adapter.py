@@ -27,12 +27,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from src.chat import documents, feedback
+from src.chat import documents, enrichment, feedback
 from src.chat.channels import ChannelNames
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
 from src.chat.response_utils import truncate_history_line
 from src.chat.scope import scope_for_chat
-from src.data.message_log import MessageLog
+from src.data.message_log import MessageLog, message_uid
 from src.chat.waha_client import extract_sent_id
 
 logger = logging.getLogger(__name__)
@@ -490,6 +490,8 @@ class WhatsAppAdapter:
         sender_resolver: Any = None,
         reply_ledger: Any = None,
         poll_registry: Any = None,
+        enricher: Any = None,
+        fetch_media: Optional[Callable[["InboundMessage", int], Optional[bytes]]] = None,
     ):
         wcfg = config.get("whatsapp", {}) or {}
         self.responder = responder
@@ -690,6 +692,10 @@ class WhatsAppAdapter:
         # handle_poll_vote; the prod-only reminder scheduler runs on the same
         # registry. None when whatsapp.poll_votes.enabled is off.
         self.poll_registry = poll_registry
+        # Media nobody asked about waits while GPU1 is lent (src/chat/enrichment.py):
+        # logged with a placeholder, its bytes fetched now by ``fetch_media``.
+        self.enricher = enricher
+        self.fetch_media = fetch_media
         self._responder_takes_summary = _accepts_kwarg(responder, "summary")
         self._responder_takes_links = _accepts_kwarg(responder, "link_context")
         self._responder_takes_chat_id = _accepts_kwarg(responder, "chat_id")
@@ -700,6 +706,10 @@ class WhatsAppAdapter:
         # adapter keeps no tts import.
         self.speech_text = speech_text
         self.transcribe = transcribe
+        self._media_takes_urgent = {
+            name: _accepts_kwarg(fn, "urgent") for name, fn in (
+                ("transcribe", transcribe), ("describe_image", describe_image),
+                ("ingest_document", ingest_document)) if fn is not None}
         audio_cfg = ((config.get("chat", {}) or {}).get("audio", {}) or {})
         self.audio_reply_enabled = bool(audio_cfg.get("reply_enabled", False))
         self.send_citation_as_text = bool(audio_cfg.get("send_citation_as_text", True))
@@ -1024,6 +1034,40 @@ class WhatsAppAdapter:
         return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
                 "user_text": text, "is_group": msg.is_group,
                 "command": "poll_status", "telemetry": telemetry}
+
+    def _answer_expected(self, msg: InboundMessage) -> bool:
+        """Whether this message will be answered, without ``should_respond``'s side effects.
+
+        Decides whether its media is worth taking GPU1 back for now. A backlog
+        replayed after a restart is not answered, so its media can wait too.
+        """
+        if (self.ignore_before_ts and msg.timestamp and not msg.deferred
+                and msg.timestamp < self.ignore_before_ts):
+            return False
+        return is_addressed(msg, self.bot_jids, self.respond_on_mention,
+                            self.respond_on_reply, self.whitelist_enabled,
+                            self.whitelist_numbers)
+
+    def _media(self, name: str, *args: Any, urgent: bool) -> Any:
+        """Call an injected media reader, telling it whether a reply waits on it."""
+        fn = getattr(self, name)
+        if self._media_takes_urgent.get(name):
+            return fn(*args, urgent=urgent)
+        return fn(*args)
+
+    def _defer_part(self, msg: InboundMessage, kind: str, block: str,
+                    parts: List[Dict[str, Any]], payloads: Dict[int, bytes]) -> None:
+        payload = None
+        if self.fetch_media is not None:
+            try:
+                payload = self.fetch_media(msg, int(float((self.config.get("documents", {}) or {})
+                                                          .get("max_file_mb", 50)) * 1024 * 1024))
+            except Exception as exc:  # noqa: BLE001 — the Pi keeps the file 7 days
+                logger.warning("could not keep a copy of deferred media: %s", exc)
+        if payload:
+            payloads[len(parts)] = payload
+        parts.append({"kind": kind, "block": block, "url": msg.media_url or "",
+                      "mimetype": msg.media_mimetype or "", "filename": msg.media_filename or ""})
 
     def _read_links(self, text: str, preview: Dict[str, str]) -> List[Tuple[str, str]]:
         """The injected link reader, never raising: a failed read is not a lost message."""
@@ -1636,14 +1680,28 @@ class WhatsAppAdapter:
         # description is. Once it is "[Documento: nome — sinopse]" the message
         # log, the ingester, the router and retrieval need no changes, and the
         # group can ask about it a month later. Nothing is announced in the chat.
+        # While GPU1 is lent, media in a message nobody will answer is not read
+        # now: it gets a placeholder and waits for the card (src/chat/enrichment.py).
+        # Only a reply takes the card back (2026-10-26).
+        urgent = self._answer_expected(msg)
+        defer = (not urgent and not msg.from_me and bool(msg.media_url)
+                 and self.enricher is not None and self.enricher.should_defer())
+        parts: List[Dict[str, Any]] = []
+        payloads: Dict[int, bytes] = {}
+
         if msg.media_url and self.ingest_document is not None \
                 and documents.is_document(msg.media_mimetype, msg.media_filename,
                                           self.config):
-            try:
-                described = self.ingest_document(msg)
-            except Exception as exc:  # noqa: BLE001 — a failed read is not a lost message
-                logger.warning("document ingestion failed: %s", exc)
-                described = ""
+            if defer:
+                block = enrichment.document_placeholder(msg.media_filename)
+                self._defer_part(msg, "document", block, parts, payloads)
+                described = block[len("[Documento: "):-1]
+            else:
+                try:
+                    described = self._media("ingest_document", msg, urgent=urgent)
+                except Exception as exc:  # noqa: BLE001 — a failed read is not a lost message
+                    logger.warning("document ingestion failed: %s", exc)
+                    described = ""
             if described:
                 caption = msg.text.strip()
                 msg.text = (f"{caption}\n[Documento: {described}]" if caption
@@ -1662,10 +1720,16 @@ class WhatsAppAdapter:
         # 2026-09-05 left no trace on disk at all because of this line.
         if not msg.text.strip() and msg.media_url and self.transcribe is not None \
                 and (msg.media_mimetype or "").startswith("audio/"):
-            transcript = self.transcribe(msg.media_url, msg.media_mimetype)
+            if defer:
+                transcript = enrichment.PLACEHOLDERS["audio"]
+                self._defer_part(msg, "audio", transcript, parts, payloads)
+            else:
+                transcript = self._media("transcribe", msg.media_url, msg.media_mimetype,
+                                         urgent=urgent)
             if transcript:
                 msg.text = transcript
-                print(f"🎤 transcribed voice note ({len(transcript)} chars)")
+                if not defer:
+                    print(f"🎤 transcribed voice note ({len(transcript)} chars)")
 
         # A photo is the same problem as a voice note: the message means nothing
         # until its content is turned into text. Described here, it becomes
@@ -1674,18 +1738,25 @@ class WhatsAppAdapter:
         # evidence.
         if msg.media_url and (msg.media_mimetype or "").startswith("image/") \
                 and self.describe_image is not None:
-            description = self.describe_image(msg.media_url, msg.media_mimetype)
-            if description:
-                msg.image_description = description
-                caption = msg.text.strip()
-                # A sticker is a reaction, not a photo, and the payload says which
-                # it is whether or not understanding is on. Labelled "[Imagem: …]",
-                # a meme of a man with his hands on his head came back as "Essa
-                # cara de desespero diz tudo sobre ti, Gil" (2026-09-28).
-                label = "Sticker" if msg.is_sticker else "Imagem"
-                msg.text = (f"{caption}\n[{label}: {description}]" if caption
-                            else f"[{label}: {description}]")
-                print(f"🖼️  described {label.lower()} ({len(description)} chars)")
+            # A sticker is a reaction, not a photo, and the payload says which
+            # it is whether or not understanding is on. Labelled "[Imagem: …]",
+            # a meme of a man with his hands on his head came back as "Essa
+            # cara de desespero diz tudo sobre ti, Gil" (2026-09-28).
+            label = "Sticker" if msg.is_sticker else "Imagem"
+            caption = msg.text.strip()
+            if defer:
+                kind = "sticker" if msg.is_sticker else "image"
+                block = enrichment.PLACEHOLDERS[kind]
+                self._defer_part(msg, kind, block, parts, payloads)
+                msg.text = f"{caption}\n{block}" if caption else block
+            else:
+                description = self._media("describe_image", msg.media_url, msg.media_mimetype,
+                                          urgent=urgent)
+                if description:
+                    msg.image_description = description
+                    msg.text = (f"{caption}\n[{label}: {description}]" if caption
+                                else f"[{label}: {description}]")
+                    print(f"🖼️  described {label.lower()} ({len(description)} chars)")
 
         if msg.is_sticker and msg.media_url and self.archive_sticker is not None:
             try:
@@ -1721,28 +1792,32 @@ class WhatsAppAdapter:
         # Log every message the bot SEES, before deciding whether to reply. Group
         # conversation the bot was not addressed in is exactly the memory worth
         # keeping, and it would otherwise be dropped by the gate below.
+        log_kwargs = dict(
+            sender=speaker,
+            reply_to_id=msg.reply_to_id,
+            reply_to_text=truncate_history_line(
+                msg.quoted_text.strip(), self.quoted_max_words),
+            # The bot's own words are not the group's. The ingester keeps a
+            # quoted reply of the bot's only when the ledger says it was
+            # neither a joke nor judged bad.
+            reply_to_bot=bool(msg.quoted_text.strip())
+            and self._name_for_jid(msg.quoted_sender) == "Kaya Bot",
+            # Who actually sent it, not just what they are currently called.
+            sender_id=msg.sender_id,
+            sender_phone=msg.sender_phone,
+        )
+        # Named, not numbered. This log is embedded into ChromaDB, and a
+        # message stored as "@257487651496102 tas fraquinho" can never be
+        # retrieved by a question about Rafa.
+        logged_text = self._resolve_mentions(msg.text)
         if self.log_messages and seen:
             self.message_log.append(
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
-                sender=speaker,
-                # Named, not numbered. This log is embedded into ChromaDB, and a
-                # message stored as "@257487651496102 tas fraquinho" can never be
-                # retrieved by a question about Rafa.
-                text=self._resolve_mentions(msg.text),
+                text=logged_text,
                 timestamp=msg.timestamp,
                 scope=scope_for_chat(msg.chat_id, self.shared_chats),
-                reply_to_id=msg.reply_to_id,
-                reply_to_text=truncate_history_line(
-                    msg.quoted_text.strip(), self.quoted_max_words),
-                # The bot's own words are not the group's. The ingester keeps a
-                # quoted reply of the bot's only when the ledger says it was
-                # neither a joke nor judged bad.
-                reply_to_bot=bool(msg.quoted_text.strip())
-                and self._name_for_jid(msg.quoted_sender) == "Kaya Bot",
-                # Who actually sent it, not just what they are currently called.
-                sender_id=msg.sender_id,
-                sender_phone=msg.sender_phone,
+                **log_kwargs,
             )
 
         # Strip the bot's own mention, then name everybody else's: the resolved
@@ -1771,6 +1846,18 @@ class WhatsAppAdapter:
                         else f"{speaker}: {text}")
             self._note_message_time(msg.chat_id, msg.timestamp)
             self.session_store.append(msg.chat_id, own_line)
+
+        # On disk before the relay acks, like the log line it will amend.
+        if parts and seen and self.log_messages:
+            try:
+                self.enricher.defer(
+                    uid=message_uid(msg.chat_id, msg.message_id or msg.text[:64]),
+                    message_id=msg.message_id, chat_id=msg.chat_id,
+                    scope=scope_for_chat(msg.chat_id, self.shared_chats),
+                    timestamp=msg.timestamp, log=log_kwargs, text=logged_text,
+                    session_line=own_line, parts=parts, payloads=payloads)
+            except Exception as exc:  # noqa: BLE001 — the placeholder stays; never lose the message
+                logger.warning("could not queue deferred media: %s", exc)
 
         if not self.should_respond(msg):
             return None
@@ -1861,6 +1948,15 @@ class WhatsAppAdapter:
         if self.send_seen:
             self.waha_client.send_seen(msg.chat_id)
             self.waha_client.start_typing(msg.chat_id)
+        if self.enricher is not None:
+            # A voice note sent while GPU1 was lent, or the photo being quoted,
+            # is heard before the answer; the snapshot is brought up to date.
+            try:
+                self.enricher.before_reply(msg.chat_id, msg.reply_to_id or "")
+                pending.recent = [line for line in (self.enricher.resolve_line(line)
+                                                    for line in pending.recent) if line]
+            except Exception as exc:  # noqa: BLE001 — answer with what there is
+                logger.warning("could not fill in deferred media before the reply: %s", exc)
         try:
             result = self.responder(pending.asked, speaker, pending.recent, **pending.kwargs)
         finally:
@@ -1927,6 +2023,10 @@ class WhatsAppAdapter:
             msg.chat_id, reply, reply_to=reply_to,
             force_voice=deliver_as_voice_once, citation=citation,
         )
+
+        # The model is warm now: whatever media waited for the card goes next.
+        if self.enricher is not None:
+            self.enricher.kick()
 
         # Keep this chat's rolling summary current. Queued AFTER delivery and run
         # on a worker that skips when the GPU is busy, because a summary must

@@ -309,8 +309,14 @@ def _generate(backend: Any, config: Dict[str, Any], system: str, user: str,
     message when the lock is contended, and a refresh must never cost somebody
     their reply.
     """
-    from src.chat.gpu_lock import gpu_section
+    from src.chat.gpu_lock import GpuBusyError, gpu_section
+    from src.chat.inference_backend import gpu1_lent
 
+    # Checked per call: a refresh is never worth taking GPU1 back from an idea
+    # build, and a cycle that began while the card was free must not drag Kaya
+    # back halfway through. The cycle skips and the next one retries.
+    if gpu1_lent(config):
+        raise GpuBusyError("GPU1 is lent")
     timeout = float(_config(config).get("lock_timeout_seconds", 20))
     with gpu_section(config, timeout=timeout):
         return backend.generate(

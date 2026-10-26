@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from src.chat.enrichment import EnrichmentQueue, barriers, queue_dir, strip_pending
 from src.data.message_log import MessageLog, message_uid
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ def build_chunks(
     now: Optional[int] = None,
     keep_bot_quote: Optional[Callable[[Dict[str, Any]], bool]] = None,
     channel_of: Optional[Callable[[str], str]] = None,
+    hold_tail: bool = False,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Group consecutive messages into retrievable chunks.
 
@@ -179,6 +181,10 @@ def build_chunks(
     time (``Ingester.ingest_scope``): the Community's sub-groups share a scope,
     and a chunk interleaving the trip channel with general is a chunk about
     neither.
+
+    ``hold_tail``: never flush the partial tail, settled or not. The chat has a
+    message waiting for its photo or voice note to be filled in
+    (src/chat/enrichment.py), and that message belongs in this chunk.
     """
     chunks: List[Dict[str, Any]] = []
     current: List[Dict[str, Any]] = []
@@ -196,7 +202,7 @@ def build_chunks(
         chunk_ids = {m["id"] for m in current}
         for m in current:
             sender = (m.get("sender") or "Alguém").strip()
-            text = strip_failed_descriptions((m.get("text") or "").strip())
+            text = strip_pending(strip_failed_descriptions((m.get("text") or "").strip()))
             # What a reply was answering, inlined as a prefix. Skipped when the
             # parent is already a line in this same chunk, so a back-and-forth
             # does not get every message stated twice.
@@ -237,7 +243,7 @@ def build_chunks(
         current, chars = [], 0
 
     for msg in messages:
-        text = strip_failed_descriptions((msg.get("text") or "").strip())
+        text = strip_pending(strip_failed_descriptions((msg.get("text") or "").strip()))
         if not text:
             continue
         current.append(msg)
@@ -247,7 +253,7 @@ def build_chunks(
 
     # The tail: emit it only once it has stopped growing, otherwise leave it for
     # the next run so it can become a full chunk instead of a fragment.
-    if current:
+    if current and not hold_tail:
         newest = max(int(m.get("timestamp") or 0) for m in current)
         settled = settle_seconds <= 0 or (
             (now if now is not None else int(time.time())) - newest >= settle_seconds
@@ -346,17 +352,26 @@ class Ingester:
             chat_id = str(message.get("chat_id") or "")
             if int(message.get("timestamp") or 0) > self.state.chat_watermark(scope, chat_id):
                 by_chat.setdefault(chat_id, []).append(message)
-        if not by_chat:
-            return {"scope": scope, "messages": 0, "chunks": 0, "since": since}
-
         keep_bot_quote = self._bot_quote_filter()
         channel_of = self._channel_of()
-        chunks: List[Dict[str, Any]] = []
+        chunks, late_ids = self._late_fill_chunks(scope, keep_bot_quote, channel_of)
+        if not by_chat and not chunks:
+            return {"scope": scope, "messages": 0, "chunks": 0, "since": since}
+
         marks: Dict[str, int] = {}
+        # A chat with media still waiting for GPU1 is chunked only up to it, so
+        # the photo or voice note goes in filled, not as a placeholder.
+        held = barriers(self.config, scope)
         for chat_id, messages in by_chat.items():
+            barrier = held.get(chat_id)
+            if barrier is not None:
+                messages = [m for m in messages if int(m.get("timestamp") or 0) < barrier]
+                if not messages:
+                    continue
             built, consumed_through = build_chunks(
                 messages, scope, settle_seconds=self.settle_seconds,
-                keep_bot_quote=keep_bot_quote, channel_of=channel_of)
+                keep_bot_quote=keep_bot_quote, channel_of=channel_of,
+                hold_tail=barrier is not None)
             chunks.extend(built)
             marks[chat_id] = self._advance(scope, chat_id, messages, consumed_through)
 
@@ -380,11 +395,28 @@ class Ingester:
                 embeddings=embeddings,
             )
 
+        if late_ids:
+            EnrichmentQueue(queue_dir(self.config)).clear_late_fills(late_ids)
         self.state.set_chat_watermarks(scope, marks, len(chunks))
         return {
             "scope": scope, "messages": sum(len(m) for m in by_chat.values()),
             "chunks": len(chunks), "since": since, "watermark": self.state.watermark(scope),
         }
+
+    def _late_fill_chunks(self, scope: str, keep_bot_quote, channel_of
+                          ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """One small chunk per message filled in after its chat stopped waiting for it.
+
+        Its chunk was already written with the placeholder stripped; this puts the
+        description or transcript into memory beside it instead of rewriting it.
+        """
+        fills = EnrichmentQueue(queue_dir(self.config)).late_fills(scope)
+        built: List[Dict[str, Any]] = []
+        for fill in fills:
+            chunks, _ = build_chunks([fill], scope, keep_bot_quote=keep_bot_quote,
+                                     channel_of=channel_of)
+            built.extend(chunks)
+        return built, [fill["id"] for fill in fills]
 
     def rechunk_since(self, scope: str, since: str) -> Dict[str, Any]:
         """Rebuild a scope's live chunks from ``since`` (``YYYY-MM-DD``, UTC), once.

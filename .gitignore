@@ -203,6 +203,8 @@ data/kaya_last_active
 # pages that rate them. All of it is group data and stays on this box.
 data/stickers/
 data/link_cache/
+# Media waiting for GPU1 (src/chat/enrichment.py): group photos and voice notes.
+data/enrichment/
 reports/links/
 reports/stickers/
 reports/birthdays/

@@ -31,7 +31,7 @@ from starlette.concurrency import run_in_threadpool
 from src.config_loader import load_config
 from src.chat.engine import get_engine, build_system_prompt
 from src.chat.gpu_lock import GpuBusyError, gpu_section
-from src.chat.inference_backend import ensure_model_loaded
+from src.chat.inference_backend import ensure_model_loaded, gpu1_lent
 from src.chat.whatsapp_adapter import PendingReply, WhatsAppAdapter
 from src.chat.relay import BacklogTracker, RelayState, parse_envelope
 from src.chat.waha_client import WahaClient, MockWahaClient
@@ -275,13 +275,17 @@ def _speech_text(text: str) -> str:
     return tts.sanitize_for_speech(text, citation_prefix=CITATION_PREFIX)
 
 
-def _stt(url: str, mimetype: str):
-    """Transcribe an incoming voice note, or None if STT is unavailable."""
+def _stt(url: str, mimetype: str, urgent: bool = True):
+    """Transcribe an incoming voice note, or None if STT is unavailable.
+
+    ``urgent``: a reply waits on it, so GPU1 is taken back first. Otherwise the
+    adapter has already checked the card is free (src/chat/enrichment.py).
+    """
     from src.chat import stt
 
     if not stt.is_available(config):
         return None
-    ensure_model_loaded(config)
+    ensure_model_loaded(config, urgent=urgent)
     return stt.transcribe_url(
         url, mimetype, config,
         api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
@@ -291,13 +295,13 @@ def _stt(url: str, mimetype: str):
     )
 
 
-def _describe(url: str, mimetype: str):
+def _describe(url: str, mimetype: str, urgent: bool = True):
     """Read an inbound photo with the serving model, or None if vision is off."""
     from src.chat import vision
 
     if not vision.is_available(config):
         return None
-    ensure_model_loaded(config)
+    ensure_model_loaded(config, urgent=urgent)
     return vision.describe_url(
         url, mimetype, config,
         api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
@@ -305,7 +309,7 @@ def _describe(url: str, mimetype: str):
     )
 
 
-def _ingest_document(msg):
+def _ingest_document(msg, urgent: bool = True):
     """Read, index and archive a document shared in the chat.
 
     Returns the one line that goes into the message text, or None when there is
@@ -332,7 +336,7 @@ def _ingest_document(msg):
     if not payload:
         return None
 
-    ensure_model_loaded(config)
+    ensure_model_loaded(config, urgent=urgent)
     report = documents.index_document(
         payload,
         filename=msg.media_filename or "documento",
@@ -397,6 +401,62 @@ def _archive_sticker(msg):
         stickers.archive(payload, msg.sticker_sha, config)
 
 
+def _fetch_media(msg, max_bytes: int):
+    """The bytes of an inbound file, kept while its reading waits for GPU1."""
+    from src.chat import documents
+
+    return documents.download(
+        msg.media_url,
+        api_key=os.environ.get("KAYA_WAHA_API_KEY", ""),
+        waha_base_url=os.environ.get("KAYA_WAHA_URL") or _wcfg.get("waha_base_url", ""),
+        max_bytes=max_bytes,
+    )
+
+
+def _fill_image(part, payload, entry=None):
+    from src.chat import vision
+
+    if not vision.is_available(config):
+        return None
+    if payload:
+        description = vision.describe_bytes(payload, config, part.get("mimetype") or "image/jpeg")
+    else:
+        description = _describe(part.get("url", ""), part.get("mimetype", ""), urgent=False)
+    if not description:
+        return None
+    label = "Sticker" if part["kind"] == "sticker" else "Imagem"
+    return f"[{label}: {description}]"
+
+
+def _fill_audio(part, payload, entry=None):
+    import tempfile
+
+    from src.chat import stt
+
+    if not stt.is_available(config):
+        return None
+    if not payload:
+        return _stt(part.get("url", ""), part.get("mimetype", ""), urgent=False)
+    with tempfile.NamedTemporaryFile(suffix=".ogg") as handle:
+        handle.write(payload)
+        handle.flush()
+        return stt.transcribe_file(handle.name, config)
+
+
+def _fill_document(part, payload, entry=None):
+    from src.chat import documents
+
+    entry = entry or {}
+    if not documents.is_available(config) or not payload:
+        return None
+    report = documents.index_document(
+        payload, filename=part.get("filename") or "documento", scope=entry.get("scope", ""),
+        sender=(entry.get("log") or {}).get("sender", ""), config=config,
+        mimetype=part.get("mimetype", ""), timestamp=entry.get("timestamp"))
+    return f"[Documento: {documents.describe_for_log(report)}]" if report.get("ok") else None
+
+
+from src.chat import enrichment as _enrichment
 from src.chat.reply_review import ReplyLedger
 from src.chat.summary import SummaryWriter
 
@@ -420,6 +480,11 @@ if _poll_cfg["enabled"]:
     _poll_registry = poll_votes.PollRegistry(
         _poll_store if _poll_store.is_absolute() else Path(config_path).parent / _poll_store)
 
+# Media nobody asked about while GPU1 is lent waits for the card
+# (src/chat/enrichment.py). Built before the adapter, which queues into it.
+_enrich_queue = _enrichment.EnrichmentQueue(_enrichment.queue_dir(config))
+
+
 adapter = WhatsAppAdapter(_responder, waha_client, config,
                           tts_synthesize=_tts, speech_text=_speech_text,
                           transcribe=_stt,
@@ -430,7 +495,16 @@ adapter = WhatsAppAdapter(_responder, waha_client, config,
                           summary_writer=_summary_writer,
                           sender_resolver=_sender_resolver,
                           reply_ledger=_reply_ledger,
-                          poll_registry=_poll_registry)
+                          poll_registry=_poll_registry,
+                          fetch_media=_fetch_media)
+adapter.enricher = _enrichment.Enricher(
+    config, _enrich_queue,
+    fillers={"image": _fill_image, "sticker": _fill_image, "audio": _fill_audio,
+             "document": _fill_document},
+    message_log=adapter.message_log, session_store=adapter.session_store,
+    can_run=lambda: ensure_model_loaded(config, urgent=False),
+    prepare_urgent=lambda: ensure_model_loaded(config))
+adapter.enricher.start()
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
@@ -553,6 +627,10 @@ def _preload_audio_models() -> None:
         return
 
     def _warm() -> None:
+        # Not next to a borrower: GPU1 has ~2 GB free during an idea build.
+        if gpu1_lent(config):
+            print("Whisper preload skipped: GPU1 is lent")
+            return
         try:
             import time as _t
             t0 = _t.time()
@@ -905,7 +983,8 @@ def relay_status(x_relay_token: str = Header(default="")):
     return {"journal_id": _relay_state.journal_id,
             "last_applied_seq": _relay_state.last_applied_seq,
             "pending_replies": _pending_replies,
-            "draining": _backlog.draining()}
+            "draining": _backlog.draining(),
+            "pending_enrichment": len(_enrich_queue)}
 
 
 @app.get("/whatsapp/relay/birthdays")

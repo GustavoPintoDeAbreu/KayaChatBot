@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.chat import reply_review
+from src.chat import enrichment, reply_review
 from src.chat.memory import _safe_key
 
 # European Portuguese, because that is what the group speaks and what the summary
@@ -270,7 +270,14 @@ class SummaryWriter:
 
     # ── the bot's own lines ──────────────────────────────────────────────────
     def _prompt_lines(self, chat_id: str, lines: List[str]) -> List[str]:
-        """The lines the summary writer sees: bad replies out, jokes labelled."""
+        """The lines the summary writer sees: bad replies out, jokes labelled.
+
+        A photo or voice note still waiting for GPU1 is left out rather than
+        summarised as "(ainda por ver)"; a later refresh reads it filled in.
+        """
+        lines = [line for line in lines
+                 if not (enrichment.PENDING_RE.search(line)
+                         and not enrichment.strip_pending(line.split(": ", 1)[-1]))]
         if self.ledger is None:
             return list(lines)
         entries = self.ledger.entries(chat_id)

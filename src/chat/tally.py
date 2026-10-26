@@ -24,6 +24,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.data.message_log import apply_amendments
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent.parent.parent
@@ -163,7 +165,9 @@ def count_term(
             per_sender[sender or "Alguém"] += hits
 
     for path in _iter_log_files(scope, base_dir):
-        absorb(_read_jsonl(path), dedupe=True)
+        # Amendments first: a voice note logged as a placeholder and transcribed
+        # later counts with its transcript (src/chat/enrichment.py).
+        absorb(apply_amendments(list(_read_jsonl(path))), dedupe=True)
     if archive and Path(archive).exists():
         # The export has no message ids, so it cannot be deduped against the live
         # log. It is only read for the shared scope, where the two do not overlap:

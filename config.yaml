@@ -543,7 +543,9 @@ chat:
     # Free Whisper's VRAM after this many minutes without a voice note (0 keeps
     # it loaded). It reloads on the next one, which costs that voice note the
     # load time. whisper_preload loads it at boot, which pins it from the start.
-    whisper_idle_unload_minutes: 30
+    # Below the broker's KAYA_IDLE_MIN (5): GPU1 is lent to an idea build that
+    # long after Kaya's last reply, with ~2 GB free next to it (2026-10-26).
+    whisper_idle_unload_minutes: 4
     whisper_preload: false
 
   # Reading inbound photos. The serving model is multimodal, so this needs no
@@ -752,6 +754,20 @@ whatsapp:
     max_age_hours: 12
     late_note_after_minutes: 30     # older than this, the prompt says the reply is late
     timezone: "Europe/Lisbon"
+  # Media nobody asked about waits while GPU1 is lent (src/chat/enrichment.py):
+  # only a reply takes the card back (2026-10-26). A photo, sticker, voice note
+  # or document in a message that will not be answered is logged with a
+  # placeholder and filled in before the next reply in that chat (voice notes,
+  # and the quoted message), after any reply, or when a poll finds GPU1 free.
+  enrichment:
+    defer_when_gpu1_lent: true
+    dir: "data/enrichment"
+    poll_seconds: 120
+    lock_timeout_seconds: 5
+    max_attempts: 3
+    drain_before_reply_kinds: ["audio"]
+    ingest_hold_hours: 12       # chunks wait this long for a chat's pending media
+    drop_after_days: 7          # the Pi keeps media 7 days too
   sessions_dir: "data/whatsapp_sessions"
   summaries_dir: "data/whatsapp_summaries"
   replies_dir: "data/whatsapp_replies"        # the bot's replies + verdicts (src/chat/reply_review.py)

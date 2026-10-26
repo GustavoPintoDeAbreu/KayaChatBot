@@ -393,7 +393,12 @@ def synopsis(content: LinkContent, config: Dict[str, Any]) -> str:
     """
     if len((content.text or "").split()) < 15:
         return ""
-    from src.chat.inference_backend import openai_chat_fields, resolve_server_url
+    from src.chat.inference_backend import gpu1_lent, openai_chat_fields, resolve_server_url
+
+    # Not worth taking GPU1 back from an idea build: the line keeps its title,
+    # and a reply about the link still gets the article excerpt.
+    if gpu1_lent(config):
+        return ""
 
     source = f"{content.title}\n\n{_cap_words(content.text, 1200)}".strip()
     try:
