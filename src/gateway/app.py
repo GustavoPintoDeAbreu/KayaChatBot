@@ -390,7 +390,7 @@ class Gateway:
             if path is None:
                 raise HTTPException(status_code=404)
             return FileResponse(path, media_type=static_assets.media_type(path),
-                                headers=static_assets.ASSET_HEADERS)
+                                headers=static_assets.headers_for(path))
 
         @app.get("/status")
         def public_status() -> JSONResponse:

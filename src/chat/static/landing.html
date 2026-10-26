@@ -39,92 +39,118 @@
     --code-bg:#1c202a;
   }
 
-  *{box-sizing:border-box}
-  body{
-    margin:0; background:var(--paper); color:var(--ink);
-    font-family:var(--sans); font-size:16px; line-height:1.65;
-    -webkit-font-smoothing:antialiased;
-  }
-  .wrap{max-width:62rem; margin:0 auto; padding:0 1.5rem 6rem}
-  header{padding:4.5rem 0 2.5rem; border-bottom:1px solid var(--rule); margin-bottom:3rem}
-  .eyebrow{
-    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
-    text-transform:uppercase; color:var(--teal); margin-bottom:1rem;
-  }
-  h1{
-    font-family:var(--serif); font-weight:400; font-size:clamp(2rem,5.5vw,3rem);
-    line-height:1.12; margin:0 0 1rem; letter-spacing:-.015em; text-wrap:balance;
-  }
-  .standfirst{font-size:1.1rem; color:var(--muted); max-width:38rem; margin:0}
-  h2{
-    font-family:var(--serif); font-weight:400; font-size:1.7rem; line-height:1.2;
-    margin:3.5rem 0 .35rem; letter-spacing:-.01em; text-wrap:balance;
-  }
-  h3{font-size:1.02rem; font-weight:650; margin:2rem 0 .4rem; letter-spacing:-.005em}
-  p{margin:0 0 1rem; max-width:40rem}
-  a{color:var(--teal)}
-  strong{font-weight:650}
-
-  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:.8rem; margin:1.4rem 0}
-  .card{background:var(--surface); border:1px solid var(--rule); border-radius:10px; padding:.85rem 1rem}
-  .card b{display:block; font-family:var(--mono); font-size:1.3rem; letter-spacing:-.02em}
-  .card span{font-size:.82rem; color:var(--muted)}
-  footer{margin-top:4rem; padding-top:1.5rem; border-top:1px solid var(--rule); color:var(--faint); font-size:.85rem}
-
-  /* the language switch */
-  .switches{
-    position:sticky; top:0; z-index:10; display:flex; gap:.6rem; flex-wrap:wrap;
-    padding:.7rem 0 .8rem; margin-bottom:-.5rem;
-    background:linear-gradient(var(--paper) 72%, transparent);
-    backdrop-filter:blur(6px);
-  }
-  .seg{display:inline-flex; border:1px solid var(--rule); border-radius:8px; overflow:hidden}
-  .seg button{
-    font:inherit; font-size:.82rem; font-family:var(--mono); letter-spacing:.04em;
-    padding:.42rem .85rem; border:0; background:var(--surface); color:var(--muted);
-    cursor:pointer; transition:background .12s, color .12s;
-  }
-  .seg button + button{border-left:1px solid var(--rule)}
-  .seg button:hover{color:var(--ink)}
-  .seg button[aria-pressed="true"]{background:var(--teal); color:#fff}
-  .seg button:focus-visible{outline:2px solid var(--teal); outline-offset:-2px}
-
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+#page{position:relative;overflow-x:clip}
+.wrap{max-width:72rem;margin:0 auto;padding:0 1.5rem}
+.body{padding-bottom:6rem}
+.stage{position:absolute;top:0;left:0;right:0;height:100vh;height:100svh;z-index:0;overflow:hidden;pointer-events:none}
+.stage canvas{display:none;width:100%;height:100%}
+.stage-fallback{position:absolute;left:50%;top:40%;width:min(86vw,62vh);height:auto;transform:translate3d(-50%,-50%,0)}
+.fb-edge{stroke:var(--ink);stroke-opacity:.22;stroke-width:1.5}
+.fb-node{fill:var(--teal)}
+.fb-core{fill:var(--amber)}
+#page.scene-on .stage canvas{display:block}
+#page.scene-on .stage-fallback{display:none}
   /* Show only the selected language. The state lives on the wrapper, not on
      :root — the artifact runtime owns <html> and stamps its own attributes on
      it, so keeping this on an element the page controls avoids depending on
      anything outside the document. The defaults are written into the markup, so
      the correct document is visible before a single line of script runs. */
-  .doc{display:none}
-  #page[data-lang="en"] .doc[data-lang="en"],
-  #page[data-lang="pt"] .doc[data-lang="pt"]{display:block}
-
-  .projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1rem;margin:1.2rem 0}
-  .project{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:1rem 1.1rem}
-  .project h3{margin:0 0 .4rem}
-  .project p{font-size:.95rem;margin:0}
-  .shot{margin:.9rem 0 0}
-  .shot img{display:block;width:100%;height:auto;border:1px solid var(--rule);border-radius:8px}
-  .shot figcaption{font-size:.78rem;color:var(--faint);margin-top:.35rem}
-  .group-title{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin:2.4rem 0 0}
-  .linkedin{display:inline-block;margin-top:1.2rem;text-decoration:none;font-family:var(--mono);font-size:.85rem;padding:.45rem 1rem;border-radius:8px;background:var(--teal);color:#fff}
-
-  /* the message-path figure */
-  .figure{margin:1.6rem 0}
-  .flow{
-    display:block; width:100%; max-width:38rem; height:auto; margin:0 auto;
-    color:var(--ink); font-family:var(--sans);
-  }
-  .flow text{fill:currentColor}
-  figcaption{
-    margin-top:.7rem; font-size:.86rem; color:var(--muted);
-    max-width:38rem; margin-left:auto; margin-right:auto; text-align:center;
-  }
-
-  @media (prefers-reduced-motion: reduce){ .seg button{transition:none} }
+.doc{display:none;position:relative;z-index:1}
+#page[data-lang="en"] .doc[data-lang="en"],
+#page[data-lang="pt"] .doc[data-lang="pt"]{display:block}
+.hero{min-height:100vh;min-height:100svh;display:flex;align-items:flex-end;padding:6rem 0 3rem}
+.hero .wrap{width:100%}
+.wordmark{font-family:var(--sans);font-weight:800;font-size:clamp(4.5rem,19vw,16rem);line-height:.8;letter-spacing:-.06em;text-transform:uppercase;color:var(--teal);margin:0 0 1.4rem}
+h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,4.4vw,3.3rem);line-height:1.08;margin:0 0 1rem;letter-spacing:-.02em;max-width:22ch;text-wrap:balance}
+.standfirst{font-size:1.1rem;color:var(--muted);max-width:38rem;margin:0 0 1rem}
+h2{font-family:var(--sans);font-weight:800;font-size:clamp(2.4rem,8.5vw,6.8rem);line-height:.88;letter-spacing:-.045em;text-transform:uppercase;margin:6rem 0 1.2rem;text-wrap:balance}
+h3{font-size:1.1rem;font-weight:700;margin:2rem 0 .4rem;letter-spacing:-.01em}
+p{margin:0 0 1rem;max-width:40rem}
+a{color:var(--teal)}
+strong{font-weight:650}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.9rem;margin:1.4rem 0}
+.card{background:var(--surface);padding:1.6rem 1.1rem 1.1rem;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpath d='M0 0H62L70 12H100V100H0Z'/%3E%3C/svg%3E") center/100% 100% no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpath d='M0 0H62L70 12H100V100H0Z'/%3E%3C/svg%3E") center/100% 100% no-repeat}
+.card b{display:block;font-family:var(--sans);font-weight:800;font-size:1.6rem;letter-spacing:-.03em;line-height:1.1}
+.card span{font-size:.85rem;color:var(--muted)}
+footer{margin-top:4rem;padding:1.5rem 0 3rem;border-top:1px solid var(--rule);color:var(--faint);font-size:.85rem}
+.switches{position:fixed;top:1rem;right:1rem;z-index:20}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+.seg button{font:inherit;font-size:.82rem;font-family:var(--mono);letter-spacing:.04em;padding:.42rem .85rem;border:0;background:var(--surface);color:var(--muted);cursor:pointer}
+.seg button + button{border-left:1px solid var(--rule)}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--teal);color:#fff}
+.seg button:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1rem;margin:1.2rem 0}
+.project{position:relative;isolation:isolate;overflow:hidden;background:var(--surface);padding:1.3rem 1.3rem 1.5rem;clip-path:polygon(0 0,calc(100% - 28px) 0,100% 28px,100% 100%,28px 100%,0 calc(100% - 28px))}
+.project::before{content:"";position:absolute;z-index:-1;left:50%;top:100%;width:260%;aspect-ratio:1;border-radius:50%;background:var(--teal-soft);transform:translate3d(-50%,-50%,0) scale(0);transition:transform .6s cubic-bezier(.2,.7,.2,1)}
+.project h3{margin:0 0 .5rem}
+.project p{font-size:.95rem;margin:0}
+.shot{margin:.9rem 0 0}
+.shot img{display:block;width:100%;height:auto;border:1px solid var(--rule)}
+.shot figcaption{font-size:.78rem;color:var(--faint);margin-top:.35rem}
+.group-title{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin:2.4rem 0 0}
+.linkedin{display:inline-block;margin-top:.4rem;text-decoration:none;font-family:var(--mono);font-size:.85rem;padding:.55rem 1.1rem;background:var(--teal);color:#fff;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px))}
+.figure{margin:1.6rem 0}
+.flow{display:block;width:100%;max-width:38rem;height:auto;margin:0 auto;color:var(--ink);font-family:var(--sans)}
+.flow text{fill:currentColor}
+figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:38rem;margin-left:auto;margin-right:auto;text-align:center}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.split-word{display:inline-block;white-space:nowrap}
+.split-ch{display:inline-block;overflow:hidden;height:1.2em;line-height:1.2;vertical-align:bottom}
+.split-ch>span{display:block;transition:transform .4s cubic-bezier(.2,.7,.2,1);transition-delay:calc(var(--i) * 14ms)}
+.split-ch>span+span{color:var(--teal)}
+.linkedin .split-ch>span+span{color:#fff}
+@media (hover:hover){
+  .project:hover::before{transform:translate3d(-50%,-50%,0) scale(1)}
+  .project:hover .split-ch>span,.linkedin:hover .split-ch>span{transform:translate3d(0,-100%,0)}
+}
+.linkedin:focus-visible .split-ch>span{transform:translate3d(0,-100%,0)}
+.curtain{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--teal);color:#fff;pointer-events:none;transform:translate3d(0,0,0);animation:curtain-lift .8s cubic-bezier(.7,0,.2,1) .5s forwards}
+.curtain-word{font-family:var(--sans);font-weight:800;font-size:clamp(3rem,14vw,11rem);letter-spacing:-.05em;text-transform:uppercase}
+@keyframes curtain-lift{to{transform:translate3d(0,-101%,0)}}
+.curtain[data-state]{animation:none;transition:transform .45s cubic-bezier(.7,0,.2,1)}
+.curtain[data-state="below"]{transform:translate3d(0,101%,0);transition:none}
+.curtain[data-state="cover"]{transform:translate3d(0,0,0)}
+.curtain[data-state="gone"]{transform:translate3d(0,-101%,0)}
+@media (prefers-reduced-motion: reduce){.curtain{display:none}.project::before,.split-ch>span{transition:none}}
 </style>
 </head>
 <body>
-<div class="wrap" id="page" data-lang="en">
+<div id="curtain" class="curtain" aria-hidden="true"><span class="curtain-word">Kaya</span></div>
+<div class="site" id="page" data-lang="en">
+
+<div class="stage" aria-hidden="true">
+  <canvas></canvas>
+  <svg class="stage-fallback" viewBox="0 0 600 600" focusable="false">
+    <line x1="300" y1="300" x2="520" y2="300" class="fb-edge"/>
+    <line x1="300" y1="300" x2="491" y2="375" class="fb-edge"/>
+    <line x1="300" y1="300" x2="410" y2="430" class="fb-edge"/>
+    <line x1="300" y1="300" x2="300" y2="450" class="fb-edge"/>
+    <line x1="300" y1="300" x2="190" y2="430" class="fb-edge"/>
+    <line x1="300" y1="300" x2="109" y2="375" class="fb-edge"/>
+    <line x1="300" y1="300" x2="80" y2="300" class="fb-edge"/>
+    <line x1="300" y1="300" x2="109" y2="225" class="fb-edge"/>
+    <line x1="300" y1="300" x2="190" y2="170" class="fb-edge"/>
+    <line x1="300" y1="300" x2="300" y2="150" class="fb-edge"/>
+    <line x1="300" y1="300" x2="410" y2="170" class="fb-edge"/>
+    <line x1="300" y1="300" x2="491" y2="225" class="fb-edge"/>
+    <circle cx="520" cy="300" r="9" class="fb-node"/>
+    <circle cx="491" cy="375" r="9" class="fb-node"/>
+    <circle cx="410" cy="430" r="9" class="fb-node"/>
+    <circle cx="300" cy="450" r="9" class="fb-node"/>
+    <circle cx="190" cy="430" r="9" class="fb-node"/>
+    <circle cx="109" cy="375" r="9" class="fb-node"/>
+    <circle cx="80" cy="300" r="9" class="fb-node"/>
+    <circle cx="109" cy="225" r="9" class="fb-node"/>
+    <circle cx="190" cy="170" r="9" class="fb-node"/>
+    <circle cx="300" cy="150" r="9" class="fb-node"/>
+    <circle cx="410" cy="170" r="9" class="fb-node"/>
+    <circle cx="491" cy="225" r="9" class="fb-node"/>
+    <circle cx="300" cy="300" r="26" class="fb-core"/>
+  </svg>
+</div>
 
 <div class="switches"><div class="seg" role="group" aria-label="Language">
   <button type="button" data-set="lang" data-value="en" aria-pressed="true">EN</button>
@@ -133,23 +159,24 @@
 
 <div class="doc" data-lang="en" lang="en">
 
-<header>
-  <div class="eyebrow">Kaya</div>
+<header class="hero"><div class="wrap">
+  <p class="wordmark">Kaya</p>
   <h1>A home lab of AI agents that work for me</h1>
   <p class="standfirst">Kaya is what I call the ecosystem I have built at home: a chatbot for my friends, an assistant I talk to from my phone, agents that turn ideas into code and fix their own bugs, and a set of small watchers that tell me when something is worth knowing. Everything runs on my own hardware.</p>
   <p>Built by Gustavo Abreu, AI engineer and forward deployed engineer.</p>
-  <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer" class="linkedin">LinkedIn ↗</a>
-</header>
+  <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer" class="linkedin" data-split>LinkedIn ↗</a>
+</div></header>
+<div class="wrap body">
 
-<h2>At a glance</h2>
+<h2 data-scrub="slide">At a glance</h2>
 <div class="cards">
-  <div class="card"><b>12</b><span>projects</span></div>
-  <div class="card"><b>Local first</b><span>Models run on my own machines</span></div>
-  <div class="card"><b>WhatsApp</b><span>is how I talk to it</span></div>
-  <div class="card"><b>A yes first</b><span>Nothing changes without my approval</span></div>
+  <div class="card" data-scrub="rise"><b>12</b><span>projects</span></div>
+  <div class="card" data-scrub="rise"><b>Local first</b><span>Models run on my own machines</span></div>
+  <div class="card" data-scrub="rise"><b>WhatsApp</b><span>is how I talk to it</span></div>
+  <div class="card" data-scrub="rise"><b>A yes first</b><span>Nothing changes without my approval</span></div>
 </div>
 
-<h2>How it fits together</h2>
+<h2 data-scrub="slide">How it fits together</h2>
 <figure class="figure">
   <svg class="flow" viewBox="0 0 680 300" role="img" aria-label="I ask on my phone; the assistant and group bot answer; the projects reply, alert me or propose a change.">
     <defs><marker id="arw-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
@@ -170,39 +197,39 @@
   <figcaption>I ask in plain language; the projects answer, alert me, or propose a change for me to approve.</figcaption>
 </figure>
 
-<h2>The projects</h2>
+<h2 data-scrub="slide">The projects</h2>
 
 <p class="group-title">Talk to it</p>
 <div class="projects">
-  <article class="project" data-project="kaya">
-    <h3>Kaya, the group bot</h3>
+  <article class="project" data-project="kaya" data-scrub="rise">
+    <h3 data-split>Kaya, the group bot</h3>
     <p>A bot in my friends' WhatsApp group that never interrupts. It reads along, remembers years of conversation, and answers when someone calls it: by text or by voice, about a photo, a voice note or a shared document. The group's messages never leave home.</p>
     <figure class="shot"><img src="/assets/kaya-chat.svg" alt="Screen illustration: Kaya, the group bot" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-assistant">
-    <h3>The lab assistant</h3>
+  <article class="project" data-project="lab-assistant" data-scrub="rise">
+    <h3 data-split>The lab assistant</h3>
     <p>I talk to the whole lab from my phone, with a voice note or a text in plain language. It answers questions straight away and asks for my yes before it changes anything.</p>
     <figure class="shot"><img src="/assets/lab-assistant.svg" alt="Screen illustration: The lab assistant" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-notes">
-    <h3>Notes by voice</h3>
+  <article class="project" data-project="lab-notes" data-scrub="rise">
+    <h3 data-split>Notes by voice</h3>
     <p>I dictate a note, a recipe or a game tip on a walk and it lands on the right page of my notebook. Private sections stay locked, whatever the request.</p>
   </article>
 </div>
 
 <p class="group-title">It builds and heals itself</p>
 <div class="projects">
-  <article class="project" data-project="idea-pipeline">
-    <h3>From idea to pull request</h3>
+  <article class="project" data-project="idea-pipeline" data-scrub="rise">
+    <h3 data-split>From idea to pull request</h3>
     <p>I send an idea from my phone. Agents ask me the questions they need, write a plan, build it in an isolated sandbox, review their own work and open a draft for me to approve. This page started that way.</p>
     <figure class="shot"><img src="/assets/idea-pipeline.svg" alt="Screen illustration: From idea to pull request" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-medic">
-    <h3>The lab's medic</h3>
+  <article class="project" data-project="lab-medic" data-scrub="rise">
+    <h3 data-split>The lab's medic</h3>
     <p>Throughout the day it reads every project's logs and opens every website the way a visitor would. When the same error keeps coming back in my own code, it proposes a fix, and nothing ships until I say yes.</p>
   </article>
-  <article class="project" data-project="labwatch">
-    <h3>Labwatch, the dashboard</h3>
+  <article class="project" data-project="labwatch" data-scrub="rise">
+    <h3 data-split>Labwatch, the dashboard</h3>
     <p>One page for the whole lab: what is running, what each project did this week, the energy it used and what it cost. It is also the map other agents read before they build anything, so they reuse what already exists.</p>
     <figure class="shot"><img src="/assets/labwatch.svg" alt="Screen illustration: Labwatch, the dashboard" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
@@ -210,66 +237,69 @@
 
 <p class="group-title">It keeps watch</p>
 <div class="projects">
-  <article class="project" data-project="flight-deals">
-    <h3>Flight deals</h3>
+  <article class="project" data-project="flight-deals" data-scrub="rise">
+    <h3 data-split>Flight deals</h3>
     <p>Watches return fares from Lisbon, short and long haul, and sends one message a day when something is genuinely cheap.</p>
     <figure class="shot"><img src="/assets/flight-deals.svg" alt="Screen illustration: Flight deals" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="price-scout">
-    <h3>Price scout</h3>
+  <article class="project" data-project="price-scout" data-scrub="rise">
+    <h3 data-split>Price scout</h3>
     <p>Follows the things I want to buy across several shops, keeps their price history and tells me when one hits my target or a new low.</p>
     <figure class="shot"><img src="/assets/price-scout.svg" alt="Screen illustration: Price scout" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="series-watch">
-    <h3>Series watch</h3>
+  <article class="project" data-project="series-watch" data-scrub="rise">
+    <h3 data-split>Series watch</h3>
     <p>Follows my series and the big franchise slates, and messages me when a season is confirmed, gets a date or comes out, with where to watch it.</p>
     <figure class="shot"><img src="/assets/series-watch.svg" alt="Screen illustration: Series watch" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="game-alerts">
-    <h3>Game alerts</h3>
+  <article class="project" data-project="game-alerts" data-scrub="rise">
+    <h3 data-split>Game alerts</h3>
     <p>Watches official game news for the limited-time events I care about, and pings me when one is announced and again when it goes live.</p>
   </article>
 </div>
 
 <p class="group-title">It makes things</p>
 <div class="projects">
-  <article class="project" data-project="redditcast">
-    <h3>Redditcast</h3>
+  <article class="project" data-project="redditcast" data-scrub="rise">
+    <h3 data-split>Redditcast</h3>
     <p>A weekly two-host podcast about the AI and news communities I follow, written and voiced by local models and delivered as a voice note on Monday morning.</p>
     <figure class="shot"><img src="/assets/redditcast.svg" alt="Screen illustration: Redditcast" width="800" height="500" loading="lazy"><figcaption>Illustration with invented data.</figcaption></figure>
   </article>
-  <article class="project" data-project="subs">
-    <h3>Subtitle translator</h3>
+  <article class="project" data-project="subs" data-scrub="rise">
+    <h3 data-split>Subtitle translator</h3>
     <p>Translates subtitles into European Portuguese with a local model, keeping each series' characters and terms consistent from episode to episode.</p>
   </article>
 </div>
 
-<h2>How I build</h2>
+<h2 data-scrub="slide">How I build</h2>
 <p><strong>Private by default.</strong> My friends' messages, photos and voice notes are processed at home and are never sent to a cloud AI.</p>
 <p><strong>Agents propose, a person approves.</strong> Anything that writes, merges or deploys waits for my yes.</p>
 <p><strong>Measured, not assumed.</strong> Changes to the group bot are checked against a test set before they go live; when a fine-tuned model did not beat a stock one, the stock one won.</p>
 
 </div>
 
+</div>
+
 <div class="doc" data-lang="pt" lang="pt-PT">
 
-<header>
-  <div class="eyebrow">Kaya</div>
+<header class="hero"><div class="wrap">
+  <p class="wordmark">Kaya</p>
   <h1>Um laboratório caseiro de agentes de IA que trabalham para mim</h1>
   <p class="standfirst">Kaya é o nome que dou ao ecossistema que construí em casa: um chatbot para os meus amigos, um assistente com quem falo pelo telemóvel, agentes que transformam ideias em código e corrigem os próprios erros, e um conjunto de pequenos vigias que me avisam quando há algo que valha a pena saber. Corre tudo no meu próprio hardware.</p>
   <p>Feito por Gustavo Abreu, AI engineer e forward deployed engineer.</p>
-  <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer" class="linkedin">LinkedIn ↗</a>
-</header>
+  <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer" class="linkedin" data-split>LinkedIn ↗</a>
+</div></header>
+<div class="wrap body">
 
-<h2>Em resumo</h2>
+<h2 data-scrub="slide">Em resumo</h2>
 <div class="cards">
-  <div class="card"><b>12</b><span>projetos</span></div>
-  <div class="card"><b>Local primeiro</b><span>Os modelos correm nas minhas máquinas</span></div>
-  <div class="card"><b>WhatsApp</b><span>é por onde falo com ele</span></div>
-  <div class="card"><b>Um sim primeiro</b><span>Nada muda sem a minha aprovação</span></div>
+  <div class="card" data-scrub="rise"><b>12</b><span>projetos</span></div>
+  <div class="card" data-scrub="rise"><b>Local primeiro</b><span>Os modelos correm nas minhas máquinas</span></div>
+  <div class="card" data-scrub="rise"><b>WhatsApp</b><span>é por onde falo com ele</span></div>
+  <div class="card" data-scrub="rise"><b>Um sim primeiro</b><span>Nada muda sem a minha aprovação</span></div>
 </div>
 
-<h2>Como encaixa tudo</h2>
+<h2 data-scrub="slide">Como encaixa tudo</h2>
 <figure class="figure">
   <svg class="flow" viewBox="0 0 680 300" role="img" aria-label="Peço pelo telemóvel; o assistente e o bot do grupo respondem; os projetos respondem, avisam-me ou propõem uma mudança.">
     <defs><marker id="arw-pt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
@@ -290,39 +320,39 @@
   <figcaption>Peço em linguagem normal; os projetos respondem, avisam-me ou propõem uma mudança para eu aprovar.</figcaption>
 </figure>
 
-<h2>Os projetos</h2>
+<h2 data-scrub="slide">Os projetos</h2>
 
 <p class="group-title">Fala com ele</p>
 <div class="projects">
-  <article class="project" data-project="kaya">
-    <h3>Kaya, o bot do grupo</h3>
+  <article class="project" data-project="kaya" data-scrub="rise">
+    <h3 data-split>Kaya, o bot do grupo</h3>
     <p>Um bot no grupo de WhatsApp dos meus amigos que nunca se intromete. Lê tudo, lembra-se de anos de conversa e responde quando o chamam: por texto ou por voz, sobre uma foto, um áudio ou um documento partilhado. As mensagens do grupo nunca saem de casa.</p>
     <figure class="shot"><img src="/assets/kaya-chat.svg" alt="Ilustração do ecrã: Kaya, o bot do grupo" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-assistant">
-    <h3>O assistente do laboratório</h3>
+  <article class="project" data-project="lab-assistant" data-scrub="rise">
+    <h3 data-split>O assistente do laboratório</h3>
     <p>Falo com o laboratório inteiro a partir do telemóvel, com um áudio ou uma mensagem em linguagem normal. Responde logo às perguntas e pede o meu sim antes de mudar seja o que for.</p>
     <figure class="shot"><img src="/assets/lab-assistant.svg" alt="Ilustração do ecrã: O assistente do laboratório" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-notes">
-    <h3>Notas por voz</h3>
+  <article class="project" data-project="lab-notes" data-scrub="rise">
+    <h3 data-split>Notas por voz</h3>
     <p>Dito uma nota, uma receita ou uma dica de um jogo enquanto ando, e ela vai parar à página certa do meu caderno. As secções privadas ficam fechadas, peça-se o que se pedir.</p>
   </article>
 </div>
 
 <p class="group-title">Constrói-se e cura-se sozinho</p>
 <div class="projects">
-  <article class="project" data-project="idea-pipeline">
-    <h3>Da ideia ao pull request</h3>
+  <article class="project" data-project="idea-pipeline" data-scrub="rise">
+    <h3 data-split>Da ideia ao pull request</h3>
     <p>Mando uma ideia do telemóvel. Os agentes fazem-me as perguntas de que precisam, escrevem um plano, constroem-no num ambiente isolado, revêem o próprio trabalho e abrem um rascunho para eu aprovar. Esta página começou assim.</p>
     <figure class="shot"><img src="/assets/idea-pipeline.svg" alt="Ilustração do ecrã: Da ideia ao pull request" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="lab-medic">
-    <h3>O médico do laboratório</h3>
+  <article class="project" data-project="lab-medic" data-scrub="rise">
+    <h3 data-split>O médico do laboratório</h3>
     <p>Ao longo do dia lê os registos de todos os projetos e abre todos os sites como um visitante. Quando o mesmo erro volta sempre no meu código, propõe uma correção, e nada segue sem o meu sim.</p>
   </article>
-  <article class="project" data-project="labwatch">
-    <h3>Labwatch, o painel</h3>
+  <article class="project" data-project="labwatch" data-scrub="rise">
+    <h3 data-split>Labwatch, o painel</h3>
     <p>Uma página para o laboratório todo: o que está a correr, o que cada projeto fez esta semana, a energia que gastou e quanto custou. É também o mapa que os outros agentes leem antes de construir alguma coisa, para reaproveitarem o que já existe.</p>
     <figure class="shot"><img src="/assets/labwatch.svg" alt="Ilustração do ecrã: Labwatch, o painel" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
@@ -330,48 +360,48 @@
 
 <p class="group-title">Está de vigia</p>
 <div class="projects">
-  <article class="project" data-project="flight-deals">
-    <h3>Voos baratos</h3>
+  <article class="project" data-project="flight-deals" data-scrub="rise">
+    <h3 data-split>Voos baratos</h3>
     <p>Vigia voos de ida e volta a partir de Lisboa, curtos e longos, e manda uma mensagem por dia quando aparece algo mesmo barato.</p>
     <figure class="shot"><img src="/assets/flight-deals.svg" alt="Ilustração do ecrã: Voos baratos" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="price-scout">
-    <h3>Caça-preços</h3>
+  <article class="project" data-project="price-scout" data-scrub="rise">
+    <h3 data-split>Caça-preços</h3>
     <p>Segue as coisas que quero comprar em várias lojas, guarda o histórico de preços e avisa-me quando chegam ao meu alvo ou a um novo mínimo.</p>
     <figure class="shot"><img src="/assets/price-scout.svg" alt="Ilustração do ecrã: Caça-preços" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="series-watch">
-    <h3>Séries</h3>
+  <article class="project" data-project="series-watch" data-scrub="rise">
+    <h3 data-split>Séries</h3>
     <p>Segue as minhas séries e as grandes sagas, e avisa-me quando uma temporada é confirmada, ganha data ou estreia, com onde a ver.</p>
     <figure class="shot"><img src="/assets/series-watch.svg" alt="Ilustração do ecrã: Séries" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="game-alerts">
-    <h3>Alertas de jogos</h3>
+  <article class="project" data-project="game-alerts" data-scrub="rise">
+    <h3 data-split>Alertas de jogos</h3>
     <p>Vigia as notícias oficiais dos jogos à procura dos eventos temporários que me interessam, e avisa-me quando são anunciados e outra vez quando começam.</p>
   </article>
 </div>
 
 <p class="group-title">Faz coisas</p>
 <div class="projects">
-  <article class="project" data-project="redditcast">
-    <h3>Redditcast</h3>
+  <article class="project" data-project="redditcast" data-scrub="rise">
+    <h3 data-split>Redditcast</h3>
     <p>Um podcast semanal com dois apresentadores sobre as comunidades de IA e de notícias que sigo, escrito e narrado por modelos locais e entregue como áudio na segunda de manhã.</p>
     <figure class="shot"><img src="/assets/redditcast.svg" alt="Ilustração do ecrã: Redditcast" width="800" height="500" loading="lazy"><figcaption>Ilustração com dados inventados.</figcaption></figure>
   </article>
-  <article class="project" data-project="subs">
-    <h3>Tradutor de legendas</h3>
+  <article class="project" data-project="subs" data-scrub="rise">
+    <h3 data-split>Tradutor de legendas</h3>
     <p>Traduz legendas para português europeu com um modelo local, mantendo coerentes as personagens e os termos de cada série de episódio para episódio.</p>
   </article>
 </div>
 
-<h2>Como construo</h2>
+<h2 data-scrub="slide">Como construo</h2>
 <p><strong>Privado por defeito.</strong> As mensagens, fotos e áudios dos meus amigos são processados em casa e nunca são enviados para uma IA na nuvem.</p>
 <p><strong>Os agentes propõem, uma pessoa aprova.</strong> Tudo o que escreve, junta ou publica espera pelo meu sim.</p>
 <p><strong>Medido, não assumido.</strong> As mudanças ao bot do grupo são testadas contra um conjunto de testes antes de irem para produção; quando um modelo afinado não bateu um modelo de base, ganhou o de base.</p>
-
+</div>
 </div>
 
-<footer>© 2026 Gustavo Abreu · <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer">LinkedIn</a></footer>
+<div class="wrap"><footer>© 2026 Gustavo Abreu · <a href="https://www.linkedin.com/in/gustavo-abreu-7687b0133/" target="_blank" rel="noopener noreferrer">LinkedIn</a></footer></div>
 
 </div>
 <script>
@@ -380,6 +410,9 @@
   if (!root) return;
   var key = 'kaya-showcase-lang';
   var lang = 'en';
+  var curtain = document.getElementById('curtain');
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var busy = false;
   var asked = new URLSearchParams(window.location.search).get('lang');
   if (asked === 'en' || asked === 'pt') { lang = asked; }
   else { try { var saved = sessionStorage.getItem(key); if (saved === 'en' || saved === 'pt') lang = saved; } catch (e) {} }
@@ -391,16 +424,37 @@
       buttons[i].setAttribute('aria-pressed', String(buttons[i].getAttribute('data-value') === lang));
     }
     try { sessionStorage.setItem(key, lang); } catch (e) {}
+    document.dispatchEvent(new CustomEvent('kaya:lang', { detail: { lang: lang } }));
+  }
+  function show() {
+    apply();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  function swap() {
+    if (still || !curtain) { show(); return; }
+    if (busy) return;
+    busy = true;
+    curtain.setAttribute('data-state', 'below');
+    void curtain.offsetWidth;
+    curtain.setAttribute('data-state', 'cover');
+    window.setTimeout(function () {
+      show();
+      curtain.setAttribute('data-state', 'gone');
+      busy = false;
+    }, 480);
   }
   document.addEventListener('click', function (event) {
     var button = event.target.closest ? event.target.closest('.seg button') : null;
     if (!button) return;
-    lang = button.getAttribute('data-value');
-    apply();
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    var chosen = button.getAttribute('data-value');
+    if (chosen === lang) return;
+    lang = chosen;
+    swap();
   });
   apply();
 })();
 </script>
+<script src="/assets/scene.js" defer></script>
+<script src="/assets/motion.js" defer></script>
 </body>
 </html>

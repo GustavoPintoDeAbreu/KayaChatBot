@@ -223,6 +223,17 @@ def test_public_app_serves_showcase_assets(rig):
     assert "<svg" in ok.text
 
 
+def test_public_app_serves_showcase_scripts(rig):
+    gateway, *_ = rig
+    (Path(gateway.settings.assets_dir) / "demo.js").write_text("console.log(1)")
+    client = TestClient(gateway.public_app)
+    ok = client.get("/assets/demo.js")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("text/javascript")
+    assert ok.headers["content-security-policy"] == "default-src 'none'"
+    assert ok.headers["x-content-type-options"] == "nosniff"
+
+
 def test_public_app_refuses_other_asset_names(rig):
     gateway, *_ = rig
     client = TestClient(gateway.public_app)
