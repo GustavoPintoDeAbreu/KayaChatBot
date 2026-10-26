@@ -360,7 +360,7 @@ def main():
     print("\n✅ Extraction complete!")
     print(f"\nNext steps:")
     print(f"  1. Review {OUTPUT_CLEANED.name} for quality")
-    print(f"  2. Run generate_local_synthetic.py to create training data (fully on-prem)")
+    print(f"  2. Run build_vector_db.py to rebuild the retrieval store")
 
 
 if __name__ == "__main__":

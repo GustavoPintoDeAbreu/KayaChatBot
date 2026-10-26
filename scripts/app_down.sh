@@ -18,9 +18,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 if [[ "$ENV_NAME" == "all" ]]; then
-  echo "🛑 Stopping kaya-dev, kaya-prod and cloudflared ..."
-  docker compose --profile dev --profile prod --profile tunnel stop kaya-dev kaya-prod cloudflared || true
-  docker compose --profile dev --profile prod --profile tunnel rm -f kaya-dev kaya-prod cloudflared || true
+  echo "🛑 Stopping kaya-prod and cloudflared ..."
+  docker compose --profile dev --profile prod --profile tunnel stop kaya-prod cloudflared || true
+  docker compose --profile dev --profile prod --profile tunnel rm -f kaya-prod cloudflared || true
 else
   echo "🛑 Stopping kaya-${ENV_NAME} ..."
   docker compose --profile "$ENV_NAME" stop "kaya-${ENV_NAME}" || true

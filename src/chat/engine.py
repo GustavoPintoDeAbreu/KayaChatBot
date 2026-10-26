@@ -1,7 +1,7 @@
 """Shared inference core for KayaChatBot.
 
-Every chat entry point — the Gradio web UI (``web_app.py``), the CLI
-(``chat.py``) and the WhatsApp bridge (``whatsapp_adapter.py``) — must run on the
+Every chat entry point — the Gradio web UI (``web_app.py``) and the WhatsApp
+bridge (``whatsapp_adapter.py``) — must run on the
 *same* loaded model. The box has a single GPU and the model takes ~11 GB, so it
 can only be loaded once per process. This module owns that single load
 (``get_engine`` is a process-wide singleton, mirroring ``get_retriever`` and
@@ -9,7 +9,7 @@ can only be loaded once per process. This module owns that single load
 WhatsApp path. The web UI keeps its own token-streaming loop but sources the
 model, tokenizer and retriever from the same engine so nothing is loaded twice.
 
-System-prompt construction lives here too (``build_system_prompt``) so the CLI,
+System-prompt construction lives here too (``build_system_prompt``) so the
 web UI and WhatsApp bridge can each pick their own policy (e.g. the uncensored
 preamble) without duplicating the member-profile / date assembly.
 """
@@ -273,63 +273,21 @@ def build_system_prompt(
 
 
 def _load_model(config: Dict[str, Any]):
-    """Load the fine-tuned model + tokenizer once.
+    """Load the tokenizer the backends template prompts with.
 
-    Uses Unsloth ``FastModel`` for Gemma 4 (detected from ``adapter_config.json``)
-    and the standard PEFT path for Qwen3 — identical to the logic that lived in
-    ``web_app.py`` so behaviour is unchanged.
+    The weights live in the serving runtime (Ollama behind the GPU broker, or a
+    llama.cpp server); this process only applies the chat template. Returns
+    ``(None, tokenizer)`` so ``KayaEngine`` keeps its signature.
     """
-    model_dir = config["training"]["output_dir"]
+    from transformers import AutoTokenizer
 
-    # With the llama.cpp (gguf) backend the heavy model lives in the llama-server
-    # sidecar; this process only needs the tokenizer (for chat templating).
     from src.chat.inference_backend import resolve_backend
 
-    if resolve_backend(config) in ("gguf", "ollama"):
-        from transformers import AutoTokenizer
-
-        print(f"Backend={resolve_backend(config)} — loading tokenizer only from {model_dir} …")
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        print("✓ Tokenizer loaded")
-        return None, tokenizer
-
-    adapter_cfg_path = Path(model_dir) / "adapter_config.json"
-    if not adapter_cfg_path.exists():
-        raise FileNotFoundError(f"adapter_config.json not found in {model_dir}")
-
-    base_model_name = json.loads(adapter_cfg_path.read_text())["base_model_name_or_path"]
-    is_gemma4 = "gemma-4" in base_model_name.lower() or "gemma4" in base_model_name.lower()
-
-    print(f"Loading model from {model_dir} …")
-    if is_gemma4:
-        from unsloth import FastModel
-
-        model, tokenizer = FastModel.from_pretrained(
-            model_name=model_dir,
-            max_seq_length=config["model"]["max_seq_length"],
-            dtype=None,
-            load_in_4bit=True,
-        )
-        FastModel.for_inference(model)
-    else:
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        from peft import PeftModel
-
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model_name, quantization_config=bnb, device_map="cuda", trust_remote_code=True
-        )
-        model = PeftModel.from_pretrained(base, model_dir)
-        model.eval()
-    print("✓ Model loaded")
-    return model, tokenizer
+    model_dir = config["training"]["output_dir"]
+    print(f"Backend={resolve_backend(config)} — loading tokenizer only from {model_dir} …")
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    print("✓ Tokenizer loaded")
+    return None, tokenizer
 
 
 class KayaEngine:

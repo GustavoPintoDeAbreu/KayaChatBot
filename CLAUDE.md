@@ -78,7 +78,7 @@ must fine-tune" as a claim needing evidence, not a given. Full results:
 receives WhatsApp and journals every event (and its media) for **7 days** while
 the PC may be off (`deploy/pi/README.md`). Nothing on the Pi talks to a cloud
 service except the Cloudflare tunnel, which carries the landing page and `/app`.
-Knowledge extraction and synthetic data generation run on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles). One owner-approved exception (2026-10-19): when Gustavo points his lab assistant at a group for
+Knowledge extraction runs on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles). One owner-approved exception (2026-10-19): when Gustavo points his lab assistant at a group for
 context, the local model reads it through `/mcp`, and an idea it starts for him (which becomes a private
 GitHub PR, possibly planned by Claude) may carry a **summary** of the friends' points: no names, no
 quotes, nothing off-topic. The rule is in the server's `instructions`.
@@ -102,7 +102,7 @@ Install dependencies inside the venv: `pip install -r requirements.txt`
 ## Common Commands
 
 ```bash
-# Full pipeline (extract → format → merge → train)
+# Data pipeline (extract → optional knowledge extraction)
 kaya_chatbot_env/bin/python run_full_pipeline.py
 
 # Individual pipeline steps
@@ -111,22 +111,11 @@ kaya_chatbot_env/bin/python src/data/generate_knowledge_base.py  # --test / --re
 kaya_chatbot_env/bin/python src/data/build_vector_db.py
 kaya_chatbot_env/bin/python scripts/ingest_documents.py --dir ~/papers --stats   # size a corpus, writing nothing
 kaya_chatbot_env/bin/python scripts/ingest_documents.py --export chat.txt --media ./chat  # backfill shared PDFs
-kaya_chatbot_env/bin/python src/data/format_direct_training.py
-kaya_chatbot_env/bin/python src/data/merge_datasets.py
-kaya_chatbot_env/bin/python src/finetuning/train.py
-
-# Chat
-kaya_chatbot_env/bin/python src/chat/chat.py
-
-# Inference smoke test
-kaya_chatbot_env/bin/python src/chat/inference.py
-kaya_chatbot_env/bin/python tests/test_inference.py
 
 # Tests
 kaya_chatbot_env/bin/python -m pytest tests/ -v
 kaya_chatbot_env/bin/python -m pytest tests/rag/ -v
 kaya_chatbot_env/bin/python -m pytest tests/pipeline/ -v
-kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 
 # Multi-person conversation simulator (real webhook path, mock outbound)
 kaya_chatbot_env/bin/python scripts/seed_sim_data.py   # once, builds ./data_sim
@@ -149,14 +138,12 @@ kaya_chatbot_env/bin/python scripts/recap_preview.py --topic "almoço de natal" 
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --list
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --judge azure   # xai is out of credits
 kaya_chatbot_env/bin/python scripts/model_bakeoff.py --resume reports/benchmarks/bakeoff_<stamp>.json
-kaya_chatbot_env/bin/python scripts/export_gguf.py --profile gemma4-31b-wpp --quant Q4_K_M
 
 # Docker (always rebuild+prune after changes)
 docker-compose up --build
 docker system prune  # prevent storage overload
 
 # Dev/Test (Docker)
-docker compose --profile dev up -d kaya-dev       # dev web UI on :7861, ./src mounted read-write (or use scripts/app_up.sh dev)
 docker compose --profile test run --rm kaya-test  # run the pytest suite in-container
 
 # Deployment (see DEPLOYMENT.md)
@@ -184,15 +171,12 @@ Raw chat data (data/wpp/)
     → build_vector_db.py → data/rag_db/ (ChromaDB: kaya_conversations + kaya_knowledge_base)
     → [live] documents.py / ingest_documents.py → data/rag_db/ (kaya_documents, page-numbered)
                                                  + data/documents/<scope>/<sha256>.pdf
-    → format_direct_training.py and/or generate_local_synthetic.py (local teacher) → data/synthetic_local.jsonl
-    → merge_datasets.py → data/train_synthetic.jsonl, data/val_synthetic.jsonl
-    → train.py → models/kaya_<version>/  (LoRA adapter)
-    → scripts/export_gguf.py → models/gguf/<name>.gguf  (merge + quantize)
-    → chat.py / web_app.py (tokenizer + RAG at runtime; weights in llama.cpp)
+    → whatsapp_server.py / web_app.py (tokenizer + RAG at runtime; weights in Ollama or llama.cpp)
 
-NOTE: the live path no longer uses this pipeline. Prod serves a stock GGUF with
-no adapter — the training branch above is only exercised when evaluating whether
-a fine-tune helps (it currently does not).
+NOTE: there is no training branch any more. Fine-tuning, its data scripts
+(format, synthetic, needle, merge), `scripts/export_gguf.py` and the in-process
+`hf` backend were removed on 2026-10-26: the bake-off showed the LoRA added
+nothing, and prod serves a stock model. They are in git history before that date.
 ```
 
 ### RAG System (`src/chat/retriever.py`)
@@ -437,7 +421,7 @@ devices, not a 48 GB pool: `can_device_access_peer(0,1)` is False and `nvidia-sm
 topo -p2p` reports `CNS`, so there is **no GPU-to-GPU P2P** and all inter-GPU
 traffic stages through system RAM.
 
-| | Serving today | Serving, two-card (available, unused) | Python (training, hf backend, CI) |
+| | Serving today | Serving, two-card (available, unused) | Python (app, CI) |
 |---|---|---|---|
 | `NVIDIA_VISIBLE_DEVICES` | `1` | `all` | `0` |
 | `CUDA_VISIBLE_DEVICES` | `0` | `0,1` | **`0`** |
@@ -457,14 +441,10 @@ traffic stages through system RAM.
   step. There must be **no `deploy.resources.reservations.devices` block** on the
   llama services: a `count:` reservation overrides `NVIDIA_VISIBLE_DEVICES` and
   silently caps serving at one card.
-- **`CUDA_VISIBLE_DEVICES=0` on the Python services is load-bearing.** Unsloth
-  only installs its `DistributedType.NO` patch when `device_count() == 1`
-  (`unsloth/models/_utils.py`); with both cards visible, HF Trainer falls into
-  DataParallel — slower and flaky with 4-bit models. Unsloth's own multi-GPU path
-  is **DDP** (a full model copy per card, `models/loader_utils.py
-  prepare_device_map`), so exposing both cards gives training **no extra
-  capacity** anyway. Training above 24 GB would mean leaving Unsloth for HF+peft
-  `device_map="auto"`.
+- **`CUDA_VISIBLE_DEVICES=0` keeps each Python service on one card**, even when
+  `NVIDIA_VISIBLE_DEVICES` falls back to `all`. It used to be load-bearing for
+  Unsloth training, which fell into DataParallel with both cards visible;
+  fine-tuning was removed on 2026-10-26.
 - GPU0 drives the desktop and is capped at 300 W. Burn-in once measured its
   sustained clocks ~15% below GPU1's (1238 vs 1448 MHz), which is why two-card
   serving used `-ts 0.45,0.55` to give it fewer layers. That gap was measured at
@@ -531,11 +511,11 @@ traffic stages through system RAM.
 
 ### Inference backends (`src/chat/engine.py`, `src/chat/inference_backend.py`)
 
-`get_engine()` is the process-wide singleton that loads the model + retriever once. Every surface generates through a pluggable `InferenceBackend`: the WhatsApp webhook (`engine.generate_reply`), the Gradio UI token stream (`web_app.py`), and follow-up `suggestions.py`. Two backends:
+`get_engine()` is the process-wide singleton that loads the tokenizer + retriever once. Every surface generates through a pluggable `InferenceBackend`: the WhatsApp webhook (`engine.generate_reply`), the Gradio UI token stream (`web_app.py`), and follow-up `suggestions.py`. Two backends:
 
 | Backend | What runs |
 |---|---|
-| `hf` | Unsloth `FastModel` / PEFT model **in-process** on the GPU (default). |
+| `ollama` | Generation is sent to Ollama's `/api/generate` in raw mode (`OllamaBackend`), behind the GPU broker. Prod's runtime since 2026-09-25 (see "Kaya runs on Ollama, not llama.cpp"). |
 | `gguf` | Generation is sent to a llama.cpp `llama-server` over HTTP (`LlamaCppBackend`). The app process holds only the tokenizer + RAG retriever (~2 GB); the model lives in the `llama` compose service serving `models/gguf/gemma-4-12b-it-Q6_K.gguf` — **~15× faster** than the bnb-4bit in-process model. This is the only backend that can serve a model larger than one card, and the only one that works with the live profile at all (it has no adapter). |
 
 **`cache_prompt` is ON (2026-09-04), and was off for no reason.** It arrived
@@ -568,7 +548,7 @@ the anti-repetition fix and is worth more than a cache hit.
 benchmark run targets the `llama-bench` candidate server on `127.0.0.1:8081`
 while leaving what prod resolves untouched.
 
-Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (**default `gguf` since 2026-08-08**). Both prod and dev run `gguf`; `hf` only works with a profile that owns an adapter directory, and the live profile does not. GGUF files are gitignored — build one from a fine-tuned adapter with `scripts/export_gguf.py` (merge → `convert_hf_to_gguf.py` → `llama-quantize`). `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS. The CLI `chat.py` is hf-only (dev tool).
+Chosen by `resolve_backend()`: the `KAYA_INFERENCE_BACKEND` env var wins, else `inference.backend` in `config.yaml` (**default `gguf` since 2026-08-08**). Any other value raises in `build_backend` (the in-process `hf` backend was removed on 2026-10-26). GGUF files are gitignored. `LlamaCppBackend` strips the HF template's leading `<bos>` (llama.cpp adds its own) to avoid a quality-degrading double-BOS.
 
 ### Audio (`src/chat/stt.py`, `src/chat/tts.py`)
 
@@ -1414,15 +1394,11 @@ unchanged: a query naming a group member never leaves the box.
 
 ### LLM Providers (`src/llm_providers/`)
 
-Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resilience. Azure OpenAI (`azure_provider.py`) and xAI Grok (`xai_provider.py`); switch via `generation.provider` in `config.yaml`. **Eval-judge + web-search only** — never send group data to these providers; knowledge extraction and synthetic generation use the local teacher (`src/data/local_teacher.py`).
-
-### Fine-tuning (`src/finetuning/train.py`)
-
-Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training calls `SFTTrainer` directly (no wrapper class — a previous `KayaTrainer` wrapper caused 20+ GB RAM spikes). LoRA adapters are saved to `training.output_dir`. Inference expects `adapter_config.json` in the model directory.
+Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resilience. Azure OpenAI (`azure_provider.py`) and xAI Grok (`xai_provider.py`); switch via `generation.provider` in `config.yaml`. **Eval-judge + web-search only** — never send group data to these providers; knowledge extraction uses the local teacher (`src/data/local_teacher.py`).
 
 ### Deployment (`DEPLOYMENT.md`)
 
-`kaya-prod` is the **always-on** production web app. The box is **serving-only** (fine-tuning is done separately). Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile). The UI header shows the running env + commit (`KAYA_ENV`/`KAYA_VERSION`).
+`kaya-prod` is the **always-on** production web app. The box is **serving-only**. Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile). The UI header shows the running env + commit (`KAYA_ENV`/`KAYA_VERSION`).
 
 **Two routes, one process** (`whatsapp_server.py`):
 
@@ -1431,57 +1407,21 @@ Uses Unsloth (`FastModel` / `FastLanguageModel`) for Gemma4 and Qwen3. Training 
 | `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
 
-**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. `web_app.py` is still the dev UI (`kaya-dev`). `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
+**There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. The dev UI (`web_app.py`, `kaya-dev`) and gradio itself went on 2026-10-26: every gradio release caps pillow below 13, which CVE-2026-112393 needs. `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
 
 **Prod runs from its own checkout** at `~/kaya-prod` (separate from this dev copy), with `models/` and `data/` symlinked to the shared originals — so you can develop here without touching the live site. All four live services (`kaya-prod`, `kaya-waha`, `kaya-llama`, `cloudflared`) have `restart: unless-stopped`, and Docker here is the **snap** build — the unit is `snap.docker.dockerd.service`, so `systemctl enable docker` returns `not-found` and enables nothing. With `snap.docker.dockerd` enabled the stack **auto-recovers after a reboot** (measured: daemon +7s, `kaya-llama` +13s from boot). The one way it breaks is an *explicit* `docker stop` / `app_down.sh` before shutdown — that survives the reboot as "stopped". A daemon-initiated stop during `systemctl poweroff` does not.
 
-Prod serves generation from the `llama` compose service (`gguf` profile) with `KAYA_INFERENCE_BACKEND=gguf` set on `kaya-prod`; `deploy_prod.sh` starts the `llama` server automatically. **Roll back to the in-process model** with `KAYA_INFERENCE_BACKEND=hf scripts/deploy_prod.sh`. Note: `~/kaya-prod/data/` must contain the gitignored runtime files (`rag_db/`, `group_members.json`, `whatsapp_whitelist.json`, `whatsapp_contacts.json`) — if `data/` is a real dir instead of the intended symlink to the dev copy, copy them in or RAG/whitelist gating silently fail.
+Prod serves generation from the `llama` compose service (`gguf` profile) with `KAYA_INFERENCE_BACKEND=gguf` set on `kaya-prod`; `deploy_prod.sh` starts the `llama` server automatically. Note: `~/kaya-prod/data/` must contain the gitignored runtime files (`rag_db/`, `group_members.json`, `whatsapp_whitelist.json`, `whatsapp_contacts.json`) — if `data/` is a real dir instead of the intended symlink to the dev copy, copy them in or RAG/whitelist gating silently fail.
 
-**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) updates `~/kaya-prod/.env` in place from whichever `prod` secrets are set, never truncating it, then calls `deploy_prod.sh` to update the live site. Both refuse an `.env` prod could not run on (`scripts/prod_env.sh check`). Before that guard, an empty-secrets run blanked `.env` and started a second WAHA (2026-10-04; DEPLOYMENT.md). `kaya-dev` (port 7861) is for occasional manual dev runs only; run one env at a time, since a served model may claim both GPUs. Full runbook in `DEPLOYMENT.md`.
-
----
-
-## Gemma 4 Specifics
-
-These are easy to break — treat them as hard rules:
-
-- Use `FastModel` (not `FastLanguageModel`) with `unsloth>=2026.4.5`
-- Chat template: `get_chat_template(tokenizer, "gemma-4")` → produces `<|turn>user\n...<turn|>\n` format
-- **Thinking mode must be disabled during SFT** — do not enable `<|think|>` tokens in training
-- Inference must use `Gemma4ForConditionalGeneration.from_pretrained()` or Unsloth's `FastModel` — it is **not** registered with `AutoModelForCausalLM`
-- Unsloth returns a `Gemma4Processor`, not a plain tokenizer. Always use `tokenizer(text=input_text, ...)` with the `text=` keyword — positional args are interpreted as `images` and will crash
-- Set `autocast_adapter_dtype=False` for PEFT compatibility
-
----
-
-## Training Memory Rules
-
-Training is capped at **one 24 GB card** — see the GPU topology section above for
-why the second 3090 does not raise this ceiling. To avoid OOM:
-
-- `skip_memory_metrics=True` — avoids the HF `TrainerMemoryTracker` busy-loop
-- `dataset_num_proc: 1` — prevents fork-based memory duplication
-- `dataloader_pin_memory: False`, `dataloader_num_workers: 0`
-- OOM fallback: lower `lora_r` to 8 and/or reduce `max_seq_length` to 2048
-- VRAM budget: gemma4-e4b ~11 GB, qwen3-14b ~15 GB. Always leave ~2 GB headroom.
-
----
-
-## PEFT `float8_e8m0fnu` Patch
-
-PEFT 0.19.0 checks for `torch.float8_e8m0fnu` which doesn't exist in PyTorch 2.6. Two files in the venv are manually patched with `hasattr` guards:
-- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/tuners_utils.py`
-- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/lora/layer.py`
-
-**Reapply these patches if PEFT is reinstalled or upgraded.** The fix wraps `torch.float8_e8m0fnu` references in `hasattr(torch, "float8_e8m0fnu")` guards.
+**Push to prod:** `scripts/deploy_prod.sh [ref]` checks out the ref in `~/kaya-prod`, rebuilds, and restarts the live container — that is what makes a commit live. CI/CD on a **self-hosted GPU runner**: `ci.yml` tests every PR; `validate-main.yml` rebuilds + tests on merge to `main` (no container start); `deploy-prod.yml` (manual, `prod` Environment requires reviewer approval) updates `~/kaya-prod/.env` in place from whichever `prod` secrets are set, never truncating it, then calls `deploy_prod.sh` to update the live site. Both refuse an `.env` prod could not run on (`scripts/prod_env.sh check`). Before that guard, an empty-secrets run blanked `.env` and started a second WAHA (2026-10-04; DEPLOYMENT.md). Full runbook in `DEPLOYMENT.md`.
 
 ---
 
 ## Package Version Pins
 
-- `trl<=0.24.0` — newer versions break `SFTConfig` API
-- `unsloth>=2026.4.5` — required for Gemma 4 via `FastModel`
-- `transformers>=5.5.0` — required for `Gemma4ForConditionalGeneration`
+- `transformers` stays for the tokenizer only (`engine._load_model`); nothing loads model weights in the app process.
+- `accelerate` and `bitsandbytes` stay for the local teacher (`src/data/local_teacher.py`, 4-bit, knowledge extraction).
+- Security floors from the nightly lab-audit (2026-10-26): `anyio>=4.14.2`, `certifi>=2026.10.19`, `pillow>=13.0.0`, `sentence-transformers==5.6.0`. `gradio` moved off 6.15.1, which capped pillow below 13.
 
 ---
 

@@ -26,7 +26,7 @@ kaya-prod / kaya-dev container — one process, two routes
    └─ /whatsapp/*   WAHA webhook — open by necessity
    ▼
 RAG (GPU) ──► generation backend
-                ├─ hf:   in-process Unsloth model (needs a profile with an adapter)
+                ├─ ollama: Ollama behind the GPU broker over HTTP (prod, set in .env)
                 └─ gguf: llama.cpp `llama` container over HTTP (~15× faster) — the default for BOTH prod and dev
 ```
 
@@ -57,12 +57,9 @@ again.
   compose service (`gguf` profile) serving `models/gguf/gemma-4-12b-it-Q6_K.gguf`
   at `-c 32768`; `deploy_prod.sh` starts it automatically. Dev uses its own
   `llama-bench` server (`bench` profile) on the dev card, so the two never share a
-  model. `hf` is no longer a usable fallback for the live profile — it has no
-  adapter to load; roll back to `gemma4-e4b-seq4096-wpp` first if you need it.
+  model. There is no in-process backend (removed 2026-10-26).
 - **Live model:** stock `gemma-4-12b-it` Q6_K, no LoRA (see CLAUDE.md for why).
   Selected by `KAYA_PROD_GGUF` / `KAYA_PROD_CTX` in `~/kaya-prod/.env`.
-  **Rollback:** set `active_model_profile: gemma4-e4b-seq4096-wpp` and
-  `KAYA_PROD_GGUF=kaya-wpp-Q6_K.gguf`; both old artifacts are retained.
 
 ---
 
@@ -415,7 +412,4 @@ scripts/app_up.sh dev
   `docker compose --profile gguf up -d llama`; check `docker logs kaya-llama` for
   `model loaded`. The app reaches it at `http://llama:8080` on the compose network.
   Requires `models/gguf/gemma-4-12b-it-Q6_K.gguf` to exist (shared via the `models`
-  symlink). `KAYA_INFERENCE_BACKEND=hf` is **not** a way out on the live profile —
-  `gemma4-12b-stock` has no adapter for the in-process loader to find. Rolling
-  back means switching profile first: `active_model_profile:
-  gemma4-e4b-seq4096-wpp`, then redeploy with `hf`.
+  symlink).

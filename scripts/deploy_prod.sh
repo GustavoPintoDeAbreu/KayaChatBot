@@ -124,7 +124,7 @@ if [[ "$MODEL_URL" == */upstream/* ]]; then
 elif [[ "${PROD_BACKEND:-gguf}" == "gguf" ]]; then
   # Prod generates via the llama.cpp gguf server (KAYA_INFERENCE_BACKEND=gguf, set
   # on the kaya-prod service). Start it too. Not force-recreated, so a redeploy
-  # leaves the model loaded. Export KAYA_INFERENCE_BACKEND=hf to skip + roll back.
+  # leaves the model loaded.
   echo "🦙 backend=gguf → ensuring the llama.cpp server is up ..."
   docker compose --profile gguf up -d llama
 fi

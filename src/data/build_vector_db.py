@@ -534,7 +534,7 @@ def main():
     print(f"\nNext steps:")
     print(f"  1. Fill in notes/descriptions in data/group_members.json and data/group_knowledge.json")
     print(f"  2. Re-run this script after updating the JSON files to rebuild the knowledge base")
-    print(f"  3. Run: python src/chat/chat.py")
+    print(f"  3. Run: python src/chat/web_app.py")
 
 
 if __name__ == "__main__":

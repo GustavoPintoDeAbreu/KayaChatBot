@@ -383,34 +383,15 @@ model_profiles:
         assert config["model"]["model_id"] == "model_b"
         assert config["training"]["output_dir"] == "./models/b"
 
-    def test_qwen3_profile_present_in_real_config(self):
-        """The real config.yaml must contain the qwen3-14b and gemma4-e4b profiles."""
+    def test_live_profile_is_the_only_profile(self):
+        """Only the live stock profile survives; the training profiles were removed."""
         config = load_config()
-        profiles = config.get("model_profiles", {})
-        assert "qwen3-14b" in profiles, "qwen3-14b profile missing from config.yaml"
-        assert "gemma4-e4b" in profiles, "gemma4-e4b profile missing from config.yaml"
+        assert config["active_model_profile"] == "gemma4-12b-stock"
+        assert list(config.get("model_profiles", {})) == ["gemma4-12b-stock"]
 
-    def test_gemma4_model_id_correct(self):
-        """gemma4-e4b profile must use the real HuggingFace model ID."""
-        config = load_config()
-        gemma_id = config["model_profiles"]["gemma4-e4b"]["model"]["model_id"]
-        assert gemma_id == "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-
-    def test_apply_gemma4_profile(self):
-        """Applying gemma4-e4b profile overrides model and training sections."""
-        config = load_config(profile_override="gemma4-e4b")
-        assert config["model"]["model_id"] == "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-        assert config["model"]["lora_r"] == 16
-        assert config["model"]["lora_alpha"] == 32
-        assert config["model"]["lora_dropout"] == 0.0
-        assert "gemma4" in config["training"]["output_dir"]
-
-    def test_apply_qwen3_profile(self):
-        """Applying qwen3-14b profile overrides model and training sections."""
-        config = load_config(profile_override="qwen3-14b")
-        assert config["model"]["model_id"] == "unsloth/Qwen3-14B-bnb-4bit"
-        assert config["model"]["lora_r"] == 32
-        assert "kaya_qwen3_14b" in config["training"]["output_dir"]
+    def test_live_profile_points_at_the_tokenizer_dir(self):
+        """The live profile's output_dir is the local tokenizer-only directory."""
+        assert load_config()["training"]["output_dir"] == "./models/kaya_gemma4_12b_stock"
 
 
 # ── display-name overrides live outside the tracked config (2026-08-13) ──────

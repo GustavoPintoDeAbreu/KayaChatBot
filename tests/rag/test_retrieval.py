@@ -105,7 +105,7 @@ try:
     print("=" * 60)
     print("\n🎯 RAG is fully functional and ready to use!")
     print("\nTo test in chat:")
-    print("  docker-compose run --rm kaya-chatbot python src/chat/chat.py")
+    print("  docker compose --profile dev up -d kaya-dev")
     
 except Exception as e:
     print(f"❌ Test failed: {e}")

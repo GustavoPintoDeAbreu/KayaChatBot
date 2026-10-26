@@ -117,7 +117,7 @@ def run_rag_logic():
     print("  ⚠️  Full retrieval pipeline (requires model download)")
     print("\nNext steps:")
     print("  1. Build vector database: python src/data/build_vector_db.py")
-    print("  2. Test full chat: python src/chat/chat.py")
+    print("  2. Test full chat: python src/chat/web_app.py")
     print("  3. The RAG logic is implemented and ready!")
 
     return True

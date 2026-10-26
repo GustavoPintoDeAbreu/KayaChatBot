@@ -1,4 +1,4 @@
-# Kaya ChatBot Fine-Tuning Configuration
+# Kaya ChatBot Configuration
 
 # Test Mode Settings
 # Set enabled: true for quick testing with minimal data/epochs
@@ -12,15 +12,6 @@ test_mode:
   
   portuguese:
     examples_limit: 100  # Only use 100 Portuguese examples
-  
-  # Test mode training parameters (fast training for validation)
-  training:
-    max_steps: 50  # Just 50 steps for quick validation
-    per_device_train_batch_size: 1
-    gradient_accumulation_steps: 2
-    save_steps: 25
-    eval_steps: 25
-    logging_steps: 5
 
 # Generation Settings
 generation:
@@ -63,17 +54,10 @@ generation:
 
 # Data Processing Settings
 data:
-  # New synthetic data pipeline
-  train_file: "./data/train_synthetic.jsonl"
-  val_file: "./data/val_synthetic.jsonl"
-  
   # Legacy files (for reference)
   input_file: "./data/wpp/WhatsApp Chat with Kaya 👀.txt"
   output_file: "./data/processed_chat.jsonl"
-  
-  # Data split (consumed by merge_datasets.py)
-  train_test_split: 0.9  # 90% train, 10% validation
-  
+
   # Manual sender-name overrides for raw WhatsApp sender strings that token
   # matching cannot resolve. Key: exact raw sender name (case-sensitive).
   # Value: canonical member name (must match a name in group_members.json).
@@ -104,11 +88,6 @@ data:
     - "Dolby Atmos"
     - "8d"  # matches "8d", "8D audio", "som 8d" (whole-word, case-insensitive); not "18d"
 
-  # Which synthetic file merge_datasets.py builds train/val from. Switch to
-  # ./data/synthetic_local.jsonl after running generate_local_synthetic.py to
-  # train on the on-prem, behavior-targeted bank instead of the legacy data.
-  synthetic_source_file: "./data/synthetic_local.jsonl"
-
 # Pipeline Settings
 pipeline:
   # Set generate_knowledge: true to run the knowledge extraction step on the
@@ -123,27 +102,13 @@ pipeline:
   # When false (default), the full extract_all_messages.py re-extracts everything.
   incremental: false
 
-# On-prem synthetic data generation (src/data/generate_local_synthetic.py).
-# A local "teacher" model generates synthesized, behavior-targeted training
-# targets — no group data leaves the box. Run it, then point
-# data.synthetic_source_file at output_file and retrain.
+# The local teacher's model and sampling defaults. knowledge_generation falls back
+# on these when it does not set its own (generate_knowledge_base.load_backend).
 synthetic_generation:
   # On-prem teacher, loaded in 4-bit via transformers (quantized at load).
   # unsloth/Qwen3.5-27B (dense) → ~17GB VRAM in 4-bit, fits a 24GB GPU for
-  # inference (full-precision download is large, one-time). Qwen3.5-35B-A3B
-  # (~22GB MoE) is an option if it fits. Any HF instruct model id works; a
-  # prequantized 4-bit repo, if available, shrinks the download.
+  # inference (full-precision download is large, one-time).
   teacher_model_id: "unsloth/Qwen3.5-27B"
-  output_file: "./data/synthetic_local.jsonl"
-  knowledge_approach: "json_only"   # how RAG context is built for each question
-  min_words: 6                      # reject answers shorter than this
-  # Mine this many extra conversational questions from real chat chunks (the
-  # teacher reads a chunk and writes a natural question about it). Adds breadth
-  # beyond the per-member/superlative templates. 0 disables.
-  mine_count: 1600
-  # Teacher sampling (Qwen3.5 instruct recommended defaults)
-  max_new_tokens: 400
-  temperature: 0.7
   top_p: 0.8
   top_k: 20
 
@@ -235,14 +200,11 @@ training:
 
 # Inference Settings
 inference:
-  # Generation engine. "hf" = in-process Unsloth/PEFT model (default, unchanged).
-  # "gguf" = route generation to a llama.cpp llama-server (~15x faster at Q6_K
-  # parity quality). gguf needs the `llama` compose service running the GGUF.
-  # gguf is the default since 2026-08-08: the live profile (gemma4-12b-stock) has
-  # NO adapter, so the hf path has nothing to load and would fail with a missing
-  # adapter_config.json. hf remains usable, but only with a profile that owns an
-  # adapter directory (e.g. the previous gemma4-e4b-seq4096-wpp).
-  backend: gguf                      # hf | gguf  (env KAYA_INFERENCE_BACKEND wins)
+  # Generation runtime, reached over HTTP; this process holds only the tokenizer.
+  # "gguf" = a llama.cpp llama-server (the `llama` compose service, or llama-bench).
+  # "ollama" = Ollama behind the GPU broker, which prod uses (KAYA_INFERENCE_BACKEND
+  # in ~/kaya-prod/.env). The in-process "hf" backend was removed on 2026-10-26.
+  backend: gguf                      # gguf | ollama  (env KAYA_INFERENCE_BACKEND wins)
   gguf:
     # llama-server URL; in Docker use the compose service name. The env var
     # KAYA_LLAMA_URL overrides this — that is how scripts/model_bakeoff.py points
@@ -1116,29 +1078,22 @@ benchmark:
     - 512
 
 # Active model profile — overrides model: and training: sections when set.
-# Set to null to use top-level values as-is (backward compatible).
-# Switch by changing this value or passing --profile <name> on the CLI.
-# 2026-08-08: promoted from gemma4-e4b-seq4096-wpp after the bake-off.
-# The stock 12B beat the fine-tuned E4B on every dimension (golden 4.307 vs 3.778,
-# knowledge 3.77 vs 2.91, n=3 vs n=2, measured noise ±0.07) — and a control run
-# showed the WhatsApp LoRA contributes nothing on an identical base (−0.045,
-# inside noise), so this profile carries no adapter at all.
-# Rollback: set this back to "gemma4-e4b-seq4096-wpp" and KAYA_PROD_GGUF to
-# kaya-wpp-Q6_K.gguf; both the old adapter and its GGUF are untouched.
+# 2026-08-08: the stock 12B beat the fine-tuned E4B on every dimension (golden
+# 4.307 vs 3.778, knowledge 3.77 vs 2.91, n=3 vs n=2, measured noise ±0.07), and
+# a control run showed the WhatsApp LoRA contributes nothing on an identical base
+# (−0.045, inside noise). The fine-tuning profiles and pipeline were removed on
+# 2026-10-26; they are in git history.
 active_model_profile: "gemma4-12b-stock"
 
 # Model profiles — each profile overrides specific model: and training: keys.
 # Deep-merged into the top-level sections by src/config_loader.py.
 model_profiles:
   # ── LIVE (2026-08-08) ────────────────────────────────────────────────────────
-  # Serving-only profile: there is no adapter. Under the gguf backend the app
-  # loads ONLY a tokenizer from output_dir (engine._load_model), and the weights
-  # come from models/gguf/gemma-4-12b-it-Q6_K.gguf in the `llama` service.
-  # output_dir therefore points at a local tokenizer-only directory rather than an
-  # HF repo id, so prod does not need network access to Hugging Face to start.
-  # The training block is present for schema completeness; this profile is not
-  # trainable on this box (gemma4_unified needs transformers >= 5.14, and the
-  # pinned stack is 5.5.0).
+  # Serving-only profile: there is no adapter. The app loads ONLY a tokenizer
+  # from output_dir (engine._load_model); the weights are served by Ollama behind
+  # the GPU broker (or a llama.cpp server). output_dir points at a local
+  # tokenizer-only directory rather than an HF repo id, so prod does not need
+  # network access to Hugging Face to start.
   gemma4-12b-stock:
     model:
       model_id: "unsloth/gemma-4-12b-it"
@@ -1163,220 +1118,6 @@ model_profiles:
       per_device_train_batch_size: 1
       gradient_accumulation_steps: 8
       learning_rate: 0.00005
-
-  qwen3-14b:
-    model:
-      model_id: "unsloth/Qwen3-14B-bnb-4bit"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 32
-      lora_alpha: 32
-      lora_dropout: 0.05
-      # Chat template + response-masking markers (ChatML for Qwen). These must
-      # stay consistent with each other; train.py and merge_datasets.py read them
-      # so the profile is no longer silently formatted with the gemma-4 template.
-      chat_template: "qwen-2.5"
-      instruction_part: "<|im_start|>user\n"
-      response_part: "<|im_start|>assistant\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_qwen3_14b"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.0001
-
-  gemma4-e4b:
-    model:
-      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-      max_seq_length: 2048
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_heretic_pew"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-
-  # WhatsApp-only variant: same heretic base + seq4096 recipe, retrained on the
-  # purged (Instagram-free) dataset. Promote to active_model_profile after
-  # G1/G2/G3 gates pass. Rollback: set active_model_profile back to
-  # "gemma4-e4b-seq4096" (previous adapter dir untouched).
-  gemma4-e4b-seq4096-wpp:
-    model:
-      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_heretic_seq4096_wpp"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-      max_steps: 450
-
-  # Production variant: same heretic base, trained at 4096 with long-context data.
-  # Promoted to active_model_profile after passing G1/G2/G3 gates (2026-07-18).
-  # Rollback: set active_model_profile back to "gemma4-e4b" (pew profile still intact).
-  gemma4-e4b-seq4096:
-    model:
-      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_heretic_seq4096"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-      max_steps: 450
-
-  # ── Bigger-base candidates (scripts/model_bakeoff.py Phase 3) ────────────────
-  # Same Gemma-4 recipe as the profiles above — identical chat_template,
-  # instruction/response parts and target_modules — so train.py needs no changes:
-  # it is already the FastModel Gemma-4 path.
-  #
-  # These train on ONE card. Unsloth 2026.4.5's multi-GPU path is DDP (a full
-  # model copy per GPU, models/loader_utils.py prepare_device_map), so the second
-  # 3090 adds no training capacity; it only helps serving. Keep
-  # CUDA_VISIBLE_DEVICES=0 for training runs — with both cards visible, Unsloth
-  # skips its DistributedType.NO patch (models/_utils.py) and HF Trainer falls
-  # into DataParallel, which is slower and flaky with 4-bit models.
-  gemma4-31b-wpp:
-    model:
-      # 19.1GB of 4-bit weights on a 24GB card leaves ~5GB for activations,
-      # gradients and optimizer state. If this OOMs, apply the CLAUDE.md
-      # fallbacks in order: lora_r -> 8, then max_seq_length -> 2048.
-      model_id: "unsloth/gemma-4-31B-it-unsloth-bnb-4bit"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_31b_wpp"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-      max_steps: 450
-
-  # Quality leader of the one-card serving arms (golden 4.34 / knowledge 3.86 vs
-  # prod's 3.75 / 2.80, stock and un-fine-tuned). At ~7GB in 4-bit it is by far
-  # the most comfortable of these to train, which leaves headroom to raise lora_r
-  # or max_seq_length if the first run underfits. No pre-quantized 4-bit repo
-  # exists, so this points at the bf16 repo and relies on load_in_4bit.
-  gemma4-12b-wpp:
-    model:
-      model_id: "unsloth/gemma-4-12b-it"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_12b_wpp"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-      max_steps: 450
-
-  # MoE variant. There is no pre-quantized 4-bit repo for 26B-A4B — Unsloth
-  # deliberately maps MoE 4-bit repos back to the full-precision one and
-  # quantizes on the fly (see BAD_MAPPINGS in models/loader_utils.py), so this
-  # points at the bf16 repo and relies on load_in_4bit. ~4B active params means
-  # markedly lower activation memory than the dense 31B.
-  gemma4-26b-a4b-wpp:
-    model:
-      model_id: "unsloth/gemma-4-26B-A4B-it"
-      max_seq_length: 4096
-      load_in_4bit: true
-      lora_r: 16
-      lora_alpha: 32
-      lora_dropout: 0.0
-      chat_template: "gemma-4"
-      instruction_part: "<|turn>user\n"
-      response_part: "<|turn>model\n"
-      target_modules:
-        - "q_proj"
-        - "k_proj"
-        - "v_proj"
-        - "o_proj"
-        - "gate_proj"
-        - "up_proj"
-        - "down_proj"
-    training:
-      output_dir: "./models/kaya_gemma4_26b_a4b_wpp"
-      per_device_train_batch_size: 1
-      gradient_accumulation_steps: 8
-      learning_rate: 0.00005
-      max_steps: 450
 
 # ── Time zone ─────────────────────────────────────────────────────────────────
 # Kaya's time zone (recaps, polls). The PC's power schedule (wake, nightly shutdown) is the
