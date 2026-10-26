@@ -199,7 +199,7 @@ def run_rag_components():
     print("=" * 60)
     print("\nNext steps:")
     print("  1. Run: python src/data/build_vector_db.py (to build full database)")
-    print("  2. Run: python src/chat/chat.py (to test chat with RAG)")
+    print("  2. Run: python src/chat/web_app.py (to test chat with RAG)")
     print("  3. Test in Docker: docker-compose up --build")
 
     return True

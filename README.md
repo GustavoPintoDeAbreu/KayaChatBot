@@ -8,8 +8,8 @@ the question calls for it and deliberately skipped when it does not.
 llama.cpp with a 32K context window (RAG budget 14,000 tokens). An August 2026
 bake-off across 14 serving configurations found the stock 12B beat the previously
 fine-tuned Gemma 4 E4B on every judged dimension, and that the WhatsApp LoRA added
-nothing on an identical base — so the adapter was retired from the live path. The
-fine-tuning pipeline remains fully intact for re-evaluation.
+nothing on an identical base — so the adapter was retired from the live path, and on
+2026-10-26 the fine-tuning pipeline was removed from the repo (it is in git history).
 
 The box has **2× RTX 3090 (24 GB each, no NVLink)**: prod owns one card, and the
 other stays free for dev, training and other projects. They are two independent
@@ -35,8 +35,6 @@ KayaChatBot is the AI memory of the Kaya group. It is **not** a group member —
 - **Tells you when it is wrong**: `/bug` and `/feedback` on WhatsApp (plus a web form) collect reports into the Feedback dashboard — and are deliberately never stored as group memory
 - **Automated knowledge generation**: A local on-prem teacher model (Qwen3.5-27B, 4-bit) extracts biographical facts from chat history — no data leaves the machine
 - **Benchmarking toggle**: Switch between `both` / `json_only` / `chromadb_only` / `none` knowledge approaches
-- Fine-tunes a chosen model profile using LoRA with 4-bit quantization (not used by the live model)
-- Efficient training on consumer GPUs (RTX 3090 24 GB; ~11 GB VRAM for gemma4-e4b, ~15 GB for qwen3-14b)
 
 ## 🤖 RAG & Knowledge System
 
@@ -211,20 +209,13 @@ KayaChatBot/
 │   │   ├── extract_all_messages.py   # WhatsApp export parser
 │   │   ├── generate_synthetic_data.py # LLM synthetic conversation generation
 │   │   ├── generate_knowledge_base.py # Biographical fact extraction (local teacher)
-│   │   ├── generate_local_synthetic.py # On-prem synthetic training data (local teacher)
 │   │   ├── local_teacher.py          # Shared 4-bit local teacher model
 │   │   ├── build_vector_db.py        # Build ChromaDB collections
 │   │   ├── ingest.py                 # Incremental, watermarked ingest of live messages
 │   │   ├── message_log.py            # Append-only per-scope log of everything the bot sees
 │   │   ├── identity_resolver.py      # Display name → canonical member
-│   │   ├── prepare_portuguese_data.py
-│   │   ├── merge_datasets.py
-│   │   ├── format_direct_training.py
-│   │   └── readers.py
-│   ├── finetuning/                   # Model training
-│   │   └── train.py
+│   │   └── prepare_portuguese_data.py
 │   ├── chat/                         # Inference & interaction
-│   │   ├── chat.py                   # Interactive CLI chat loop (hf backend only, dev tool)
 │   │   ├── web_app.py                # Gradio web UI (suggestions, feedback, metrics)
 │   │   ├── whatsapp_server.py        # WhatsApp bridge (WAHA webhook server)
 │   │   ├── whatsapp_adapter.py       # Event parsing, mention/whitelist gating, speaker identity
@@ -247,8 +238,7 @@ KayaChatBot/
 │   │   ├── vision.py                 # Describing inbound photos
 │   │   ├── web_search.py             # Grok web results, synthesized locally into the reply
 │   │   ├── suggestions.py            # The follow-up question chips in the web UI
-│   │   ├── inference_backend.py      # Pluggable backend: hf (in-process) | gguf (llama.cpp server)
-│   │   ├── inference.py
+│   │   ├── inference_backend.py      # HTTP backends: gguf (llama.cpp server) | ollama
 │   │   └── gpu_lock.py               # One generation at a time; summaries skip rather than queue
 │   ├── testing/                      # Benchmarks and the multi-person conversation simulator
 │   │   ├── persona_sim.py            # Drives the real webhook with invented people
@@ -278,7 +268,7 @@ KayaChatBot/
 ### Prerequisites
 
 - Python 3.10+
-- CUDA-capable GPU with 16GB+ VRAM (for training; less for inference)
+- CUDA-capable GPU (the live setup uses one 24 GB card)
 - xAI API access *(optional)* — used only for the production web-search feature and the eval-time LLM judge; no group data is ever sent, except member-free web queries
 
 ### Installation
@@ -337,22 +327,10 @@ KayaChatBot/
    ```
    This builds two collections: `kaya_conversations` (chat history) and `kaya_knowledge_base` (curated facts).
 
-### Training
-
-```bash
-# Full pipeline: extract → format → merge → train (fully on-prem)
-kaya_chatbot_env/bin/python run_full_pipeline.py
-
-# Or train step by step:
-kaya_chatbot_env/bin/python src/data/format_direct_training.py
-kaya_chatbot_env/bin/python src/data/merge_datasets.py
-kaya_chatbot_env/bin/python src/finetuning/train.py
-```
-
 ### Chat with Your Bot
 
 ```bash
-kaya_chatbot_env/bin/python src/chat/chat.py
+docker compose --profile dev up -d kaya-dev   # dev web UI on :7861
 ```
 
 The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
@@ -380,37 +358,12 @@ The `knowledge_approach` in `config.yaml` controls what knowledge is injected:
 
 **Output (updated):** `data/group_members.json`, `data/group_knowledge.json`
 
-### 2. **Local Synthetic Data Generation** (`generate_local_synthetic.py`) *(manual, GPU)*
-- A local teacher model (Qwen3.5-27B, 4-bit) generates behavior-targeted Q&A grounded in local RAG context
-- Fully on-prem — no API calls, no data leaves the machine
-
-**Output:** `data/synthetic_local.jsonl`
-
-### 2b. **Direct Training Format** (`format_direct_training.py`)
-- Formats raw messages into training pairs without any API calls
-- Context blocks use `=== Conversas relevantes do grupo ===` markers (matches inference format)
-
-**Output:** `data/direct_training.jsonl`
-
 ### 3. **Build Vector Database** (`build_vector_db.py`)
 - Builds `kaya_conversations` ChromaDB collection from message chunks
 - Builds `kaya_knowledge_base` ChromaDB collection from `group_knowledge.json`
 - Uses BAAI/bge-m3 embeddings
 
 **Output:** `data/rag_db/` (ChromaDB)
-
-### 4. **Dataset Merging** (`merge_datasets.py`)
-- Combines datasets and applies the active profile's chat template (gemma-4 or ChatML)
-- 90/10 train/val split (`data.train_test_split`)
-
-**Output:** `data/train_synthetic.jsonl`, `data/val_synthetic.jsonl`
-
-### 5. **Fine-Tuning** (`train.py`)
-- Loads the active profile's model with 4-bit quantization (Unsloth)
-- LoRA adapters per profile (gemma4: r=16/alpha=32; qwen3: r=32/alpha=32)
-- Steps/LR set by the active profile in `config.yaml`
-
-**Output:** the profile's `training.output_dir` (currently `models/kaya_gemma4_heretic_seq4096/`)
 
 ## ⚙️ Configuration
 
@@ -420,7 +373,7 @@ All settings live in [config.yaml](config.yaml). Key sections:
 
 ```yaml
 pipeline:
-  generate_knowledge: false  # true = run knowledge extraction on the local teacher (before training)
+  generate_knowledge: false  # true = run knowledge extraction on the local teacher
 ```
 
 ### Knowledge Approach (Benchmarking)
@@ -434,13 +387,6 @@ rag:
   # "none"          — Baseline (conversation history only)
 ```
 
-### Test Mode
-
-```yaml
-test_mode:
-  enabled: true   # Fast validation run (few steps, small data)
-```
-
 ### Model & Training
 
 Model and training settings come from the **active model profile** (`active_model_profile` in `config.yaml`, currently `gemma4-12b-stock`), deep-merged over the top-level `model:`/`training:` sections by `src/config_loader.py`. The live profile has **no adapter** — it is a stock model served from a GGUF:
@@ -449,29 +395,12 @@ Model and training settings come from the **active model profile** (`active_mode
 active_model_profile: "gemma4-12b-stock"
 ```
 
-A training profile, by contrast, names an output directory for its LoRA adapter:
-
-```yaml
-model_profiles:
-  gemma4-e4b-seq4096:
-    model:
-      model_id: "unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-      max_seq_length: 4096
-      lora_r: 16
-      lora_alpha: 32
-    training:
-      output_dir: "./models/kaya_gemma4_heretic_seq4096"
-      learning_rate: 0.00005
-      max_steps: 450
-```
-
 ### Inference Backend
 
 ```yaml
 inference:
-  backend: "gguf"   # llama.cpp server (default, ~15× faster, and the only backend
-                    # that works with the adapter-free live profile)
-  #        "hf"     # Unsloth FastModel in-process — needs a profile with an adapter
+  backend: "gguf"   # llama.cpp server; prod sets KAYA_INFERENCE_BACKEND=ollama
+                    # (Ollama behind the GPU broker). There is no in-process backend.
 ```
 
 `KAYA_INFERENCE_BACKEND` overrides this; `KAYA_LLAMA_URL` overrides the server address.
@@ -523,19 +452,6 @@ Processes 3 message chunks and shows extracted bios without running the full set
 ```bash
 # After building the vector DB:
 kaya_chatbot_env/bin/python src/data/build_vector_db.py
-# Then start chat:
-kaya_chatbot_env/bin/python src/chat/chat.py
-```
-
-### Run Test Pipeline
-```bash
-# Set test_mode.enabled: true in config.yaml first
-kaya_chatbot_env/bin/python run_full_pipeline.py
-```
-
-### Validate Pipeline Outputs
-```bash
-kaya_chatbot_env/bin/python scripts/validate_pipeline.py
 ```
 
 ### Run the Test Suite
@@ -586,11 +502,6 @@ and the run exits non-zero on a failed assertion, so it can gate a deploy.
 - Set `knowledge_approach: "both"` for both sources at once (live config uses `json_only`, which scored best)
 - Set `knowledge_approach: "none"` to measure baseline performance without any knowledge injection
 
-### Training
-- Monitor GPU with `nvidia-smi`
-- Reduce `per_device_train_batch_size` if OOM errors occur
-- Training loss should decrease steadily
-
 ### Inference
 - On the `gguf` backend the app process holds only the tokenizer and the retriever (~2 GB); the weights live in the `llama` container
 - Typical latencies: banter ~5 s, a question that searches memory 7–13 s, describing a photo ~4 s
@@ -613,7 +524,7 @@ Docker configuration is available (`Dockerfile`, `docker-compose.yml`) with prof
 
 ```bash
 docker compose --profile prod up -d kaya-prod      # prod web app (scripts/deploy_prod.sh wraps this)
-docker-compose up --build                          # the data → training pipeline, NOT the web app
+docker-compose up --build                          # the data pipeline, NOT the web app
 docker compose --profile dev up -d kaya-dev        # dev UI on :7861
 docker compose --profile test run --rm kaya-test   # test suite in-container
 docker compose --profile sim up -d kaya-sim        # conversation simulator target
@@ -636,55 +547,10 @@ Run one environment at a time — a served model may claim both GPUs.
 export PYTHONPATH="${PYTHONPATH}:/path/to/KayaChatBot"
 ```
 
-### CUDA Out of Memory
-- Reduce `per_device_train_batch_size` in config.yaml
-- Reduce `max_seq_length` (but this affects context)
-- Use gradient checkpointing (already enabled)
-
 ### Model Not Loading
 - Ensure models are downloaded to `kaya_chatbot_env/`
 - Check disk space (models are ~5GB each)
 - Verify HuggingFace access token if using gated models
-
-## 📈 Expected Results
-
-With ~20K messages and 2000+ synthetic conversations:
-- Training converges in ~3 epochs
-- Model learns facts, events, and relationships from shared conversation history
-- Responses feel grounded in real group memories
-- Communicates naturally in European Portuguese and English
-
-## ⚠️ Things to Be Aware Of
-
-### PEFT `float8_e8m0fnu` Patch
-Current PEFT (0.19.0) has a bug where it checks for `torch.float8_e8m0fnu` dtype which doesn't exist in PyTorch 2.6. Two files in the venv are manually patched with `hasattr` guards:
-- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/tuners_utils.py`
-- `kaya_chatbot_env/lib/python3.12/site-packages/peft/tuners/lora/layer.py`
-
-**If you reinstall or upgrade PEFT, these patches need to be reapplied.** The patch wraps `torch.float8_e8m0fnu` references in `hasattr(torch, "float8_e8m0fnu")` checks.
-
-### Training Memory (OOM)
-The training script (`src/finetuning/train.py`) uses a flat code path — it calls `SFTTrainer` directly without a wrapper class. This was done because a previous `KayaTrainer` wrapper caused unexplained memory spikes (1.4 GB → 20+ GB RSS) during `SFTTrainer.__init__`. Key settings that prevent OOM:
-- `skip_memory_metrics=True` — avoids the HF `TrainerMemoryTracker` busy-loop
-- `dataset_num_proc=1` — prevents fork-based memory duplication
-- `dataloader_pin_memory=False` and `dataloader_num_workers=0` — reduces memory overhead
-- Do **not** set `builtins.psutil` or run background memory monitor threads during training
-
-### Gemma 4 Specifics
-- Uses `FastModel` (not `FastLanguageModel`) with Unsloth ≥2026.4.5
-- Chat template: `get_chat_template(tokenizer, "gemma-4")` — produces `<|turn>user\n...<turn|>\n` format
-- Thinking mode (`<|think|>`) must be **disabled** during SFT training
-- `autocast_adapter_dtype=False` is required for PEFT compatibility
-- **Model class**: `Gemma4ForConditionalGeneration` — NOT registered with `AutoModelForCausalLM`. Inference code must use `Gemma4ForConditionalGeneration.from_pretrained()` or Unsloth's `FastModel` instead.
-- **Processor vs tokenizer**: Unsloth returns a `Gemma4Processor` (not a plain tokenizer). When tokenizing text, always pass `text=` as a keyword argument: `tokenizer(text=input_text, ...)`. Positional args are interpreted as `images` and will crash.
-
-### Training Checkpoints
-After training, only the best-eval-loss checkpoint is kept (e.g., `checkpoint-1200`). The final adapter is saved at the output directory root. If you need to roll back, load from the checkpoint subdirectory.
-
-### Package Version Pins
-- `trl<=0.24.0` — newer versions have breaking API changes with `SFTConfig`
-- `unsloth>=2026.4.5` — required for Gemma 4 support via `FastModel`
-- `transformers>=5.5.0` — needed for `Gemma4ForConditionalGeneration`
 
 ## 🤝 Contributing
 
@@ -696,7 +562,6 @@ Private project - All rights reserved.
 
 ## 🙏 Acknowledgments
 
-- [Unsloth](https://github.com/unslothai/unsloth) for efficient LLM fine-tuning
 - [HuggingFace](https://huggingface.co/) for model hosting and transformers
 
 ---

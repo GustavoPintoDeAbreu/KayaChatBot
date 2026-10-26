@@ -5,15 +5,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Image version label
 LABEL version="2.0.0" \
-      description="KayaChatBot — fine-tuning + RAG pipeline" \
+      description="KayaChatBot — RAG serving + data pipeline" \
       maintainer="GustavoPintoDeAbreu"
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies + Python 3.12 via the deadsnakes PPA so the image
-# matches the local virtualenv (Python 3.12) and the documented PEFT patch paths
-# (kaya_chatbot_env/lib/python3.12/...).
+# matches the local virtualenv (Python 3.12).
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     ca-certificates \
@@ -42,37 +41,15 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
 
 # Install PyTorch with CUDA 12.4 wheels. Kept separate from requirements.txt
 # because torch must come from the CUDA-specific index, not PyPI.
-# torch 2.6.0 / cu124: matches the validated kaya_chatbot_env venv so the
-# Gemma 4 inference behaviour in the image is identical to local.
+# torch 2.6.0 / cu124: matches the kaya_chatbot_env venv.
 RUN python -m pip install --no-cache-dir \
     torch==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Install all remaining dependencies from requirements.txt — the single source
-# of truth, pinned to the validated venv versions (transformers 5.5.0, trl
-# 0.24.0, peft 0.19.0, unsloth 2026.4.5, xformers cu124).
+# Install all remaining dependencies from requirements.txt, the single source
+# of truth for everything except torch.
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
-
-# PEFT 0.19.0 calls getattr(torch, "float8_e8m0fnu") which raises on torch 2.6
-# (that dtype was added later). Mirror the venv patch: guard the lookup with
-# hasattr so missing float8 dtypes are skipped. See CLAUDE.md.
-RUN python - <<'PY'
-import peft.tuners.tuners_utils as m
-path = m.__file__
-src = open(path).read()
-needle = "    for name in UPCAST_DTYPES:\n        torch_dtype = getattr(torch, name)\n"
-guard = "    for name in UPCAST_DTYPES:\n        if not hasattr(torch, name):\n            continue\n        torch_dtype = getattr(torch, name)\n"
-if "if not hasattr(torch, name):" in src:
-    print("PEFT float8 guard already present")
-else:
-    assert needle in src, "PEFT patch anchor not found — peft version changed?"
-    open(path, "w").write(src.replace(needle, guard))
-    print("Applied PEFT float8 guard patch")
-PY
-
-# flash-attention is intentionally NOT installed: it is absent from the validated
-# venv and unsloth runs inference fine without it (falls back to SDPA / xformers).
 
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \

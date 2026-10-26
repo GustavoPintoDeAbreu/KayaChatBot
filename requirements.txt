@@ -2,29 +2,19 @@
 # KayaChatBot Python Dependencies — version-pinned for
 # reproducible Docker builds and local development.
 #
-# Pinned against: torch==2.6.0, CUDA 12.4, unsloth==2026.4.5
-# (matches the validated kaya_chatbot_env venv — the app runs in Docker,
-#  fine-tuning runs in the venv.)
+# Pinned against: torch==2.6.0, CUDA 12.4 (installed by the Dockerfile
+# from the PyTorch index, not from this file).
 #
 # To upgrade: bump the version here AND in Dockerfile, then
 # rebuild the image with --no-cache to test compatibility.
 # ============================================================
 
-# --- Unsloth fine-tuning stack ---
-# unsloth 2026.4.5: Gemma 4 E4B fixes (use_cache, grad accum); trl capped at <=0.24.0
-# Versions match the validated venv (torch 2.6.0 / cu124).
-unsloth==2026.4.5
-unsloth-zoo==2026.4.7    # min required by unsloth 2026.4.5
-# xformers prebuilt for torch 2.6.0 / cu124 (matches the venv); from the PyTorch index.
-xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-manylinux_2_28_x86_64.whl
-torchao==0.16.0          # version validated in the venv with torch 2.6.0
-
 # --- Transformers ecosystem ---
-# transformers 5.5.0: max allowed by unsloth 2026.4.5 (<=5.5.0)
-# trl 0.24.0: max allowed by unsloth 2026.4.5 (<=0.24.0); has SFTConfig
+# transformers: only the tokenizer that applies Gemma 4's chat template
+# (engine._load_model); the weights are served by Ollama / llama.cpp.
+# accelerate + bitsandbytes: the local teacher (src/data/local_teacher.py) loads
+# its model in 4-bit with device_map="cuda" for knowledge extraction.
 transformers==5.5.0
-trl==0.24.0
-peft==0.19.0
 accelerate==1.13.0
 bitsandbytes==0.49.2
 datasets==3.6.0
@@ -33,7 +23,7 @@ pyarrow==25.0.1
 
 # --- RAG / vector database ---
 chromadb==1.5.5
-sentence-transformers==5.3.0
+sentence-transformers==5.6.0  # PYSEC-2026-4164, CVE-2026-68770 fixed in 5.6.0
 
 # --- Data science ---
 numpy==1.26.4
@@ -52,7 +42,8 @@ openai==1.109.1
 xai-sdk==1.9.1  # >=1.7 needed for xai_sdk.tools.web_search (web-search Agent Tool)
 
 # --- Web UI ---
-gradio==6.15.1
+# 6.15.1 capped pillow below 13.0 (CVE-2026-112393), so gradio moves with it.
+gradio>6.15.1
 brotli==1.2.1  # gradio dep (brotli>=1.1.0); GHSA-9v8h-qqgm-4m35 fixed in 1.2.1
 
 # --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
@@ -61,6 +52,12 @@ brotli==1.2.1  # gradio dep (brotli>=1.1.0); GHSA-9v8h-qqgm-4m35 fixed in 1.2.1
 fastapi==0.136.3
 uvicorn==0.42.0
 httpx==0.28.1
+
+# --- Security floors (nightly lab-audit, 2026-10-26) ---
+# Transitive dependencies, named here so a rebuild cannot resolve below the fix.
+anyio>=4.14.2  # CVE-2026-63374 (fastapi, starlette, httpx, gradio, openai)
+certifi>=2026.10.19  # GHSA-6q48-6c7w-9gw2 (httpx, requests, trafilatura)
+pillow>=13.0.0  # CVE-2026-112393 (vision.py, stickers.py, gradio)
 
 # --- Documents ---
 # PDF text extraction for documents shared in the chat (src/chat/documents.py).
@@ -72,7 +69,7 @@ pypdf==6.17.0
 trafilatura==2.2.0
 
 # --- Utilities ---
-psutil==7.2.2           # train.py memory reporting
+psutil==7.2.2
 tqdm==4.67.1
 python-dotenv==1.0.1
 colorama==0.4.6

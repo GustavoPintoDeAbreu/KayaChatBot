@@ -1,9 +1,7 @@
 """Pure filters for locally-generated synthetic answers.
 
-Quality gate for the on-prem teacher's output before it becomes a training
-target. No model/network deps so it is fully unit-testable. Shared emoji regex is
-the single source of truth (readers.py imports it) so the train-time scrub and
-the generation-time scrub can't drift.
+Quality gate for the on-prem teacher's output. No model/network deps so it is
+fully unit-testable.
 """
 
 import re

@@ -1,18 +1,18 @@
-"""Pluggable generation backend: in-process HF model vs a llama.cpp server.
+"""Generation backends: a llama.cpp server or Ollama, both over HTTP.
 
 Every generation site (``engine.generate_reply``, the web UI stream,
-``suggestions``, the CLI) builds a ``messages`` list and asks a backend to turn it
-into text. Two backends implement the same interface:
+``suggestions``) builds a ``messages`` list and asks a backend to turn it into
+text. Two backends implement the same interface:
 
-- ``HFBackend`` — the current path: Unsloth ``FastModel`` / PEFT model running
-  in-process on the GPU. Behaviour is byte-for-byte the previous code.
 - ``LlamaCppBackend`` — sends the chat-templated prompt to a llama.cpp
-  ``llama-server`` over HTTP. ~15x faster generation at Q6_K parity quality; the
-  heavy model lives in the server (a separate process/container), so this process
-  only needs the tokenizer (for templating) and the RAG retriever.
+  ``llama-server`` (``/completion``).
+- ``OllamaBackend`` — sends the same prompt to Ollama's ``/api/generate`` in raw
+  mode; the serving path since 2026-09-25.
 
-Selected by ``inference.backend`` in ``config.yaml`` (default ``hf``), so turning
-the migration on is a one-line config flip and ``hf`` stays the current path.
+The weights live in the server; this process only needs the tokenizer (for
+templating) and the RAG retriever. Selected by ``KAYA_INFERENCE_BACKEND`` or
+``inference.backend`` (default ``gguf``). The in-process ``hf`` backend was
+removed with fine-tuning on 2026-10-26.
 """
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from threading import Thread
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
@@ -39,17 +38,15 @@ _UA = {"User-Agent": os.environ.get("KAYA_USER_AGENT", "kaya")}
 # starts the named model on first request (see ~/llm-broker/README.md).
 _BROKER_UPSTREAM = re.compile(r"^(?P<base>.+)/upstream/(?P<model>[^/]+)/?$")
 
+BACKENDS = ("gguf", "ollama")
+
 
 def resolve_backend(config: Dict[str, Any]) -> str:
-    """The active backend: ``KAYA_INFERENCE_BACKEND`` env wins, else config, else hf.
-
-    The env override lets prod run ``gguf`` (set in the compose service) while the
-    committed config default stays ``hf`` for local dev.
-    """
+    """The active backend: ``KAYA_INFERENCE_BACKEND`` env wins, else config, else gguf."""
     return (
         os.environ.get("KAYA_INFERENCE_BACKEND")
         or config.get("inference", {}).get("backend")
-        or "hf"
+        or "gguf"
     ).lower()
 
 
@@ -241,50 +238,6 @@ class InferenceBackend(ABC):
         ...
 
 
-class HFBackend(InferenceBackend):
-    """In-process HF/Unsloth model (current behaviour). GPU-resident."""
-
-    def __init__(self, model, tokenizer, device: str = "cuda"):
-        self.model = model
-        self.tokenizer = tokenizer
-        self.device = device
-
-    def _gen_kwargs(self, max_new_tokens: int, sampling: Dict[str, Any]) -> Dict[str, Any]:
-        temperature = sampling.get("temperature", 1.0)
-        return dict(
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=temperature > 0,
-            top_p=sampling.get("top_p", 0.95),
-            top_k=sampling.get("top_k", 64),
-            repetition_penalty=sampling.get("repetition_penalty", 1.0),
-            no_repeat_ngram_size=sampling.get("no_repeat_ngram_size", 0),
-            use_cache=True,
-        )
-
-    def _inputs(self, messages):
-        prompt = _templated_prompt(self.tokenizer, messages)
-        return self.tokenizer(text=[prompt], return_tensors="pt").to(self.device)
-
-    def generate(self, messages, *, max_new_tokens, sampling):
-        inputs = self._inputs(messages)
-        outputs = self.model.generate(**inputs, **self._gen_kwargs(max_new_tokens, sampling))
-        generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-        return self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-    def generate_stream(self, messages, *, max_new_tokens, sampling):
-        from transformers import TextIteratorStreamer
-
-        inputs = self._inputs(messages)
-        streamer = TextIteratorStreamer(
-            self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=60.0
-        )
-        gen_kwargs = dict(**inputs, streamer=streamer, **self._gen_kwargs(max_new_tokens, sampling))
-        Thread(target=self.model.generate, kwargs=gen_kwargs, daemon=True).start()
-        for token in streamer:
-            yield token
-
-
 class LlamaCppBackend(InferenceBackend):
     """Generation via a llama.cpp ``llama-server`` HTTP endpoint."""
 
@@ -429,7 +382,7 @@ class OllamaBackend(InferenceBackend):
 
 
 def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
-    """Pick the backend (``KAYA_INFERENCE_BACKEND`` env or ``inference.backend``)."""
+    """Pick the backend (``KAYA_INFERENCE_BACKEND`` env or ``inference.backend``); unknown values raise."""
     backend = resolve_backend(config)
     if backend == "gguf":
         gcfg = config.get("inference", {}).get("gguf", {})
@@ -443,5 +396,5 @@ def build_backend(config: Dict[str, Any], model, tokenizer) -> InferenceBackend:
         return OllamaBackend(tokenizer, url, name, timeout=ocfg.get("timeout", 180.0),
                              num_ctx=int(ocfg.get("num_ctx", 32768)),
                              keep_alive=str(ocfg.get("keep_alive", "-1")))
-    print("✓ Inference backend: hf (in-process model)")
-    return HFBackend(model, tokenizer)
+    raise ValueError(f"Unknown inference backend {backend!r}: expected one of {BACKENDS} "
+                     "(the in-process 'hf' backend was removed)")

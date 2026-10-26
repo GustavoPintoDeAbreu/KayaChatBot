@@ -14,15 +14,11 @@ reports/benchmarks/.
     kaya_chatbot_env/bin/python scripts/bench_context_recall.py
     kaya_chatbot_env/bin/python scripts/bench_context_recall.py --seq-lengths 2048 4096
 
-Two backends, same needles and same scoring:
-
-- ``hf``   — loads the adapter in-process with Unsloth at each max_seq_length.
-             Gemma-4 only, and capped by what fits in one 24GB card.
-- ``gguf`` — sends the prompt to a llama.cpp server via the production
-             ``LlamaCppBackend``, so the measurement reflects exactly what prod
-             does (same chat template, same leading-BOS strip). This is the only
-             path that can measure a model too large for one GPU, or a stock base
-             with no adapter, so it is what scripts/model_bakeoff.py drives:
+Generation goes to a llama.cpp server via the production ``LlamaCppBackend``
+(or to Ollama via ``OllamaBackend``), so the measurement reflects exactly what
+prod does (same chat template, same leading-BOS strip). The in-process ``hf``
+path was removed with fine-tuning on 2026-10-26. scripts/model_bakeoff.py
+drives it like this:
 
     KAYA_INFERENCE_BACKEND=gguf KAYA_LLAMA_URL=http://127.0.0.1:8081 \
       kaya_chatbot_env/bin/python scripts/bench_context_recall.py \
@@ -100,44 +96,22 @@ def _gpu_vram_used_gb() -> float:
 
 
 def _load_model_at_seq(config, seq_len: int):
-    """Load model+tokenizer at a specific max_seq_length, bypassing the singleton.
+    """Load the tokenizer for one sweep step, bypassing the singleton.
 
-    Under the gguf backend the model lives in the llama.cpp server, so only a
-    tokenizer is needed here (for chat templating and for sizing the filler).
-    ``model`` is then None and generation goes over HTTP.
+    The model lives in the llama.cpp (or Ollama) server, so only a tokenizer is
+    needed here (for chat templating and for sizing the filler). ``model`` is
+    always None and generation goes over HTTP.
     """
-    import json as _json
-    from pathlib import Path as _Path
-
     _free_model()
     model_dir = config["training"]["output_dir"]
+    backend = resolve_backend(config)
+    if backend not in ("gguf", "ollama"):
+        raise RuntimeError(f"bench_context_recall needs KAYA_INFERENCE_BACKEND=gguf or ollama, not {backend!r}")
+    from transformers import AutoTokenizer
 
-    if resolve_backend(config) in ("gguf", "ollama"):
-        from transformers import AutoTokenizer
-
-        _log(f"  backend={resolve_backend(config)} — tokenizer only from {model_dir} "
-             f"(generation via {resolve_llama_url(config)})")
-        return None, AutoTokenizer.from_pretrained(model_dir)
-
-    adapter_cfg = _json.loads((_Path(model_dir) / "adapter_config.json").read_text())
-    base_name = adapter_cfg["base_model_name_or_path"]
-    is_gemma4 = "gemma-4" in base_name.lower() or "gemma4" in base_name.lower()
-
-    if not is_gemma4:
-        raise RuntimeError("bench_context_recall only supports the Gemma-4 path")
-
-    from unsloth import FastModel
-
-    _log(f"  loading model at max_seq_length={seq_len} …")
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=model_dir,
-        max_seq_length=seq_len,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    FastModel.for_inference(model)
-    _log(f"  ✓ loaded (max_seq_length={seq_len})")
-    return model, tokenizer
+    _log(f"  backend={backend} — tokenizer only from {model_dir} "
+         f"(generation via {resolve_llama_url(config)})")
+    return None, AutoTokenizer.from_pretrained(model_dir)
 
 
 def _tokenized_len(tokenizer, system_prompt: str, user_text: str) -> int:

@@ -1,7 +1,7 @@
 services:
   # ──────────────────────────────────────────────────────────────
   # Base service definition — shared by all profiles.
-  # Concrete services (train / infer / data) extend this via
+  # Concrete services (data / dev / prod / whatsapp) extend this via
   # Docker Compose's 'extends' directive so all GPU/volume/env
   # settings are inherited automatically.
   # ──────────────────────────────────────────────────────────────
@@ -41,19 +41,15 @@ services:
     # Environment variables for GPU and caching.
     #
     # Everything that is not prod runs on the DEV card (KAYA_GPU_DEV), so dev,
-    # training, CI and other projects never touch the live model's GPU. Addressed
+    # CI and other projects never touch the live model's GPU. Addressed
     # by UUID because nvidia-smi index order is not stable across reboots — the
     # same reason gpu-power-limit.service uses UUIDs. See .env.example.
     #
-    # CUDA_VISIBLE_DEVICES=0 IS LOAD-BEARING — do not "fix" it to 0,1.
-    # unsloth/models/_utils.py:1561 only installs its `DistributedType.NO` patch
-    # when torch.cuda.device_count() == 1. With two devices visible, that patch is
-    # skipped and HF Trainer silently falls into DataParallel: slower, and flaky
-    # with 4-bit quantized models. Unsloth's own multi-GPU path is DDP (a full
-    # model copy per card, see models/loader_utils.py:88 prepare_device_map), so
-    # exposing both cards buys no extra capacity for training anyway.
-    # Only the llama.cpp servers below get both cards, where layer-splitting a
-    # model larger than 24GB actually works.
+    # CUDA_VISIBLE_DEVICES=0 keeps every Python service on ONE card, even when
+    # NVIDIA_VISIBLE_DEVICES falls back to `all`. (It used to be load-bearing for
+    # Unsloth training, which fell into DataParallel with two cards visible;
+    # fine-tuning was removed on 2026-10-26.) Only the llama.cpp servers below get
+    # both cards, where layer-splitting a model larger than 24GB actually works.
     environment:
       - NVIDIA_VISIBLE_DEVICES=${KAYA_GPU_DEV:-all}
       - CUDA_VISIBLE_DEVICES=0
@@ -68,7 +64,7 @@ services:
 
   # ──────────────────────────────────────────────────────────────
   # kaya-chatbot  — default service (no profile required).
-  # Runs the full pipeline (data → training → vector DB).
+  # Runs the data pipeline (extract → optional knowledge extraction).
   # Usage: docker-compose up kaya-chatbot
   #        docker-compose run --rm kaya-chatbot python <script>
   # ──────────────────────────────────────────────────────────────
@@ -77,31 +73,6 @@ services:
       service: kaya-base
     container_name: kaya-chatbot
     command: python run_full_pipeline.py
-
-  # ──────────────────────────────────────────────────────────────
-  # kaya-train  [profile: train]
-  # Runs only the fine-tuning step against the pre-built dataset.
-  # Usage: docker-compose --profile train up kaya-train
-  #        docker-compose --profile train run --rm kaya-train
-  # ──────────────────────────────────────────────────────────────
-  kaya-train:
-    extends:
-      service: kaya-base
-    container_name: kaya-train
-    profiles: [train]
-    command: python src/finetuning/train.py
-
-  # ──────────────────────────────────────────────────────────────
-  # kaya-infer  [profile: infer]
-  # Launches the interactive chat interface with RAG enabled.
-  # Usage: docker-compose --profile infer run --rm kaya-infer
-  # ──────────────────────────────────────────────────────────────
-  kaya-infer:
-    extends:
-      service: kaya-base
-    container_name: kaya-infer
-    profiles: [infer]
-    command: python src/chat/chat.py
 
   # ──────────────────────────────────────────────────────────────
   # kaya-data  [profile: data]
@@ -233,8 +204,7 @@ services:
   # llama.cpp GGUF inference server — the fast backend. When
   # inference.backend=gguf, the app process holds only the tokenizer + RAG
   # retriever and sends generation here (reachable as http://llama:8080 on the
-  # compose network). Serves the merged fine-tuned model at Q6_K (~15x faster
-  # than the in-process bnb-4bit model, at parity quality). Bring up alongside
+  # compose network). Serves the stock gemma-4-12b-it at Q6_K. Bring up alongside
   # prod: `docker compose --profile prod --profile gguf up -d` (set backend=gguf).
   # ──────────────────────────────────────────────────────────────
   llama:

@@ -1,9 +1,8 @@
 """On-prem teacher model shared by local generation pipelines.
 
 ``TeacherModel`` loads a local instruct model in 4-bit and generates answers —
-no group data leaves the box. It is used by generate_local_synthetic.py
-(synthetic training data) and generate_knowledge_base.py (biographical fact
-extraction, via ``LocalTeacherProvider``).
+no group data leaves the box. It is used by generate_knowledge_base.py
+(biographical fact extraction, via ``LocalTeacherProvider``).
 
 The heavy import/load happens in ``__init__`` only, so callers can inject a
 stub in tests without any model download or GPU.
