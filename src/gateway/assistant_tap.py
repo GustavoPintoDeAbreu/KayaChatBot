@@ -6,7 +6,7 @@ model on the PC works out whether it is a question for the lab, a change to one 
 apps, an idea for the idea pipeline, or something for Kaya. It runs over Kaya's WhatsApp
 session, because that session is the only one the lab has and must stay the only one.
 
-It runs after the idea and homelab taps, so ``/idea``, ``/homelab*``, sudo answers and
+It runs after the idea, homelab and help taps, so ``/idea``, ``/homelab*``, ``/help``, sudo answers and
 quoted 💡 replies are unchanged. It claims, in the owner's DMs only:
 
 - voice notes (any audio), downloaded here because WAHA deletes media;

@@ -35,6 +35,11 @@ They are switched on during the cutover and never run in two places at once.
      assistant decides is Kaya's comes back as text through `POST /assistant/handback`
      (relay token) and is journaled from here on like any owner DM. Its own `🤖`
      echoes are dropped. If its inbox is down, the message stays Kaya's.
+   - **`/help` is answered on the Pi, not handed anywhere** (`src/gateway/help_tap.py`,
+     on when `HELP_OWNER_NUMBERS` or `IDEA_OWNER_NUMBERS` is set): the owner's DM
+     gets a fixed command list, so it works while the PC is off. The Help-page link
+     is appended when `GATEWAY_HELP_URL` is set in the Pi's `.env`. The reply's own
+     echo is dropped like the other taps'. It is never journaled or sent to the PC.
 2. The gateway journals it. The UNIQUE key is event type plus message id, which
    also absorbs WAHA's habit of delivering every event twice.
 3. It downloads any media, and decides whether the message is **addressed** to

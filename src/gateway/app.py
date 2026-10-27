@@ -51,6 +51,7 @@ from src.gateway.birthdays import BirthdayGreeter
 from src.gateway.homelab import HomelabPower
 from src.gateway.assistant_tap import ASLEEP_TEXT, AssistantTap, handback_event
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
+from src.gateway.help_tap import HELP_TAG, HelpTap
 from src.chat.poll_votes import (POLL_VOTE_EVENTS, POLL_VOTE_FAILED_EVENTS,
                                  parse_waha_poll_vote)
 from src.gateway.journal import Journal
@@ -146,6 +147,7 @@ class Gateway:
                  idea_tap: Optional[IdeaTap] = None,
                  homelab: Optional[HomelabPower] = None,
                  assistant_tap: Optional[AssistantTap] = None,
+                 help_tap: Optional[HelpTap] = None,
                  send_mentions: Optional[Callable[[str, str, list], Any]] = None,
                  fetch_birthdays: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                  now: Callable[[], float] = time.time) -> None:
@@ -153,6 +155,7 @@ class Gateway:
         self.idea_tap = idea_tap
         self.homelab = homelab
         self.assistant_tap = assistant_tap
+        self.help_tap = help_tap
         self._now = now
         with open(settings.config_path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
@@ -248,7 +251,7 @@ class Gateway:
     async def handle_webhook(self, event: Dict[str, Any], *, taps: bool = True) -> Dict[str, Any]:
         """Journal one WAHA event, fetch its media, maybe reply offline, wake the forwarder.
 
-        ``taps=False`` (a message the assistant handed back) skips the idea, homelab and
+        ``taps=False`` (a message the assistant handed back) skips the idea, homelab, help and
         assistant taps: it is Kaya's by then."""
         event_type = event.get("event")
         if event_type not in _EVENT_TYPES:
@@ -278,7 +281,7 @@ class Gateway:
                 return {"ignored": "unparseable"}
             if taps:
                 routed = (await self._route_idea(msg) or await self._route_homelab(msg)
-                          or await self._route_assistant(msg, event))
+                          or await self._route_help(msg) or await self._route_assistant(msg, event))
                 if routed is not None:
                     return routed
             chat_id, sender_id, wa_ts = msg.chat_id, msg.sender_id, msg.timestamp
@@ -360,6 +363,17 @@ class Gateway:
         if kind is None:
             return None
         return await self.homelab.handle(msg, kind)
+
+    async def _route_help(self, msg: InboundMessage) -> Optional[Dict[str, Any]]:
+        """The owner's /help: a fixed command list answered by the Pi (no PC needed)."""
+        kind = self.help_tap.classify(msg) if self.help_tap else None
+        if kind is None:
+            return None
+        if kind == "echo":
+            return {"help": "echo"}
+        await asyncio.to_thread(self._send_text, msg.chat_id,
+                                f"{HELP_TAG} {self.help_tap.reply_text()}", msg.message_id)
+        return {"help": "sent"}
 
     def status(self) -> Dict[str, Any]:
         """PC state, the schedule, and the journal's size."""
@@ -558,7 +572,8 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(Gateway(GatewaySettings.from_env(), idea_tap=IdeaTap.from_env(os.environ),
                         homelab=HomelabPower.from_env(os.environ),
-                        assistant_tap=AssistantTap.from_env(os.environ)).serve())
+                        assistant_tap=AssistantTap.from_env(os.environ),
+                        help_tap=HelpTap.from_env(os.environ)).serve())
 
 
 if __name__ == "__main__":
