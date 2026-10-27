@@ -41,13 +41,15 @@ SHOWN = ("kaya", "lab-assistant", "idea-pipeline", "lab-medic", "labwatch", "lab
          "redditcast", "series-watch", "flight-deals", "price-scout", "game-alerts", "subs")
 HIDDEN = ("lab-audit", "lab audit", "lab-infra", "house-hunt", "house hunt", "daily-git",
           "daily git", "photoshop", "comfyui")
-INFRA_TERMS = ("gemma", "qwen", "ollama", "llama", "whisper", "piper", "kokoro", "bge-m3",
-               "chromadb", "gradio", "fastapi", "uvicorn", "sqlite", "docker", "waha", "noweb",
-               "searxng", "broker", "grok", "xai", "azure", "openai", "cloudflare", "tunnel",
+# Model and framework names (Gemma, Qwen, FastAPI, SQLite...) may be named since 2026-10-27
+# (Gustavo: the detail cards are for talking shop); hardware, addresses, versions, model
+# sizes and the lab's internal services still may not.
+INFRA_TERMS = ("gradio", "waha", "noweb",
+               "broker", "grok", "xai", "azure", "openai", "cloudflare", "tunnel",
                "tailscale", "raspberry", "pi5", "rtx", "3090", "nvidia", "ryzen", "gpu",
                "localhost", ".local", "wake-on-lan", "shutdown", "firewall", "trivy", "gitleaks",
                "osv-scanner", "lynis", "rkhunter", "chkrootkit", "rustdesk", "ssh", "sudo",
-               "proxy", "serpapi", "evomi", "tmdb", "mcp", "/idea", "/homelab", "/status",
+               "proxy", "serpapi", "evomi", "tmdb", "/idea", "/homelab", "/status",
                "/app", "07:00", "kaya-prod", "sigmakayachat")
 INFRA_PATTERNS = (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", r"\b\d+\.\d+\.\d+\b", r"\bv\d+(?:\.\d+)+\b",
                   r"\b\d{1,3}[bB]\b", r"\+\d{6,}", r"\b\d{9,}\b", r"[\w.+-]+@[\w-]+\.\w+",
@@ -299,3 +301,39 @@ def test_scripts_parse():
     for name in SCRIPTS:
         result = subprocess.run([node, "--check", str(ASSETS / name)], capture_output=True)
         assert result.returncode == 0, (name, result.stderr.decode())
+
+
+def test_four_colour_schemes_with_a_switch(landing):
+    css = _css(landing)
+    for n in "1234":
+        assert f'data-set="scheme" data-value="{n}"' in landing
+    assert 'data-value="1" aria-pressed="true"' in landing
+    for n in "234":
+        assert f':root[data-scheme="{n}"]{{' in css
+    assert "kaya:scheme" in landing and "kaya:scheme" in _script("scene.js")
+
+
+def test_every_project_has_details_in_both_languages(landing):
+    for project in SHOWN:
+        assert landing.count(f'data-detail="{project}"') == 2, project
+    for label in ("How it works", "Built with", "Como funciona", "Feito com"):
+        assert landing.count(label) == len(SHOWN), label
+
+
+def test_how_it_fits_names_the_orchestrator_and_the_products(landing):
+    assert landing.count('class="outcome outcome-product"') == 2
+    assert "the orchestrator" in landing and "o orquestrador" in landing
+
+
+def test_group_titles(landing):
+    for title in ("Interactive agents", "Builder agents", "Scout agents", "Side projects",
+                  "Agentes interativos", "Agentes construtores", "Agentes batedores", "Projetos paralelos"):
+        assert f'<p class="group-title">{title}</p>' in landing, title
+
+
+def test_the_wordmark_is_drawn_per_language(landing):
+    # gradient ids are per copy, so the hidden language never steals the visible one's
+    for lang in ("en", "pt"):
+        for name in ("kg", "wg", "glow"):
+            assert landing.count(f'id="{name}-{lang}"') == 1
+
