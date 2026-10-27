@@ -111,8 +111,11 @@
 
   // The stage sits beside the name on wide screens (and above it on phones), so the
   // pointer is taken relative to the stage's own box, left and top.
+  // Only a cursor over the graph steers it; anywhere else it drifts on its own (until
+  // 2026-10-27 the far left of the page, way outside the graph, turned it the most).
   function aim(time, box) {
-    if (time - pointer.seen < 2500) return { x: pointer.x - box.left, y: pointer.y - box.top };
+    var over = pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom;
+    if (over && time - pointer.seen < 2500) return { x: pointer.x - box.left, y: pointer.y - box.top };
     return { x: width * (0.5 + 0.3 * Math.cos(time * 0.00035)),
              y: height * (0.5 + 0.22 * Math.sin(time * 0.0005)) };
   }
@@ -196,8 +199,10 @@
     var progress = Math.min(Math.max(window.scrollY / Math.max(height, 1), 0), 1);
     if (progress >= 1) return;
     var target = aim(time, stage.getBoundingClientRect());
-    tilt.x += ((target.x / Math.max(width, 1) - 0.5) * 0.5 - tilt.x) * 0.05;
-    tilt.y += ((target.y / Math.max(height, 1) - 0.5) * 0.35 - tilt.y) * 0.05;
+    var nx = Math.min(Math.max(target.x / Math.max(width, 1), 0), 1);
+    var ny = Math.min(Math.max(target.y / Math.max(height, 1), 0), 1);
+    tilt.x += ((nx - 0.5) * 1.4 - tilt.x) * 0.06;
+    tilt.y += ((ny - 0.5) * 0.9 - tilt.y) * 0.06;
     follow(target);
     draw(time, time * 0.00008 + progress * Math.PI * 1.2 + tilt.x, 0.3 + progress * 0.6 + tilt.y);
   }
