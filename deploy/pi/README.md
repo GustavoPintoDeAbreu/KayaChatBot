@@ -14,7 +14,7 @@ WhatsApp ──▶ WAHA (Pi) ──▶ gateway (Pi) ──journal──▶ POST 
 | Container | What it does | Port |
 |---|---|---|
 | `kaya-gateway` | Journals every WhatsApp event in SQLite. Downloads media at once, because WAHA deletes it after 180 s. Forwards events to the PC one at a time, in order. Buffers them while the PC is off and replays them when it is back. Sends the offline reply. Serves the showcase page `/`, its images and scripts `/assets/<name>` and `/status`. | 8080 public (tunnel only), 8088 LAN (PC only) |
-| `kaya-waha` | WhatsApp (NOWEB), `noweb-arm-2026.8.2`, the version prod ran | 3000 LAN (PC only) |
+| `kaya-waha` | WhatsApp (NOWEB), `noweb-arm-2026.9.2` (2026-10-27: clears ImageMagick CVE-2026-25971) | 3000 LAN (PC only) |
 | `kaya-cloudflared` | The public tunnel for `sigmakayachat.pt`, its only connector since 2026-09-25 | none |
 
 WAHA and cloudflared sit behind compose profiles (`COMPOSE_PROFILES` in `.env`).

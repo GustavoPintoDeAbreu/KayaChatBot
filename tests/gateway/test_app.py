@@ -197,19 +197,36 @@ def test_early_wake_is_in_the_internal_status_only(rig):
                 headers={"X-Relay-Token": "relay"})
     internal = TestClient(gateway.internal_app).get("/status").json()
     assert internal["early_wake"] == _at(22, 3, 0).isoformat()
-    public = TestClient(gateway.public_app).get("/status").json()
-    assert "early_wake" not in public
+    assert TestClient(gateway.public_app).get("/status").status_code == 404
 
 
-def test_public_app_serves_the_page_and_a_reduced_status(rig):
+def test_public_app_serves_the_page_and_no_status(rig):
+    """2026-10-27: /status left the public app (it told anyone when the PC was on)."""
     gateway, *_ = rig
     client = TestClient(gateway.public_app)
     assert "kaya" in client.get("/").text
-    status = client.get("/status")
-    assert status.headers["cache-control"] == "no-store"
-    assert status.json()["pc_online"] is True and "journal" not in status.json()
+    assert client.get("/status").status_code == 404
     assert client.get("/docs").status_code == 404
     assert client.post("/waha/webhook", json={}).status_code in (404, 405)
+    assert TestClient(gateway.internal_app).get("/status").json()["pc_online"] is True
+
+
+def test_public_responses_carry_security_headers(rig):
+    gateway, *_ = rig
+    page = Path(gateway.settings.landing_html)
+    page.write_text("<html><style>p{}</style><script>var a=1;</script><p>kaya</p></html>")
+    client = TestClient(gateway.public_app)
+    for response in (client.get("/"), client.get("/assets/demo.svg"), client.get("/nope")):
+        assert response.headers["strict-transport-security"].startswith("max-age=")
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["x-content-type-options"] == "nosniff"
+    csp = client.get("/").headers["content-security-policy"]
+    import base64, hashlib
+    digest = base64.b64encode(hashlib.sha256(b"var a=1;").digest()).decode()
+    assert f"script-src 'self' 'sha256-{digest}'" in csp and "frame-ancestors 'none'" in csp
+    assert "'unsafe-inline'" not in csp
+    assert client.get("/assets/demo.svg").headers["content-security-policy"].startswith("default-src 'none'")
 
 
 def test_public_app_serves_showcase_assets(rig):

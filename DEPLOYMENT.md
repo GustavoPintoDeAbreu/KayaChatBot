@@ -115,10 +115,14 @@ and `app_up.sh`:
 | Hostname | Path | Service |
 |---|---|---|
 | `sigmakayachat.pt` | *(empty)* | `http://kaya-gateway:8080` |
-| `dev.sigmakayachat.pt` | *(empty)* | `http://192.168.1.149:7861` |
 
-The `^/app` rule was deleted on 2026-10-23 (no web chat). Rules point at LAN
-IPs, never at PC compose names, because the connector now runs on the Pi.
+That one rule (plus the catch-all 404) is all there should be: the public site is
+the gateway's showcase page and nothing on the PC is published. lab-audit checks the
+live routes against this list every night (`AUDIT_EXPECTED_ROUTES`); any other is a
+public finding. On 2026-10-27 the `^/app` → PC:7860 and `dev.sigmakayachat.pt` →
+PC:7861 rules were found still live (the 2026-10-23 deletion had not landed: the
+connector's last config was from 2026-09-25); after a change in the dashboard, check
+the connector logs a new "Updated to new configuration" line.
 `/whatsapp/*` on the PC is deliberately **not** published any more: WAHA reaches
 the gateway on the Pi's own compose network, and the relay is LAN-only.
 
