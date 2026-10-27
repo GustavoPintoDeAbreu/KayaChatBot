@@ -369,7 +369,7 @@ Each finding is tagged with the relevant audit category: `[SECURITY]` `[QUALITY]
 | P1-3 Wrong distance metric | ✅ Fixed | Collections rebuilt with `hnsw:space=cosine`; embeddings normalized. |
 | P1-4 Single-line response truncation | ✅ Fixed | `response_utils` keeps multi-line answers; old `split("\n")[0]` removed. |
 | P1-5 Multi-profile config non-functional for Qwen3 | ✅ Fixed | Profiles carry `chat_template`/`instruction_part`/`response_part`; train + merge read them. |
-| P1-6 Uncensored bot on 0.0.0.0 without auth | ✅ Fixed | Localhost-default bind; prod behind Cloudflare Access + Gradio auth (`KAYA_WEB_USER`/`KAYA_WEB_PASS`). |
+| P1-6 Uncensored bot on 0.0.0.0 without auth | ✅ Fixed | Localhost-default bind. (Since 2026-10-23 there is no web chat: the tunnel reaches only the Pi gateway's showcase page; Cloudflare Access and the Gradio login are gone with it.) |
 | P2-7 Naive substring member matching | ✅ Fixed | Word-boundary regex in `build_vector_db.py` and retriever person extraction. |
 | P2-8 Train/serve RAG format skew | ✅ Fixed | `format_direct_training.py` emits the same `=== Conversas relevantes do grupo ===` block as inference. |
 | P2-9 `config.docker.yaml` drifted duplicate | ✅ Fixed | File deleted; single `config.yaml` used everywhere (stale references cleaned from tests/README 2026-07-18). |

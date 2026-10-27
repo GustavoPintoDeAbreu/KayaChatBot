@@ -77,7 +77,8 @@ must fine-tune" as a claim needing evidence, not a given. Full results:
 2026-09-24 that is two machines on one LAN: the GPU PC, and the Raspberry Pi that
 receives WhatsApp and journals every event (and its media) for **7 days** while
 the PC may be off (`deploy/pi/README.md`). Nothing on the Pi talks to a cloud
-service except the Cloudflare tunnel, which carries the landing page and `/app`.
+service except the Cloudflare tunnel, which carries only the showcase page (the Pi gateway's public
+listener: `/` and `/assets/*`, with HSTS and a hashed CSP; no route to the PC since 2026-10-23).
 Knowledge extraction runs on the LOCAL teacher model (`src/data/local_teacher.py`). Cloud LLMs (Azure/xAI) are for the eval-time LLM judge and the production web-search only (web-search sends member-free user queries, never chat history or profiles). One owner-approved exception (2026-10-19): when Gustavo points his lab assistant at a group for
 context, the local model reads it through `/mcp`, and an idea it starts for him (which becomes a private
 GitHub PR, possibly planned by Claude) may carry a **summary** of the friends' points: no names, no

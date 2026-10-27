@@ -219,5 +219,4 @@ def test_the_gateway_runs_it_only_with_a_target(tmp_path):
     gateway.birthdays.refresh_roster(force=True)
     status = TestClient(gateway.internal_app).get("/status").json()
     assert status["birthdays"]["members"] == 2
-    public = TestClient(gateway.public_app).get("/status").json()
-    assert "birthdays" not in public
+    assert TestClient(gateway.public_app).get("/status").status_code == 404

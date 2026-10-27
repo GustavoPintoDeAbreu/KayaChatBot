@@ -111,7 +111,10 @@ services:
         required: false
     networks: [default, llm]
     ports:
-      - "7860:7860"
+      # IPv4 only: a bare "7860:7860" also listens on [::], and the PC has a global IPv6
+      # address. LAN callers (the Pi gateway) and the PC's own (127.0.0.1) are IPv4. Not
+      # bound to the LAN IP: at boot Docker can start before it exists, and prod would not.
+      - "0.0.0.0:7860:7860"
     environment:
       # ONE card, and it is the prod one. The second used to be exposed solely
       # so the image worker had somewhere to run that was not on top of the LLM;

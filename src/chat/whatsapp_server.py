@@ -15,6 +15,7 @@ captured and readable at ``GET /whatsapp/outbox``. This is what
 """
 
 import asyncio
+import hmac
 import os
 import sys
 import threading
@@ -508,7 +509,8 @@ adapter.enricher.start()
 # Ignore any backlog WAHA replays after a reconnect — only answer fresh messages.
 adapter.ignore_before_ts = int(time.time())
 
-app = FastAPI(title="Kaya WhatsApp bridge")
+# No /docs or /openapi.json: the routes are token-gated machine endpoints, nothing to browse.
+app = FastAPI(title="Kaya WhatsApp bridge", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/whatsapp/health")
@@ -879,7 +881,7 @@ def _complete_pending(pending: PendingReply, t0: float) -> None:
 def _check_relay_token(token: str) -> None:
     if not RELAY_TOKEN:
         raise HTTPException(status_code=503, detail="relay disabled (KAYA_RELAY_TOKEN unset)")
-    if token != RELAY_TOKEN:
+    if not hmac.compare_digest(token.encode(), RELAY_TOKEN.encode()):
         raise HTTPException(status_code=401, detail="invalid relay token")
 
 
@@ -906,7 +908,7 @@ async def webhook(
     background_tasks: BackgroundTasks,
     x_webhook_token: str = Header(default=""),
 ):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
+    if WEBHOOK_TOKEN and not hmac.compare_digest(x_webhook_token.encode(), WEBHOOK_TOKEN.encode()):
         raise HTTPException(status_code=401, detail="invalid webhook token")
     event = await request.json()
     if os.environ.get("KAYA_WHATSAPP_DEBUG"):

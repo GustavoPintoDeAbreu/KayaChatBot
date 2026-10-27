@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -67,6 +68,10 @@ _POLL_EVENTS = POLL_VOTE_EVENTS + POLL_VOTE_FAILED_EVENTS
 # reconnect, not something somebody just sent: never auto-replied or deferred.
 _BACKLOG_SECONDS = 300
 
+
+def _same(given: str, expected: str) -> bool:
+    """A token check that takes the same time however much of the token is right."""
+    return hmac.compare_digest(given.encode(), expected.encode())
 
 @dataclass
 class GatewaySettings:
@@ -374,15 +379,23 @@ class Gateway:
         }
 
     def _build_public_app(self) -> FastAPI:
-        """What the internet sees: the showcase page, its images and a reduced status."""
+        """What the internet sees: the showcase page and its images, with security headers."""
         app = FastAPI(title="Kaya", docs_url=None, redoc_url=None, openapi_url=None)
+
+        @app.middleware("http")
+        async def security_headers(request: Request, call_next):
+            response = await call_next(request)
+            for key, value in static_assets.SECURITY_HEADERS.items():
+                response.headers.setdefault(key, value)
+            return response
 
         @app.get("/", response_class=HTMLResponse)
         def landing() -> HTMLResponse:
             page = Path(self.settings.landing_html)
             if not page.exists():
                 raise HTTPException(status_code=404)
-            return HTMLResponse(page.read_text(encoding="utf-8"))
+            html = page.read_text(encoding="utf-8")
+            return HTMLResponse(html, headers={"Content-Security-Policy": static_assets.page_csp(html)})
 
         @app.get("/assets/{name}")
         def asset(name: str) -> FileResponse:
@@ -392,12 +405,8 @@ class Gateway:
             return FileResponse(path, media_type=static_assets.media_type(path),
                                 headers=static_assets.headers_for(path))
 
-        @app.get("/status")
-        def public_status() -> JSONResponse:
-            body = {key: value for key, value in self.status().items()
-                    if key not in ("journal", "birthdays", "early_wake")}
-            return JSONResponse(body, headers={"Cache-Control": "no-store"})
-
+        # No /status here since 2026-10-27: the page never read it, and it told anyone when the
+        # PC was on. The LAN listener still serves it.
         return app
 
     def _build_internal_app(self) -> FastAPI:
@@ -409,14 +418,14 @@ class Gateway:
 
         @app.post("/waha/webhook")
         async def webhook(request: Request, x_webhook_token: str = Header(default="")):
-            if settings.webhook_token and x_webhook_token != settings.webhook_token:
+            if settings.webhook_token and not _same(x_webhook_token, settings.webhook_token):
                 raise HTTPException(status_code=401, detail="invalid webhook token")
             return await self.handle_webhook(await request.json())
 
         @app.post("/assistant/handback")
         async def assistant_handback(request: Request, x_relay_token: str = Header(default="")):
             """The lab assistant decided a message is Kaya's: journal it as the owner's text DM."""
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             body = await request.json()
             event, text = body.get("event") or {}, str(body.get("text") or "").strip()
@@ -438,7 +447,7 @@ class Gateway:
 
         @app.post("/pc/going-down")
         async def going_down(request: Request, x_relay_token: str = Header(default="")):
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             # The PC may add the early wake it chose ({"wake_at": epoch}); a bad
             # body must never stop the going-down notice itself.
@@ -458,14 +467,14 @@ class Gateway:
 
         @app.post("/pc/degraded")
         def degraded(x_relay_token: str = Header(default="")):
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             self.monitor.mark_degraded()
             return {"ok": True}
 
         @app.post("/pc/power/update")
         async def power_update(request: Request, x_relay_token: str = Header(default="")):
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             if self.homelab is None:
                 raise HTTPException(status_code=404)
@@ -478,7 +487,7 @@ class Gateway:
 
         @app.post("/pc/sudo/request")
         async def sudo_request(request: Request, x_relay_token: str = Header(default="")):
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             if self.homelab is None:
                 raise HTTPException(status_code=404)
@@ -492,7 +501,7 @@ class Gateway:
 
         @app.get("/pc/sudo/{key}")
         def sudo_status(key: str, x_relay_token: str = Header(default="")):
-            if not settings.relay_token or x_relay_token != settings.relay_token:
+            if not settings.relay_token or not _same(x_relay_token, settings.relay_token):
                 raise HTTPException(status_code=401, detail="invalid relay token")
             status = self.homelab.sudo_status(key) if self.homelab else None
             if status is None:
