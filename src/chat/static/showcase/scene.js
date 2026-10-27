@@ -105,14 +105,19 @@
     var tippedZ = y * sinX + turnedZ * cosX;
     var radius = Math.min(width, height) * 0.32;
     var scale = 3.2 / (3.2 + tippedZ);
-    return { x: width / 2 + turnedX * radius * scale, y: height * 0.42 + tippedY * radius * scale,
+    return { x: width / 2 + turnedX * radius * scale, y: height * 0.5 + tippedY * radius * scale,
              z: tippedZ, scale: scale };
   }
 
-  function aim(time, top) {
-    if (time - pointer.seen < 2500) return { x: pointer.x, y: pointer.y - top };
+  // The stage sits beside the name on wide screens (and above it on phones), so the
+  // pointer is taken relative to the stage's own box, left and top.
+  // Only a cursor over the graph steers it; anywhere else it drifts on its own (until
+  // 2026-10-27 the far left of the page, way outside the graph, turned it the most).
+  function aim(time, box) {
+    var over = pointer.x >= box.left && pointer.x <= box.right && pointer.y >= box.top && pointer.y <= box.bottom;
+    if (over && time - pointer.seen < 2500) return { x: pointer.x - box.left, y: pointer.y - box.top };
     return { x: width * (0.5 + 0.3 * Math.cos(time * 0.00035)),
-             y: height * (0.42 + 0.22 * Math.sin(time * 0.0005)) };
+             y: height * (0.5 + 0.22 * Math.sin(time * 0.0005)) };
   }
 
   function follow(target) {
@@ -179,8 +184,12 @@
       var size = node.core ? 16 : 7;
       dot(placed[index], node.core ? colors.teal : colors.amber, size);
       ctx.fillStyle = colors.ink;
-      ctx.font = (node.core ? '800 ' : '600 ') + (width < 640 ? 12 : 14) + 'px system-ui, sans-serif';
-      ctx.fillText(node.label, placed[index].x + size * placed[index].scale + 8, placed[index].y);
+      ctx.font = (node.core ? '800 ' : '600 ') + (window.innerWidth < 640 ? 12 : 14) + 'px system-ui, sans-serif';
+      // A name near the right edge goes on the node's left, so the stage never cuts it.
+      var gap = size * placed[index].scale + 8;
+      var left = placed[index].x + gap + ctx.measureText(node.label).width > width - 8;
+      ctx.textAlign = left ? 'right' : 'left';
+      ctx.fillText(node.label, placed[index].x + (left ? -gap : gap), placed[index].y);
     });
     ctx.restore();
   }
@@ -189,10 +198,11 @@
     requestAnimationFrame(frame);
     var progress = Math.min(Math.max(window.scrollY / Math.max(height, 1), 0), 1);
     if (progress >= 1) return;
-    var top = stage.getBoundingClientRect().top;
-    var target = aim(time, top);
-    tilt.x += ((target.x / Math.max(width, 1) - 0.5) * 0.5 - tilt.x) * 0.05;
-    tilt.y += ((target.y / Math.max(height, 1) - 0.5) * 0.35 - tilt.y) * 0.05;
+    var target = aim(time, stage.getBoundingClientRect());
+    var nx = Math.min(Math.max(target.x / Math.max(width, 1), 0), 1);
+    var ny = Math.min(Math.max(target.y / Math.max(height, 1), 0), 1);
+    tilt.x += ((nx - 0.5) * 1.4 - tilt.x) * 0.06;
+    tilt.y += ((ny - 0.5) * 0.9 - tilt.y) * 0.06;
     follow(target);
     draw(time, time * 0.00008 + progress * Math.PI * 1.2 + tilt.x, 0.3 + progress * 0.6 + tilt.y);
   }
@@ -204,6 +214,7 @@
   }, { passive: true });
   window.addEventListener('resize', resize);
   document.addEventListener('kaya:lang', build);
+  document.addEventListener('kaya:scheme', readColors);
   if (window.matchMedia) {
     var dark = window.matchMedia('(prefers-color-scheme: dark)');
     if (dark.addEventListener) dark.addEventListener('change', readColors);
