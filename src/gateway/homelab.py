@@ -432,8 +432,13 @@ class HomelabPower:
         elif status == 200:
             text, result = QC_STARTED_NO_LINK.format(name=name), "qc-started"
         elif status == 409:
-            suffix = " home" if target == "home" else ""
-            text, result = QC_ALREADY.format(name=name, suffix=suffix), "qc-already"
+            # Already running: the listener returns the URL (and token) so he can still connect.
+            if body.get("url"):
+                text = QC_STARTED.format(name=name, url=body["url"], token=body.get("token") or "")
+            else:
+                suffix = " home" if target == "home" else ""
+                text = QC_ALREADY.format(name=name, suffix=suffix)
+            result = "qc-already"
         else:
             error = body.get("error") or f"HTTP {status}"
             text, result = QC_FAILED.format(name=name, error=error), "qc-failed"

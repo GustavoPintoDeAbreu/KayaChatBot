@@ -530,6 +530,15 @@ def test_homelabqc_already_running(rig):
     assert sent[1][1] == f"{HOMELAB_TAG} " + QC_ALREADY.format(name="qwen-home", suffix=" home")
 
 
+def test_homelabqc_already_running_returns_the_link(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/qc/start"] = (409, {"started": False, "name": "qwen-desktop",
+                                            "url": QC_URL, "token": QC_TOKEN})
+    assert _post(gateway, _message("q4c", "/homelabqc")) == {"homelab": "qc-already"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_STARTED.format(name="qwen-desktop",
+                                                               url=QC_URL, token=QC_TOKEN)
+
+
 def test_homelabqc_failure_carries_the_error(rig):
     gateway, _, _, sent, pc, _ = rig
     pc.status_by_path["/qc/start"] = (500, {"started": False, "error": "POWER_QC_TOKEN is empty"})
