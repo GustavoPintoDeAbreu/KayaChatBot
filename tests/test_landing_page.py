@@ -25,6 +25,7 @@ SERVER = BASE_DIR / "src" / "chat" / "whatsapp_server.py"
 ASSETS = BASE_DIR / "src" / "chat" / "static" / "showcase"
 
 LINKEDIN = "https://www.linkedin.com/in/gustavo-abreu-7687b0133/"
+GITHUB = "https://github.com/GustavoPintoDeAbreu"
 
 SCRIPTS = ("scene.js", "motion.js")
 
@@ -46,14 +47,14 @@ HIDDEN = ("lab-audit", "lab audit", "lab-infra", "house-hunt", "house hunt", "da
 # sizes and the lab's internal services still may not.
 INFRA_TERMS = ("gradio", "waha", "noweb",
                "broker", "grok", "xai", "azure", "openai", "cloudflare", "tunnel",
-               "tailscale", "raspberry", "pi5", "rtx", "3090", "nvidia", "ryzen", "gpu",
+               "tailscale", "pi5", "rtx", "3090", "nvidia", "ryzen", "gpu",
                "localhost", ".local", "wake-on-lan", "shutdown", "firewall", "trivy", "gitleaks",
                "osv-scanner", "lynis", "rkhunter", "chkrootkit", "rustdesk", "ssh", "sudo",
                "proxy", "serpapi", "evomi", "tmdb", "/idea", "/homelab", "/status",
                "/app", "07:00", "kaya-prod", "sigmakayachat")
 INFRA_PATTERNS = (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", r"\b\d+\.\d+\.\d+\b", r"\bv\d+(?:\.\d+)+\b",
                   r"\b\d{1,3}[bB]\b", r"\+\d{6,}", r"\b\d{9,}\b", r"[\w.+-]+@[\w-]+\.\w+",
-                  r"\bPi\b", r"\bLAN\b", r"\bports?\b")
+                  r"\bLAN\b", r"\bports?\b")
 
 MEMBERS_FILE = BASE_DIR / "data" / "group_members.json"
 
@@ -128,7 +129,7 @@ def test_hidden_projects_are_not_mentioned():
 
 def test_no_infrastructure_details_are_published():
     for name, text in _public_texts():
-        body = _without_code(text).replace(LINKEDIN, "")
+        body = _without_code(text).replace(LINKEDIN, "").replace(GITHUB, "")
         # The page references its own images by path (e.g. /assets/idea-pipeline.svg);
         # those filenames are not infrastructure, so drop them before the checks.
         body = re.sub(r'src="/assets/[^"]+"', " ", body)
@@ -140,13 +141,14 @@ def test_no_infrastructure_details_are_published():
             assert match is None, f"{name} matches {pattern!r}: {match.group(0)!r}"
 
 
-def test_only_linkedin_is_external(landing):
+def test_only_linkedin_and_github_are_external(landing):
     hrefs = re.findall(r'href="(https?://[^"]+)"', landing)
     assert hrefs, "the page must link somewhere"
-    assert all(href == LINKEDIN for href in hrefs), hrefs
-    linkedin_count = landing.count(f'href="{LINKEDIN}"')
-    safe_count = landing.count(f'href="{LINKEDIN}" target="_blank" rel="noopener noreferrer"')
-    assert linkedin_count == safe_count
+    assert all(href in (LINKEDIN, GITHUB) for href in hrefs), hrefs
+    for profile in (LINKEDIN, GITHUB):
+        total = landing.count(f'href="{profile}"')
+        safe = landing.count(f'href="{profile}" target="_blank" rel="noopener noreferrer"')
+        assert total == safe
     assert not re.search(r'src="http', landing)
 
 
@@ -320,9 +322,18 @@ def test_every_project_has_details_in_both_languages(landing):
         assert landing.count(label) == len(SHOWN), label
 
 
-def test_how_it_fits_names_the_orchestrator_and_the_products(landing):
+def test_how_it_fits_names_the_orchestrator_and_two_outcomes(landing):
     assert landing.count('class="outcome outcome-product"') == 2
     assert "the orchestrator" in landing and "o orquestrador" in landing
+    for label in ("App usage", "Development", "Usar as apps", "Desenvolvimento"):
+        assert label in landing, label
+    assert "Notes and ideas take their shape" not in landing
+    assert "As notas e as ideias ganham forma" not in landing
+
+
+def test_the_wordmark_is_a_sigma_not_a_k(landing):
+    assert "M14 14H44V70L100 14H146L88 90" not in landing
+    assert landing.count("M14 32H146M8 90H146M14 148H146M14 32L8 90L14 148") == 2
 
 
 def test_group_titles(landing):
