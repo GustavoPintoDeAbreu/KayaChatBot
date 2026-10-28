@@ -1,5 +1,5 @@
-"""The owner's ``/homelaboff``, ``/homelabon`` and ``/homelabrc`` DMs go to the
-PC's power listener, not to Kaya.
+"""The owner's ``/homelaboff``, ``/homelabon``, ``/homelabrc`` and ``/homelabqc`` DMs go
+to the PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
 makes that possible from the phone, from anywhere. The gateway is the only
@@ -13,7 +13,8 @@ It claims, in DMs only:
 - the owner's ``/homelaboff`` (ask what is running, then confirm),
   ``/homelabon`` (ask the Pi to send Wake-on-LAN) and ``/homelabrc [home]`` /
   ``/homelabrc stop [home]`` (start or end a Claude Remote Control session on
-  the PC, in ``~/Desktop`` or ``~``);
+  the PC, in ``~/Desktop`` or ``~``), and ``/homelabqc [home]`` /
+  ``/homelabqc stop [home]`` (the same for the Qwen Code Web Shell session);
 - the owner's ``yes 1234`` / ``no 1234`` to a sudo request the PC posted
   (``/pc/sudo/request``): a sudo with no terminal waits for that answer;
 - the owner's ``yes``/``no`` replies to a pending shutdown question, and his
@@ -81,6 +82,13 @@ RC_STOPPED = "{name} stopped."
 RC_NOT_RUNNING = "No {name} session is running."
 RC_FAILED = "Couldn't start {name} ({error})."
 RC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
+QC_STARTED = "Qwen session {name} is up: {url}\nToken: {token}"
+QC_STARTED_NO_LINK = "Qwen session {name} is starting. Open it in your browser at the tailnet URL (qcode)."
+QC_ALREADY = "{name} is already running. /homelabqc stop{suffix} ends it."
+QC_STOPPED = "{name} stopped."
+QC_NOT_RUNNING = "No {name} session is running."
+QC_FAILED = "Couldn't start {name} ({error})."
+QC_PC_OFF = "The PC is off. /homelabon wakes it, then try again."
 # /homelabon also hands back a Claude session in ~/Desktop (the owner's wish, 2026-10-22): the boot
 # starts one (lab-infra lab-power-rc-autostart); this makes sure it runs and sends its link.
 SESSION_LINK = "Claude session {name}: {url}"
@@ -99,6 +107,7 @@ SUDO_QUOTED_CODE = re.compile(r'sudo on the PC:.*"yes (\d{4})"', re.DOTALL)
 SUDO_YES = frozenset({"yes", "y", "sim", "s", "ok"})
 RC_DIRS = {"": "desktop", "desk": "desktop", "desktop": "desktop", "home": "home", "~": "home"}
 RC_USAGE = "Usage: /homelabrc [home] to start, /homelabrc stop [home] to end. No argument means ~/Desktop."
+QC_USAGE = "Usage: /homelabqc [home] to start, /homelabqc stop [home] to end. No argument means ~/Desktop."
 
 Call = Callable[[str, str, Dict[str, str]], Awaitable[Tuple[int, Dict[str, Any]]]]
 
@@ -196,6 +205,8 @@ class HomelabPower:
             return "on"
         if first == "/homelabrc":
             return "rc"
+        if first == "/homelabqc":
+            return "qc"
         if self._sudo_match(msg) is not None:
             return "sudo"
         word = _normalize_word(msg.text)
@@ -231,6 +242,8 @@ class HomelabPower:
             return await self._on(msg)
         if kind == "rc":
             return await self._rc(msg)
+        if kind == "qc":
+            return await self._qc(msg)
         if kind == "sudo":
             return await self._sudo_answer(msg)
         return {"homelab": "ignored"}
@@ -383,6 +396,47 @@ class HomelabPower:
         else:
             error = body.get("error") or f"HTTP {status}"
             text, result = RC_FAILED.format(name=name, error=error), "rc-failed"
+        await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
+        return {"homelab": result}
+
+    async def _qc(self, msg: InboundMessage) -> Dict[str, Any]:
+        words = (msg.text or "").strip().lower().split()[1:]
+        stop = bool(words) and words[0] == "stop"
+        if stop:
+            words = words[1:]
+        target = RC_DIRS.get(words[0] if words else "")
+        if target is None or len(words) > 1:
+            await asyncio.to_thread(self._say, msg.chat_id, QC_USAGE, msg.message_id)
+            return {"homelab": "qc-usage"}
+        name = f"qwen-{target}"
+        action = "stop" if stop else "start"
+        try:
+            status, body = await self._request("POST", f"/qc/{action}?dir={target}")
+        except (httpx.HTTPError, OSError) as exc:
+            if self._monitor.state in (PcState.OFFLINE, PcState.GOING_DOWN):
+                await asyncio.to_thread(self._say, msg.chat_id, QC_PC_OFF, msg.message_id)
+                return {"homelab": "qc-pc-off"}
+            await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "qc-unreachable"}
+        if stop:
+            if status == 200:
+                text, result = QC_STOPPED.format(name=name), "qc-stopped"
+            elif status == 404:
+                text, result = QC_NOT_RUNNING.format(name=name), "qc-not-running"
+            else:
+                text, result = UNREACHABLE.format(error=f"HTTP {status}"), "qc-failed"
+        elif status == 200 and body.get("url"):
+            text = QC_STARTED.format(name=name, url=body["url"], token=body.get("token") or "")
+            result = "qc-started"
+        elif status == 200:
+            text, result = QC_STARTED_NO_LINK.format(name=name), "qc-started"
+        elif status == 409:
+            suffix = " home" if target == "home" else ""
+            text, result = QC_ALREADY.format(name=name, suffix=suffix), "qc-already"
+        else:
+            error = body.get("error") or f"HTTP {status}"
+            text, result = QC_FAILED.format(name=name, error=error), "qc-failed"
         await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
         return {"homelab": result}
 

@@ -15,6 +15,7 @@ from src.gateway.app import Gateway, GatewaySettings
 from src.gateway.homelab import (
     ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
+    QC_ALREADY, QC_FAILED, QC_NOT_RUNNING, QC_PC_OFF, QC_STARTED, QC_STARTED_NO_LINK, QC_STOPPED, QC_USAGE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
     RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
@@ -27,6 +28,8 @@ OWNER_LID = "64622145081581@lid"
 ALICE = "351911111111@c.us"
 GROUP = "120363000000000000@g.us"
 RC_URL = "https://claude.ai/code/session_01QfLguPaAQUGmXdHNVgK5pw"
+QC_URL = "https://pc.tail3b4bfd.ts.net/qcode"
+QC_TOKEN = "qc-token-123"
 
 
 class Clock:
@@ -48,6 +51,8 @@ class FakePc:
             "/power/cancel": (200, {"cancelled": True}),
             "/rc/start": (200, {"started": True, "name": "homelab-home", "url": RC_URL}),
             "/rc/stop": (200, {"stopped": True}),
+            "/qc/start": (200, {"started": True, "name": "qwen-home", "url": QC_URL, "token": QC_TOKEN}),
+            "/qc/stop": (200, {"stopped": True}),
         }
         self.raises = False
 
@@ -484,6 +489,89 @@ def test_homelabrc_from_anyone_else_goes_to_kaya(rig):
     result = _post(gateway, _message("r11", "/homelabrc", chat=ALICE))
     assert "seq" in result and pc.calls == [] and sent == []
     result = _post(gateway, _message("r12", "/homelabrc", chat=GROUP, sender=OWNER))
+    assert "seq" in result and pc.calls == []
+
+
+def test_homelabqc_starts_a_session_in_desktop_by_default(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/qc/start"] = (200, {"started": True, "name": "qwen-desktop",
+                                            "url": QC_URL, "token": QC_TOKEN})
+    assert _post(gateway, _message("q1", "/homelabqc")) == {"homelab": "qc-started"}
+    method, url, headers = pc.calls[0]
+    assert method == "POST" and url == "http://192.168.1.149:8099/qc/start?dir=desktop"
+    assert headers == {"X-Relay-Token": "relay"}
+    assert sent == [(OWNER, f"{HOMELAB_TAG} " + QC_STARTED.format(name="qwen-desktop",
+                                                                  url=QC_URL, token=QC_TOKEN), "q1")]
+    assert gateway.journal.pending_count() == 0
+
+
+@pytest.mark.parametrize("text,target", [("/homelabqc desk", "desktop"), ("/homelabqc Desktop", "desktop"),
+                                         ("/HomelabQC home", "home"), ("/homelabqc ~", "home")])
+def test_homelabqc_picks_the_directory(rig, text, target):
+    gateway, _, _, _, pc, _ = rig
+    assert _post(gateway, _message("q2", text)) == {"homelab": "qc-started"}
+    assert pc.calls[0][1].endswith(f"/qc/start?dir={target}")
+
+
+def test_homelabqc_without_a_link_still_names_the_session(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/qc/start"] = (200, {"started": True, "name": "qwen-desktop", "url": None})
+    assert _post(gateway, _message("q3", "/homelabqc desk")) == {"homelab": "qc-started"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_STARTED_NO_LINK.format(name="qwen-desktop")
+
+
+def test_homelabqc_already_running(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/qc/start"] = (409, {"started": False, "name": "qwen-desktop"})
+    assert _post(gateway, _message("q4", "/homelabqc")) == {"homelab": "qc-already"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_ALREADY.format(name="qwen-desktop", suffix="")
+    pc.status_by_path["/qc/start"] = (409, {"started": False, "name": "qwen-home"})
+    assert _post(gateway, _message("q4b", "/homelabqc home")) == {"homelab": "qc-already"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + QC_ALREADY.format(name="qwen-home", suffix=" home")
+
+
+def test_homelabqc_failure_carries_the_error(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/qc/start"] = (500, {"started": False, "error": "POWER_QC_TOKEN is empty"})
+    assert _post(gateway, _message("q5", "/homelabqc home")) == {"homelab": "qc-failed"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_FAILED.format(name="qwen-home",
+                                                              error="POWER_QC_TOKEN is empty")
+
+
+def test_homelabqc_stop(rig):
+    gateway, _, _, sent, pc, _ = rig
+    assert _post(gateway, _message("q6", "/homelabqc stop")) == {"homelab": "qc-stopped"}
+    assert pc.calls[0][0] == "POST" and pc.calls[0][1].endswith("/qc/stop?dir=desktop")
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_STOPPED.format(name="qwen-desktop")
+    pc.status_by_path["/qc/stop"] = (404, {"stopped": False})
+    assert _post(gateway, _message("q7", "/homelabqc stop home")) == {"homelab": "qc-not-running"}
+    assert pc.calls[1][1].endswith("/qc/stop?dir=home")
+    assert sent[1][1] == f"{HOMELAB_TAG} " + QC_NOT_RUNNING.format(name="qwen-home")
+
+
+@pytest.mark.parametrize("text", ["/homelabqc /etc", "/homelabqc desk extra", "/homelabqc stop nowhere"])
+def test_homelabqc_bad_arguments_get_usage_and_touch_nothing(rig, text):
+    gateway, _, _, sent, pc, _ = rig
+    assert _post(gateway, _message("q8", text)) == {"homelab": "qc-usage"}
+    assert pc.calls == []
+    assert sent[0][1] == f"{HOMELAB_TAG} " + QC_USAGE
+
+
+def test_homelabqc_when_the_pc_is_off_or_unreachable(rig):
+    gateway, _, monitor, sent, pc, _ = rig
+    pc.raises = True
+    assert _post(gateway, _message("q9", "/homelabqc")) == {"homelab": "qc-unreachable"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + UNREACHABLE.format(error="ConnectError")
+    monitor.observe(PcState.OFFLINE)
+    assert _post(gateway, _message("q10", "/homelabqc")) == {"homelab": "qc-pc-off"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + QC_PC_OFF
+
+
+def test_homelabqc_from_anyone_else_goes_to_kaya(rig):
+    gateway, _, _, sent, pc, _ = rig
+    result = _post(gateway, _message("q11", "/homelabqc", chat=ALICE))
+    assert "seq" in result and pc.calls == [] and sent == []
+    result = _post(gateway, _message("q12", "/homelabqc", chat=GROUP, sender=OWNER))
     assert "seq" in result and pc.calls == []
 
 
