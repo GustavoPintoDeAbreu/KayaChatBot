@@ -41,6 +41,7 @@ from src.chat import feedback
 from src.chat import poll_votes
 from src.chat import chats_mcp
 from src.chat import static_assets
+from src.chat import showcase_metrics
 from src.chat.web_search import CITATION_PREFIX
 
 # WAHA event names that carry an emoji reaction (engine-dependent spelling).
@@ -1009,11 +1010,16 @@ _ASSETS = Path(__file__).parent / "static" / "showcase"
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def landing() -> HTMLResponse:
+def landing() -> HTMLResponse:
+    """The showcase page with labwatch's numbers injected server-side: the browser never
+    reaches the LAN, and the inline <script> is allowed by its CSP hash."""
     try:
-        return HTMLResponse(_LANDING.read_text(encoding="utf-8"))
+        html = _LANDING.read_text(encoding="utf-8")
     except OSError:
         raise HTTPException(status_code=404)
+    view = showcase_metrics.build_view(showcase_metrics.fetch_public())
+    html = showcase_metrics.inject(html, view)
+    return HTMLResponse(html, headers={"Content-Security-Policy": static_assets.page_csp(html)})
 
 
 @app.get("/assets/{name}", include_in_schema=False)

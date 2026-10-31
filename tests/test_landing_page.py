@@ -27,7 +27,7 @@ ASSETS = BASE_DIR / "src" / "chat" / "static" / "showcase"
 LINKEDIN = "https://www.linkedin.com/in/gustavo-abreu-7687b0133/"
 GITHUB = "https://github.com/GustavoPintoDeAbreu"
 
-SCRIPTS = ("scene.js", "motion.js")
+SCRIPTS = ("scene.js", "motion.js", "details.js")
 
 
 def _css(landing: str) -> str:
@@ -189,6 +189,12 @@ def test_the_page_does_not_poll_the_pc(landing):
     assert "fetch(" not in landing
 
 
+def test_the_idea_prompt_is_not_baked_into_the_page(landing):
+    """The labwatch /idea prompt is server-injected (owner-approved), never static: a reviewer
+    reading the page's source must be able to tell real feed data from an error."""
+    assert "Build me a self-hosted dashboard" not in landing
+
+
 def test_no_real_member_names_are_published():
     for name, text in _public_texts():
         leaked = [n for n in REAL_NAMES if re.search(rf"(?<![\w-]){n}(?![\w-])", text)]
@@ -220,7 +226,7 @@ def test_whatsapp_server_serves_the_showcase_assets():
 
 def test_scripts_are_local_assets_that_exist(landing):
     srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"[^>]*>', landing)
-    assert srcs == ["/assets/scene.js", "/assets/motion.js"]
+    assert srcs == ["/assets/scene.js", "/assets/motion.js", "/assets/details.js"]
     for src in srcs:
         assert static_assets.asset_path(ASSETS, src[len("/assets/"):]) is not None, src
     assert {p.name for p in ASSETS.iterdir() if p.suffix == ".js"} == set(SCRIPTS)

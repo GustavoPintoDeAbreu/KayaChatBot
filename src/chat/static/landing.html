@@ -122,6 +122,25 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
   .project:hover .split-ch>span,.linkedin:hover .split-ch>span{transform:translate3d(0,-100%,0)}
 }
 .linkedin:focus-visible .split-ch>span{transform:translate3d(0,-100%,0)}
+.detail-panel{position:fixed;inset:0;z-index:40;background:var(--paper);overflow:auto;transform:translate3d(100%,0,0);transition:transform .45s cubic-bezier(.2,.7,.2,1)}
+.detail-panel.open{transform:translate3d(0,0,0)}
+.detail-close{position:absolute;top:1rem;right:1.5rem;font-family:var(--sans);font-size:1.5rem;border:0;background:none;color:var(--ink);cursor:pointer}
+.detail-close:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.detail-body{max-width:46rem;padding:2.5rem 1.5rem 1.5rem;margin:0 auto}
+.detail-body .more{position:static;inset:auto;transform:none;border-top:0;background:transparent;padding:0;overflow:visible}
+.detail-label{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);margin:0 0 .5rem}
+.meters{list-style:none;margin:.4rem 0 0;padding:0;display:grid;gap:.5rem}
+.meter{display:flex;align-items:center;justify-content:space-between;gap:.8rem;font-size:.92rem}
+.meter span{color:var(--muted)}
+.meter-track{position:relative;width:12rem;height:.6rem;background:var(--surface-2);border:1px solid var(--rule)}
+.meter-fill{position:absolute;inset:0;background:var(--teal);transform:scaleX(var(--v,0));transform-origin:left}
+.meter b{font-family:var(--mono);font-size:.85rem;color:var(--ink)}
+.flow-steps{list-style:none;margin:.4rem 0 0;padding:0;display:grid;gap:1.1rem}
+.flow-step{position:relative;background:var(--surface);border:1px solid var(--rule);padding:.55rem .9rem;font-size:.92rem}
+.flow-step::after{content:"↓";position:absolute;left:50%;bottom:-1.05rem;color:var(--teal);font-size:1rem;transform:translate3d(-50%,0,0)}
+.prompt-btn{display:inline-block;margin-top:.6rem;font-family:var(--mono);font-size:.85rem;padding:.55rem 1.1rem;background:var(--teal);color:var(--on-accent);border:0;cursor:pointer}
+.prompt-box{white-space:pre-wrap;display:none;font-family:var(--mono);font-size:.8rem;color:var(--muted);margin:.6rem 0 0;border:1px solid var(--rule);padding:.6rem .8rem;background:var(--surface)}
+.detail-body .prompt-box.show{display:block}
 .curtain{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--paper);color:var(--teal);pointer-events:none;transform:translate3d(0,0,0);animation:curtain-lift .8s cubic-bezier(.7,0,.2,1) .5s forwards}
 .curtain-word{font-family:var(--sans);font-weight:300;font-size:clamp(3rem,14vw,11rem);letter-spacing:.06em;text-transform:uppercase}
 @keyframes curtain-lift{to{transform:translate3d(0,-101%,0)}}
@@ -129,7 +148,7 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 .curtain[data-state="below"]{transform:translate3d(0,101%,0);transition:none}
 .curtain[data-state="cover"]{transform:translate3d(0,0,0)}
 .curtain[data-state="gone"]{transform:translate3d(0,-101%,0)}
-@media (prefers-reduced-motion: reduce){.curtain{display:none}.project::before,.split-ch>span,.more,.pop{transition:none}}
+@media (prefers-reduced-motion: reduce){.curtain{display:none}.project::before,.split-ch>span,.more,.pop{transition:none}.detail-panel{transition:none}}
 </style>
 </head>
 <body>
@@ -534,5 +553,6 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 </script>
 <script src="/assets/scene.js" defer></script>
 <script src="/assets/motion.js" defer></script>
+<script src="/assets/details.js" defer></script>
 </body>
 </html>
