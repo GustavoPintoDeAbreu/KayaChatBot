@@ -333,7 +333,23 @@ def test_how_it_fits_names_the_orchestrator_and_two_outcomes(landing):
 
 def test_the_wordmark_is_a_sigma_not_a_k(landing):
     assert "M14 14H44V70L100 14H146L88 90" not in landing
-    assert landing.count("M14 32H146M8 90H146M14 148H146M14 32L8 90L14 148") == 2
+    assert "M14 32H146M8 90H146M14 148H146M14 32L8 90L14 148" not in landing
+    wordmarks = re.findall(r'<svg class="wordmark".*?</svg>', landing, flags=re.S)
+    assert len(wordmarks) == 2
+    outer = "M146 46L146 32L102 32L58 32L14 32L49 61L84 90L49 119L14 148L58 148L102 148L146 148L146 134"
+    inner = "M120 44L80 44L40 44L60 90L40 136L80 136L120 136"
+    for mark in wordmarks:
+        assert mark.count(f'd="{outer}"') == 1
+        assert mark.count(f'd="{inner}"') == 1
+        nets = re.findall(r'<g class="km-net".*?</g>', mark, flags=re.S)
+        assert len(nets) == 1
+        assert nets[0].count("<path d=") == 3
+        assert mark.count('class="km-node"') == 17
+        assert mark.count('class="km-dot"') == 3
+        assert mark.count('r="3.5"') == 16
+        assert mark.count('r="4.5"') == 1
+        assert mark.count('r="6"') == 3
+        assert mark.count('r="16"') == 3
 
 
 def test_group_titles(landing):
