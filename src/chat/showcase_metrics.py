@@ -16,6 +16,7 @@ import httpx
 
 LABWATCH_PUBLIC_URL_DEFAULT = "http://192.168.1.238:8095/api/catalog/public"
 CACHE_TTL_S = 600
+FAILURE_TTL_S = 60
 FETCH_TIMEOUT_S = 3.0
 
 PROJECT_FEED_NAMES: Dict[str, str] = {
@@ -111,6 +112,7 @@ LABWATCH_PROMPT = (
 )
 
 _CACHE: Optional[Tuple[float, dict]] = None
+_FAILED_AT: Optional[float] = None
 
 
 def labwatch_url() -> str:
@@ -119,21 +121,31 @@ def labwatch_url() -> str:
 
 
 def fetch_public(url: Optional[str] = None, timeout: float = FETCH_TIMEOUT_S) -> Optional[dict]:
-    """The feed's JSON, or None when it does not answer. Successes only are cached.
+    """The feed's JSON, or the last numbers it gave, or None when there are none.
 
-    An explicit ``url`` never reads or writes the cache: it is a test or another lab, and its
-    numbers must not be served to the page as if they were this one's."""
-    global _CACHE
-    if url is None and _CACHE is not None and time.time() - _CACHE[0] < CACHE_TTL_S:
+    A failure is cached too (FAILURE_TTL_S): while labwatch is down a page load must not
+    wait the full fetch timeout every time. During that window the last good payload is served
+    even if it is older than CACHE_TTL_S — stale numbers beat no numbers, and the page cannot
+    tell the difference. An explicit ``url`` reads and writes nothing: it is a test or another
+    lab, and its numbers must not be served to the page as if they were this one's."""
+    global _CACHE, _FAILED_AT
+    now = time.time()
+    if url is None and _CACHE is not None and now - _CACHE[0] < CACHE_TTL_S:
         return _CACHE[1]
+    if url is None and _FAILED_AT is not None and now - _FAILED_AT < FAILURE_TTL_S:
+        return _CACHE[1] if _CACHE is not None else None
     try:
         response = httpx.get(url or labwatch_url(), timeout=timeout)
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError, OSError):
+        if url is None:
+            _FAILED_AT = time.time()
+            return _CACHE[1] if _CACHE is not None else None
         return None
     if url is None:
         _CACHE = (time.time(), payload)
+        _FAILED_AT = None
     return payload
 
 

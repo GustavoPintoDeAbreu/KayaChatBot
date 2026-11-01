@@ -7,6 +7,8 @@ the landing page's own project ids."""
 import sys
 from pathlib import Path
 
+import pytest
+
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
@@ -71,3 +73,54 @@ def test_render_injection_escapes_html():
 
 def test_fetch_public_returns_none_when_unreachable():
     assert showcase_metrics.fetch_public(url="http://127.0.0.1:1/", timeout=0.2) is None
+
+
+@pytest.fixture
+def offline_feed(monkeypatch):
+    """An unreachable feed, counted: the point of the failure cache is fewer fetches."""
+    monkeypatch.setattr(showcase_metrics, "_CACHE", None)
+    monkeypatch.setattr(showcase_metrics, "_FAILED_AT", None)
+    counts = {"get": 0}
+
+    def down(*args, **kwargs):
+        counts["get"] += 1
+        raise showcase_metrics.httpx.ConnectError("labwatch is down")
+
+    monkeypatch.setattr(showcase_metrics.httpx, "get", down)
+    return counts
+
+
+def test_a_failed_fetch_is_cached_so_the_next_load_is_fast(offline_feed):
+    """While labwatch is down a page load must not wait the fetch timeout every time."""
+    assert showcase_metrics.fetch_public() is None
+    assert showcase_metrics.fetch_public() is None
+    assert showcase_metrics.fetch_public() is None
+    assert offline_feed["get"] == 1
+
+
+@pytest.fixture
+def stale_then_down(monkeypatch):
+    """A cache holding numbers older than CACHE_TTL_S, with the feed now down."""
+    import time
+
+    monkeypatch.setattr(showcase_metrics, "_FAILED_AT", None)
+    good = {"lab": {"stats": {"electricity_kwh_this_week": 12.0}}}
+    monkeypatch.setattr(showcase_metrics, "_CACHE", (time.time() - showcase_metrics.CACHE_TTL_S - 1, good))
+    counts = {"get": 0}
+
+    def down(*args, **kwargs):
+        counts["get"] += 1
+        raise showcase_metrics.httpx.ConnectError("labwatch is down")
+
+    monkeypatch.setattr(showcase_metrics.httpx, "get", down)
+    return good, counts
+
+
+def test_the_last_good_numbers_survive_a_failure(stale_then_down):
+    """Past the success TTL the feed is asked again; if it is down, the stale numbers go out —
+    and the failure is cached, so the next load does not pay the timeout either."""
+    good, counts = stale_then_down
+    assert showcase_metrics.fetch_public() == good
+    assert counts["get"] == 1
+    assert showcase_metrics.fetch_public() == good
+    assert counts["get"] == 1

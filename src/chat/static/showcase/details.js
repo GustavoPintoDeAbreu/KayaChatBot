@@ -105,6 +105,19 @@
     body.appendChild(list);
   }
 
+  // A refused clipboard leaves the text on screen and selected, so it can still be copied by hand.
+  function select(element) {
+    try {
+      var selection = window.getSelection();
+      if (!selection || !element.firstChild) return;
+      var range = document.createRange();
+      range.setStartBefore(element.firstChild);
+      range.setEndAfter(element.lastChild);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (e) {}
+  }
+
   function appendPrompt(project, language) {
     if (project !== 'labwatch') return;
     var text = (data.prompt || {}).labwatch;
@@ -121,10 +134,15 @@
     button.addEventListener('click', function () {
       box.className = 'prompt-box show';
       try {
-        navigator.clipboard.writeText(text);
-        button.textContent = LABELS[language].copied;
-        window.setTimeout(function () { button.textContent = LABELS[language].get; }, 2000);
-      } catch (e) {}
+        navigator.clipboard.writeText(text).then(
+            function () {
+              button.textContent = LABELS[language].copied;
+              window.setTimeout(function () { button.textContent = LABELS[language].get; }, 2000);
+            },
+            function () { select(box); });
+      } catch (e) {
+        select(box);
+      }
     });
   }
 
