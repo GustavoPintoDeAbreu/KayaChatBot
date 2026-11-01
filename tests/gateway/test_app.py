@@ -200,6 +200,14 @@ def test_early_wake_is_in_the_internal_status_only(rig):
     assert TestClient(gateway.public_app).get("/status").status_code == 404
 
 
+@pytest.fixture(autouse=True)
+def _no_labwatch(monkeypatch):
+    """The showcase injection reads labwatch's LAN feed; no test may reach it."""
+    import src.chat.showcase_metrics as sm
+
+    monkeypatch.setattr(sm, "fetch_public", lambda *a, **k: None)
+
+
 def test_public_app_serves_the_page_and_no_status(rig):
     """2026-10-27: /status left the public app (it told anyone when the PC was on)."""
     gateway, *_ = rig
@@ -209,6 +217,15 @@ def test_public_app_serves_the_page_and_no_status(rig):
     assert client.get("/docs").status_code == 404
     assert client.post("/waha/webhook", json={}).status_code in (404, 405)
     assert TestClient(gateway.internal_app).get("/status").json()["pc_online"] is True
+
+
+def test_public_app_injects_showcase_data(rig):
+    """The page carries labwatch's numbers by the time it is served: the fetch happens in the
+    server, so a browser never needs the LAN (the autouse fixture stands in for that feed)."""
+    gateway, *_ = rig
+    text = TestClient(gateway.public_app).get("/").text
+    assert "window.KAYA_SHOWCASE" in text
+    assert "kaya" in text
 
 
 def test_public_responses_carry_security_headers(rig):

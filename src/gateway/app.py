@@ -36,6 +36,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from src.chat import static_assets
+from src.chat import showcase_metrics
 from src.chat.stt import rewrite_media_url
 from src.chat.whatsapp_adapter import (
     InboundMessage,
@@ -409,6 +410,8 @@ class Gateway:
             if not page.exists():
                 raise HTTPException(status_code=404)
             html = page.read_text(encoding="utf-8")
+            view = showcase_metrics.build_view(showcase_metrics.fetch_public())
+            html = showcase_metrics.inject(html, view)
             return HTMLResponse(html, headers={"Content-Security-Policy": static_assets.page_csp(html)})
 
         @app.get("/assets/{name}")
