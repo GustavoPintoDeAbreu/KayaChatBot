@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.gateway.app import Gateway, GatewaySettings
 from src.gateway.homelab import (
-    ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE, BRUTE_ASK, BRUTE_STARTED,
+    ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE, BRUTE_ASK, BRUTE_ASK_WAITING,
+    BRUTE_STARTED,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
     QC_ALREADY, QC_FAILED, QC_NOT_RUNNING, QC_PC_OFF, QC_STARTED, QC_STARTED_NO_LINK, QC_STOPPED, QC_USAGE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
@@ -732,12 +733,23 @@ def test_homelaboff_bruteforce_when_already_off(rig):
     assert sent[0][1] == f"{HOMELAB_TAG} " + ALREADY_OFF
 
 
-def test_homelaboff_bruteforce_already_waiting(rig):
+def test_homelaboff_bruteforce_overrides_a_waiting_shutdown(rig):
+    """28 Oct 2026: /homelaboff waited an hour; the hard off is for exactly that."""
     gateway, _, _, sent, pc, homelab = rig
     pc.status_by_path["/power/status"] = (200, {"busy": [], "notes": [], "manual": "waiting"})
-    assert _post(gateway, _message("b11", "/homelaboff_bruteforce")) == {"homelab": "offbrute-waiting"}
-    assert sent[0][1] == f"{HOMELAB_TAG} " + ALREADY_WAITING
+    assert _post(gateway, _message("b11", "/homelaboff_bruteforce")) == {"homelab": "offbrute-asked"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + BRUTE_ASK_WAITING
+    assert _post(gateway, _message("b11y", "yes")) == {"homelab": "offbrute-started"}
+    assert pc.calls[-1][0] == "POST" and pc.calls[-1][1].endswith("/power/off-bruteforce")
     assert homelab.active_chat() == OWNER
+
+
+def test_homelaboff_bruteforce_yes_while_already_stopping(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/power/off-bruteforce"] = (409, {"started": False, "phase": "stopping"})
+    _post(gateway, _message("b15", "/homelaboff_bruteforce"))
+    assert _post(gateway, _message("b16", "yes")) == {"homelab": "offbrute-stopping"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + ALREADY_STOPPING
 
 
 def test_homelaboff_bruteforce_already_stopping(rig):

@@ -40,6 +40,7 @@ HELP_TEXT = (
     "Por DM (só tu):\n"
     "- /idea <texto> — ideia para o pipeline\n"
     "- /homelaboff · /homelabon · /homelabrc [home] — ligar/desligar o PC\n"
+    "- /homelaboff_bruteforce — desligar o PC já, sem esperar por nada (pede um sim)\n"
     "- /help — esta lista"
 )
 

@@ -64,6 +64,9 @@ NOTES = "\n\nNotes:\n{items}"
 BRUTE_ASK = ('Hard shutdown: power off at once, skipping every wait. CI, GPU, Qwen runs and '
              'the audit do not hold it; Kaya finishes any reply in progress first.\n'
              'Shut down now? Reply "yes" within 5 min, or "no".')
+BRUTE_ASK_WAITING = ('A shutdown is already waiting for jobs. Hard shutdown: power off now anyway, skipping '
+                     'every wait? Kaya finishes any reply in progress first.\n'
+                     'Reply "yes" within 5 min, or "no".')
 BRUTE_STARTED = "OK. Powering off now. /homelabon wakes it."
 ALREADY_WAITING = 'A shutdown is already waiting for jobs. Reply "cancel" to stop it.'
 ALREADY_STOPPING = "The PC is already shutting down."
@@ -337,9 +340,11 @@ class HomelabPower:
             return {"homelab": "offbrute-unreachable"}
         manual = body.get("manual")
         if manual == "waiting":
-            self._set_active(msg.chat_id)
-            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_WAITING, msg.message_id)
-            return {"homelab": "offbrute-waiting"}
+            # The hard off exists for exactly this: a /homelaboff stuck waiting (28 Oct 2026).
+            self._pending.pop(msg.chat_id, None)
+            self._pending_bruteforce[msg.chat_id] = self._now()
+            await asyncio.to_thread(self._say, msg.chat_id, BRUTE_ASK_WAITING, msg.message_id)
+            return {"homelab": "offbrute-asked"}
         if manual == "stopping":
             await asyncio.to_thread(self._say, msg.chat_id, ALREADY_STOPPING, msg.message_id)
             return {"homelab": "offbrute-stopping"}
@@ -380,8 +385,9 @@ class HomelabPower:
             await asyncio.to_thread(self._say, msg.chat_id, BRUTE_STARTED, msg.message_id)
             return {"homelab": "offbrute-started"}
         if status == 409:
-            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_WAITING, msg.message_id)
-            return {"homelab": "offbrute-waiting"}
+            # The listener refuses only while the PC is already stopping.
+            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_STOPPING, msg.message_id)
+            return {"homelab": "offbrute-stopping"}
         await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=f"HTTP {status}"),
                                 msg.message_id)
         return {"homelab": "offbrute-unreachable"}
