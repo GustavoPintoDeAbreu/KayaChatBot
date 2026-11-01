@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.gateway.app import Gateway, GatewaySettings
 from src.gateway.homelab import (
-    ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE,
+    ALREADY_OFF, ALREADY_ON, ALREADY_STOPPING, ALREADY_WAITING, ASK_BUSY, ASK_IDLE, BRUTE_ASK, BRUTE_ASK_WAITING,
+    BRUTE_STARTED,
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
     QC_ALREADY, QC_FAILED, QC_NOT_RUNNING, QC_PC_OFF, QC_STARTED, QC_STARTED_NO_LINK, QC_STOPPED, QC_USAGE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
@@ -48,6 +49,7 @@ class FakePc:
         self.status_by_path = {
             "/power/status": (200, {"busy": [], "notes": [], "manual": "idle"}),
             "/power/off": (202, {"started": True}),
+            "/power/off-bruteforce": (202, {"started": True}),
             "/power/cancel": (200, {"cancelled": True}),
             "/rc/start": (200, {"started": True, "name": "homelab-home", "url": RC_URL}),
             "/rc/stop": (200, {"stopped": True}),
@@ -677,3 +679,109 @@ def test_a_bare_yes_without_a_quote_or_quoting_something_else_is_not_sudo(rig):
     assert "seq" in _post(gateway, _message("q4", "yes"))
     assert "seq" in _post(gateway, _message("q5", "yes", quoting=f'sudo on the PC: "yes {code}"'))
     assert _sudo_status(gateway, key).json() == {"status": "pending"}
+
+
+def test_homelaboff_bruteforce_asks_then_yes_powers_off_at_once(rig):
+    gateway, _, _, sent, pc, homelab = rig
+    pc.status_by_path["/power/status"] = (200, {"busy": ["a CI job is running", "a GPU is 90% busy"],
+                                                "notes": ["Kaya is finishing 1 reply"], "manual": "idle"})
+    assert _post(gateway, _message("b1", "/homelaboff_bruteforce")) == {"homelab": "offbrute-asked"}
+    assert pc.calls[0] == ("GET", "http://192.168.1.149:8099/power/status", {"X-Relay-Token": "relay"})
+    assert sent[0] == (OWNER, f"{HOMELAB_TAG} " + BRUTE_ASK, "b1")
+    assert "a CI job is running" not in sent[0][1]
+    assert _post(gateway, _message("b2", "yes")) == {"homelab": "offbrute-started"}
+    assert pc.calls[1][0] == "POST" and pc.calls[1][1].endswith("/power/off-bruteforce")
+    assert homelab.active_chat() == OWNER
+    assert sent[1] == (OWNER, f"{HOMELAB_TAG} " + BRUTE_STARTED, "b2")
+
+
+def test_homelaboff_bruteforce_yes_with_nothing_pending_goes_to_kaya(rig):
+    gateway, _, _, sent, _, _ = rig
+    result = _post(gateway, _message("b3", "yes"))
+    assert "seq" in result and sent == []
+
+
+def test_homelaboff_bruteforce_no_keeps_the_pc_on(rig):
+    gateway, _, _, sent, pc, _ = rig
+    _post(gateway, _message("b4", "/homelaboff_bruteforce"))
+    assert _post(gateway, _message("b5", "no")) == {"homelab": "off-declined"}
+    assert sent[1][1] == f"{HOMELAB_TAG} " + DECLINED
+    assert [call[0] for call in pc.calls] == ["GET"]
+    assert "seq" in _post(gateway, _message("b6", "yes"))
+
+
+def test_homelaboff_bruteforce_confirmation_expires(rig):
+    gateway, clock, _, sent, _, _ = rig
+    _post(gateway, _message("b7", "/homelaboff_bruteforce"))
+    clock.value += 301
+    result = _post(gateway, _message("b8", "yes", timestamp=int(clock.value)))
+    assert "seq" in result and len(sent) == 1
+
+
+def test_homelaboff_bruteforce_unreachable_pc_does_nothing(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.raises = True
+    assert _post(gateway, _message("b9", "/homelaboff_bruteforce")) == {"homelab": "offbrute-unreachable"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + UNREACHABLE.format(error="ConnectError")
+
+
+def test_homelaboff_bruteforce_when_already_off(rig):
+    gateway, _, monitor, sent, pc, _ = rig
+    pc.raises = True
+    monitor.observe(PcState.OFFLINE)
+    assert _post(gateway, _message("b10", "/homelaboff_bruteforce")) == {"homelab": "offbrute-already"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + ALREADY_OFF
+
+
+def test_homelaboff_bruteforce_overrides_a_waiting_shutdown(rig):
+    """28 Oct 2026: /homelaboff waited an hour; the hard off is for exactly that."""
+    gateway, _, _, sent, pc, homelab = rig
+    pc.status_by_path["/power/status"] = (200, {"busy": [], "notes": [], "manual": "waiting"})
+    assert _post(gateway, _message("b11", "/homelaboff_bruteforce")) == {"homelab": "offbrute-asked"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + BRUTE_ASK_WAITING
+    assert _post(gateway, _message("b11y", "yes")) == {"homelab": "offbrute-started"}
+    assert pc.calls[-1][0] == "POST" and pc.calls[-1][1].endswith("/power/off-bruteforce")
+    assert homelab.active_chat() == OWNER
+
+
+def test_homelaboff_bruteforce_yes_while_already_stopping(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/power/off-bruteforce"] = (409, {"started": False, "phase": "stopping"})
+    _post(gateway, _message("b15", "/homelaboff_bruteforce"))
+    assert _post(gateway, _message("b16", "yes")) == {"homelab": "offbrute-stopping"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + ALREADY_STOPPING
+
+
+def test_homelaboff_bruteforce_already_stopping(rig):
+    gateway, _, _, sent, pc, _ = rig
+    pc.status_by_path["/power/status"] = (200, {"busy": [], "notes": [], "manual": "stopping"})
+    assert _post(gateway, _message("b12", "/homelaboff_bruteforce")) == {"homelab": "offbrute-stopping"}
+    assert sent[0][1] == f"{HOMELAB_TAG} " + ALREADY_STOPPING
+
+
+def test_homelaboff_bruteforce_only_the_owner_in_a_dm(rig):
+    gateway, _, _, sent, pc, _ = rig
+    result = _post(gateway, _message("b13", "/homelaboff_bruteforce", chat=ALICE))
+    assert "seq" in result and sent == [] and pc.calls == []
+
+
+def test_homelaboff_bruteforce_from_a_group_is_never_tapped(rig):
+    gateway, _, _, sent, pc, _ = rig
+    result = _post(gateway, _message("b14", "/homelaboff_bruteforce", chat=GROUP, sender=OWNER))
+    assert "seq" in result and sent == [] and pc.calls == []
+
+
+def test_homelaboff_bruteforce_ask_clears_a_normal_pending(rig):
+    gateway, _, _, sent, pc, _ = rig
+    _post(gateway, _message("b15", "/homelaboff"))
+    assert _post(gateway, _message("b16", "/homelaboff_bruteforce")) == {"homelab": "offbrute-asked"}
+    assert _post(gateway, _message("b17", "yes")) == {"homelab": "offbrute-started"}
+    assert pc.calls[2][0] == "POST" and pc.calls[2][1].endswith("/power/off-bruteforce")
+
+
+def test_a_normal_homelaboff_ask_clears_a_bruteforce_pending(rig):
+    gateway, _, _, sent, pc, _ = rig
+    _post(gateway, _message("b18", "/homelaboff_bruteforce"))
+    assert _post(gateway, _message("b19", "/homelaboff")) == {"homelab": "off-asked"}
+    assert _post(gateway, _message("b20", "yes")) == {"homelab": "off-started"}
+    assert pc.calls[2][0] == "POST" and pc.calls[2][1].endswith("/power/off")

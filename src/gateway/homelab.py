@@ -1,5 +1,5 @@
-"""The owner's ``/homelaboff``, ``/homelabon``, ``/homelabrc`` and ``/homelabqc`` DMs go
-to the PC's power listener, not to Kaya.
+"""The owner's ``/homelaboff``, ``/homelaboff_bruteforce``, ``/homelabon``, ``/homelabrc`` and
+``/homelabqc`` DMs go to the PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
 makes that possible from the phone, from anywhere. The gateway is the only
@@ -11,6 +11,7 @@ answered by Kaya.
 It claims, in DMs only:
 
 - the owner's ``/homelaboff`` (ask what is running, then confirm),
+  the owner's ``/homelaboff_bruteforce`` (ask once, then power off at once, skipping every wait),
   ``/homelabon`` (ask the Pi to send Wake-on-LAN) and ``/homelabrc [home]`` /
   ``/homelabrc stop [home]`` (start or end a Claude Remote Control session on
   the PC, in ``~/Desktop`` or ``~``), and ``/homelabqc [home]`` /
@@ -60,6 +61,13 @@ ASK_BUSY = ('Running on the PC:\n{items}\n\nKaya goes last: her replies in progr
             'Shut down once these finish? Reply "yes" within 5 min, or "no".')
 ASK_IDLE = 'Nothing is running besides Kaya.\nShut down now? Reply "yes" within 5 min, or "no".'
 NOTES = "\n\nNotes:\n{items}"
+BRUTE_ASK = ('Hard shutdown: power off at once, skipping every wait. CI, GPU, Qwen runs and '
+             'the audit do not hold it; Kaya finishes any reply in progress first.\n'
+             'Shut down now? Reply "yes" within 5 min, or "no".')
+BRUTE_ASK_WAITING = ('A shutdown is already waiting for jobs. Hard shutdown: power off now anyway, skipping '
+                     'every wait? Kaya finishes any reply in progress first.\n'
+                     'Reply "yes" within 5 min, or "no".')
+BRUTE_STARTED = "OK. Powering off now. /homelabon wakes it."
 ALREADY_WAITING = 'A shutdown is already waiting for jobs. Reply "cancel" to stop it.'
 ALREADY_STOPPING = "The PC is already shutting down."
 ALREADY_OFF = "The PC is already off. /homelabon wakes it."
@@ -141,6 +149,7 @@ class HomelabPower:
     pause: Callable[[float], Awaitable[None]] = asyncio.sleep   # the wait between session retries
     _seen: Set[str] = field(default_factory=set)
     _pending: Dict[str, float] = field(default_factory=dict)      # chat_id -> asked at
+    _pending_bruteforce: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at
     _waking: Dict[str, float] = field(default_factory=dict)       # chat_id -> requested at
     _journal: Optional[Journal] = None
     _monitor: Optional[PcMonitor] = None
@@ -190,7 +199,7 @@ class HomelabPower:
 
     def classify(self, msg: InboundMessage) -> Optional[str]:
         """``"off"``/``"on"``/``"rc"``/``"sudo"``/``"confirm"``/``"decline"``/``"cancel"``/``"echo"``,
-        or None to leave the message to Kaya."""
+        ``"off-bruteforce"``/``"confirm-bruteforce"``, or None to leave the message to Kaya."""
         if msg.is_group:
             return None
         text = (msg.text or "").strip()
@@ -201,6 +210,8 @@ class HomelabPower:
         first = text.split(maxsplit=1)[0].lower() if text else ""
         if first == "/homelaboff":
             return "off"
+        if first == "/homelaboff_bruteforce":
+            return "off-bruteforce"
         if first == "/homelabon":
             return "on"
         if first == "/homelabrc":
@@ -214,6 +225,12 @@ class HomelabPower:
         if asked is not None and self._now() - asked <= CONFIRM_TTL_SECONDS:
             if word in CONFIRM_WORDS:
                 return "confirm"
+            if word in CANCEL_WORDS:
+                return "decline"
+        brute_asked = self._pending_bruteforce.get(msg.chat_id)
+        if brute_asked is not None and self._now() - brute_asked <= CONFIRM_TTL_SECONDS:
+            if word in CONFIRM_WORDS:
+                return "confirm-bruteforce"
             if word in CANCEL_WORDS:
                 return "decline"
         if word in CANCEL_WORDS and self.active_chat():
@@ -232,8 +249,12 @@ class HomelabPower:
             return {"homelab": "stale"}
         if kind == "off":
             return await self._off(msg)
+        if kind == "off-bruteforce":
+            return await self._off_bruteforce(msg)
         if kind == "confirm":
             return await self._confirm(msg)
+        if kind == "confirm-bruteforce":
+            return await self._confirm_bruteforce(msg)
         if kind == "decline":
             return await self._decline(msg)
         if kind == "cancel":
@@ -295,9 +316,42 @@ class HomelabPower:
             text = ASK_IDLE
         if notes:
             text += NOTES.format(items="\n".join(f"- {note}" for note in notes))
+        self._pending_bruteforce.pop(msg.chat_id, None)
         self._pending[msg.chat_id] = self._now()
         await asyncio.to_thread(self._say, msg.chat_id, text, msg.message_id)
         return {"homelab": "off-asked"}
+
+    async def _off_bruteforce(self, msg: InboundMessage) -> Dict[str, Any]:
+        try:
+            status, body = await self._request("GET", "/power/status")
+        except (httpx.HTTPError, OSError) as exc:
+            if self._monitor.state in (PcState.OFFLINE, PcState.GOING_DOWN):
+                await asyncio.to_thread(self._say, msg.chat_id, ALREADY_OFF, msg.message_id)
+                return {"homelab": "offbrute-already"}
+            await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "offbrute-unreachable"}
+        if status != 200:
+            if self._monitor.state in (PcState.OFFLINE, PcState.GOING_DOWN):
+                await asyncio.to_thread(self._say, msg.chat_id, ALREADY_OFF, msg.message_id)
+                return {"homelab": "offbrute-already"}
+            await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=f"HTTP {status}"),
+                                    msg.message_id)
+            return {"homelab": "offbrute-unreachable"}
+        manual = body.get("manual")
+        if manual == "waiting":
+            # The hard off exists for exactly this: a /homelaboff stuck waiting (28 Oct 2026).
+            self._pending.pop(msg.chat_id, None)
+            self._pending_bruteforce[msg.chat_id] = self._now()
+            await asyncio.to_thread(self._say, msg.chat_id, BRUTE_ASK_WAITING, msg.message_id)
+            return {"homelab": "offbrute-asked"}
+        if manual == "stopping":
+            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_STOPPING, msg.message_id)
+            return {"homelab": "offbrute-stopping"}
+        self._pending.pop(msg.chat_id, None)
+        self._pending_bruteforce[msg.chat_id] = self._now()
+        await asyncio.to_thread(self._say, msg.chat_id, BRUTE_ASK, msg.message_id)
+        return {"homelab": "offbrute-asked"}
 
     async def _confirm(self, msg: InboundMessage) -> Dict[str, Any]:
         self._pending.pop(msg.chat_id, None)
@@ -318,8 +372,29 @@ class HomelabPower:
                                 msg.message_id)
         return {"homelab": "off-unreachable"}
 
+    async def _confirm_bruteforce(self, msg: InboundMessage) -> Dict[str, Any]:
+        self._pending_bruteforce.pop(msg.chat_id, None)
+        try:
+            status, _ = await self._request("POST", "/power/off-bruteforce")
+        except (httpx.HTTPError, OSError) as exc:
+            await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "offbrute-unreachable"}
+        if status == 202:
+            self._set_active(msg.chat_id)
+            await asyncio.to_thread(self._say, msg.chat_id, BRUTE_STARTED, msg.message_id)
+            return {"homelab": "offbrute-started"}
+        if status == 409:
+            # The listener refuses only while the PC is already stopping.
+            await asyncio.to_thread(self._say, msg.chat_id, ALREADY_STOPPING, msg.message_id)
+            return {"homelab": "offbrute-stopping"}
+        await asyncio.to_thread(self._say, msg.chat_id, UNREACHABLE.format(error=f"HTTP {status}"),
+                                msg.message_id)
+        return {"homelab": "offbrute-unreachable"}
+
     async def _decline(self, msg: InboundMessage) -> Dict[str, Any]:
         self._pending.pop(msg.chat_id, None)
+        self._pending_bruteforce.pop(msg.chat_id, None)
         await asyncio.to_thread(self._say, msg.chat_id, DECLINED, msg.message_id)
         return {"homelab": "off-declined"}
 
@@ -549,6 +624,10 @@ class HomelabPower:
                  if self._now() - asked > CONFIRM_TTL_SECONDS]
         for chat in stale:
             del self._pending[chat]
+        brute_stale = [chat for chat, asked in self._pending_bruteforce.items()
+                       if self._now() - asked > CONFIRM_TTL_SECONDS]
+        for chat in brute_stale:
+            del self._pending_bruteforce[chat]
         return online
 
     async def watch(self, stop: asyncio.Event, interval: float = 10.0) -> None:
