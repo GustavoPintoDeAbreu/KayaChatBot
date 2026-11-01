@@ -25,6 +25,7 @@ CONFIG = {"chat": {"birthdays": {
     "enabled": True,
     "windows": {"midnight": ["00:00", "11:00"], "noon": ["12:00", "18:00"]},
     "messages": {"midnight": ["Parabéns {tag}!"], "noon": ["Ninguém deu os parabéns ao {tag}?"]},
+    "missing": {"enabled": True, "line": "faltam: {missing}"},
 }}}
 ROSTER = {
     "Fred": {"date": "06-29", "aliases": ["fred", "frederico"], "jid": "111@lid"},
@@ -87,6 +88,45 @@ def test_the_midnight_line_tags_the_member_once(greeter):
     clock.value = _at(2026, 6, 29, 0, 2)
     assert instance.tick() == []
     assert len(sent) == 1
+
+
+def test_midnight_greeting_asks_for_the_missing_birthdays(greeter):
+    instance, clock, sent, _, roster = greeter
+    roster["value"]["Gil"] = {"date": "", "aliases": ["gil"], "jid": ""}
+    roster["value"]["Rafa"] = {"date": "", "aliases": [], "jid": ""}
+    instance.refresh_roster(force=True)
+    assert instance.tick() == ["Fred:midnight sent"]
+    assert sent == [(GENERAL, "Parabéns @111!\nfaltam: Gil, Rafa", ["111@lid"])]
+
+
+def test_the_noon_nudge_does_not_repeat_the_ask(greeter):
+    instance, clock, sent, journal, roster = greeter
+    instance.tick()
+    roster["value"]["Gil"] = {"date": "", "aliases": ["gil"], "jid": ""}
+    instance.refresh_roster(force=True)
+    _journal(journal, _message("m1", "bom dia malta", timestamp=_at(2026, 6, 29, 9)),
+             _at(2026, 6, 29, 9))
+    clock.value = _at(2026, 6, 29, 12, 30)
+    assert instance.tick() == ["Fred:noon sent"]
+    assert sent[-1] == (GENERAL, "Ninguém deu os parabéns ao @111?", ["111@lid"])
+
+
+def test_the_missing_ask_can_be_disabled(greeter):
+    instance, clock, sent, _, roster = greeter
+    instance._settings["missing"]["enabled"] = False
+    roster["value"]["Gil"] = {"date": "", "aliases": ["gil"], "jid": ""}
+    instance.refresh_roster(force=True)
+    assert instance.tick() == ["Fred:midnight sent"]
+    assert sent == [(GENERAL, "Parabéns @111!", ["111@lid"])]
+
+
+def test_a_member_without_a_date_is_never_greeted(greeter):
+    instance, clock, sent, _, roster = greeter
+    roster["value"]["Gil"] = {"date": "", "aliases": ["gil"], "jid": "222@lid"}
+    instance.refresh_roster(force=True)
+    clock.value = _at(2026, 2, 6, 0, 1)
+    assert instance.tick() == []
+    assert sent == []
 
 
 def test_a_member_with_no_id_is_named_not_tagged():

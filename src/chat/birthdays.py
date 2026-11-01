@@ -127,12 +127,14 @@ DEFAULT_WINDOWS = {
     "midnight": ("00:00", "11:00"),
     "noon": ("12:00", "18:00"),
 }
+DEFAULT_MISSING_LINE = "btw, ainda me faltam os aniversários de: {missing}"
 
 
 def settings(config: Dict[str, Any]) -> Dict[str, Any]:
     raw = ((config.get("chat", {}) or {}).get("birthdays", {}) or {})
     messages = raw.get("messages", {}) or {}
     windows = raw.get("windows", {}) or {}
+    missing = raw.get("missing", {}) or {}
     return {
         "enabled": bool(raw.get("enabled", False)),
         "store": raw.get("store", "data/birthdays.json"),
@@ -140,6 +142,10 @@ def settings(config: Dict[str, Any]) -> Dict[str, Any]:
         "messages": {slot: [str(line) for line in (messages.get(slot) or DEFAULT_MESSAGES[slot])]
                      for slot in SLOTS},
         "windows": {slot: tuple(windows.get(slot) or DEFAULT_WINDOWS[slot]) for slot in SLOTS},
+        "missing": {
+            "enabled": bool(missing.get("enabled", True)),
+            "line": str(missing.get("line") or DEFAULT_MISSING_LINE),
+        },
     }
 
 
@@ -277,6 +283,21 @@ def due(dates: Dict[str, Tuple[str, str]], state: "GreetingState", now: datetime
             if not state.sent(now.year, f"{member}:{slot}")]
 
 
+def _member_names(members_data: Optional[Dict[str, Any]]) -> List[str]:
+    """Every member name in the profiles: sorted, no empties, no duplicates."""
+    return sorted({str(member.get("name"))
+                   for member in (members_data or {}).get("members", []) or []
+                   if member.get("name")})
+
+
+def _jid_for(ids: Dict[str, List[str]], member: str) -> str:
+    """The id to tag: the member's ``@lid`` when there is one, else phone ``@c.us``, else ""."""
+    known = ids.get(member, [])
+    lid = next((value for value in known if value.endswith("@lid")), "")
+    phone = next((value for value in known if value.isdigit()), "")
+    return lid or (f"{phone}@c.us" if phone else "")
+
+
 def roster(config: Dict[str, Any], config_dir: Optional[Path] = None,
            contacts: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     """What the Pi needs to greet: ``{member: {date, aliases, jid}}``.
@@ -285,6 +306,9 @@ def roster(config: Dict[str, Any], config_dir: Optional[Path] = None,
     the member's ``@lid`` when there is one, since that is what WhatsApp puts in
     a group mention now, else their phone as ``@c.us``. No id means the greeting
     names them instead of tagging them.
+
+    Members with no known birthday are carried too, as ``date: ""``, so the Pi can
+    ask the group for the dates it still needs. They are never greeted.
     """
     dates = load_dates(config, config_dir)
     members = _members(config, config_dir) or {}
@@ -295,14 +319,15 @@ def roster(config: Dict[str, Any], config_dir: Optional[Path] = None,
         ids[name].append(str(raw_id))
     result = {}
     for member, (month_day, _) in dates.items():
-        known = ids.get(member, [])
-        lid = next((value for value in known if value.endswith("@lid")), "")
-        phone = next((value for value in known if value.isdigit()), "")
         result[member] = {
             "date": month_day,
             "aliases": aliases.get(member, []),
-            "jid": lid or (f"{phone}@c.us" if phone else ""),
+            "jid": _jid_for(ids, member),
         }
+    for member in _member_names(members):
+        if member not in result:
+            result[member] = {"date": "", "aliases": aliases.get(member, []),
+                              "jid": _jid_for(ids, member)}
     return result
 
 

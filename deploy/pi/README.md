@@ -73,7 +73,10 @@ disk.
 `src/gateway/birthdays.py` posts a fixed line at 00:00 to
 `GATEWAY_BIRTHDAY_CHAT` (the general group), tagging the member, and a nudge at
 12:00 only if nobody has said parabéns since midnight. The lines and windows are
-`chat.birthdays` in `config.yaml`. The dates come from the PC
+`chat.birthdays` in `config.yaml`. The midnight line also carries a fixed ask
+(`chat.birthdays.missing`) naming the members whose birthday the bot still needs,
+plain names and nobody tagged; the roster carries them with `date: ""`.
+The dates come from the PC
 (`GET /whatsapp/relay/birthdays`, pulled every 30 min while the PC answers) and
 the last copy is kept in `data/gateway/birthdays.json`, so it works with the PC
 off. What was sent is in `data/gateway/birthday_state.json`; `/status` on the

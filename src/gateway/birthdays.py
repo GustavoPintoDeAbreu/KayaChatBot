@@ -124,6 +124,16 @@ class BirthdayGreeter:
                 return True
         return False
 
+    def _missing_line(self, roster: Dict[str, Dict[str, Any]]) -> str:
+        """The ask for the birthdays still missing, or "" when there are none / disabled."""
+        cfg = self._settings["missing"]
+        if not cfg["enabled"]:
+            return ""
+        names = sorted(member for member, entry in roster.items() if not entry.get("date"))
+        if not names:
+            return ""
+        return cfg["line"].format(missing=", ".join(names))
+
     # ── one pass ──────────────────────────────────────────────────────────────
     def tick(self) -> List[str]:
         """Send whatever is due now. Returns ``["member:slot sent|skipped"]``."""
@@ -133,6 +143,7 @@ class BirthdayGreeter:
         dates = {member: (str(entry.get("date") or ""), "")
                  for member, entry in roster.items() if entry.get("date")}
         today = birthdays.birthdays_on(dates, now.date())
+        missing_line = self._missing_line(roster)
         midnight = datetime.datetime.combine(now.date(), datetime.time(0, 0),
                                              tzinfo=self._timezone).timestamp()
         done = []
@@ -147,6 +158,8 @@ class BirthdayGreeter:
                     continue
                 tag, mentions = tag_for(member, entry)
                 text = self._rng.choice(self._settings["messages"][slot]).format(tag=tag)
+                if slot == "midnight" and missing_line:
+                    text = f"{text}\n{missing_line}"
                 try:
                     self._send_text(self.chat_id, text, mentions)
                 except Exception as exc:  # noqa: BLE001 — retried on the next tick
