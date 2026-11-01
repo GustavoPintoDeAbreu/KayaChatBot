@@ -565,6 +565,11 @@ chat:
         - "Já é meio-dia e ainda ninguém deu os parabéns ao {tag}? 👀🎂"
         - "Malta, hoje faz anos o {tag} e isto está muito calado 👀 Parabéns!"
         - "Lembrete amigo: o {tag} faz anos hoje 🎂 Toca a dar os parabéns!"
+    # The ask the midnight greeting carries for the members whose birthday is still
+    # unknown (plain names, nobody tagged); `missing.enabled: false` drops it.
+    missing:
+      enabled: true
+      line: "btw, ainda me faltam os aniversários de: {missing}"
 
   # ── Polls (src/chat/polls.py) ───────────────────────────────────────────────
   # On since 2026-10-15: scripts/preview_poll.py on the "almoço natal" chat read

@@ -106,6 +106,34 @@ def test_roster_prefers_the_lid_and_falls_back_to_the_phone(tmp_path, monkeypatc
     assert result["Rafa"]["jid"] == ""
 
 
+def test_roster_carries_members_without_a_birthday(tmp_path):
+    store = tmp_path / "b.json"
+    birthdays.BirthdayStore(store).set("Pedro", "07-15", "self")
+    members = tmp_path / "members.json"
+    members.write_text('{"members": [{"name": "Pedro", "aliases": ["pedrito"]},'
+                       ' {"name": "Gil", "aliases": ["gil"]}]}')
+    config = {"chat": {"birthdays": {"enabled": True, "store": str(store)}},
+              "data": {"group_members_file": str(members)}}
+    contacts = {"123@lid": "Pedro", "351922222222": "Gil"}
+    result = birthdays.roster(config, contacts=contacts)
+    assert result["Pedro"]["date"] == "07-15"
+    assert result["Gil"] == {"date": "", "aliases": ["gil"], "jid": "351922222222@c.us"}
+
+
+def test_settings_carry_the_missing_ask_with_a_default():
+    cfg = birthdays.settings({"chat": {"birthdays": {"enabled": True}}})
+    assert cfg["missing"]["enabled"] is True
+    assert "{missing}" in cfg["missing"]["line"]
+
+
+def test_the_shipped_missing_line_names_the_members():
+    from src.config_loader import load_config
+
+    cfg = birthdays.settings(load_config("config.yaml"))
+    assert "{missing}" in cfg["missing"]["line"]
+    assert cfg["missing"]["line"].format(missing="Pedro, Gil").count("Pedro") == 1
+
+
 def test_today_line():
     dates = {"Fred": ("06-29", "self"), "Peter": ("06-29", "mined")}
     assert birthdays.today_line(dates, date(2026, 6, 29)) == "Hoje faz anos: Fred, Peter."
