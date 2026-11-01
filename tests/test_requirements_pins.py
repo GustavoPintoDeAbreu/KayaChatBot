@@ -1,13 +1,16 @@
-"""The requirements.txt pins the 2026-10-26 audit asked for.
+"""The requirements.txt pins the nightly lab-audit asked for (2026-10-26, 2026-11-01).
 
-Four packages had audited CVEs with fixes only in newer releases; the pin must
-name the fixed version (or a floor at it) so a rebuild cannot resolve below it.
+Audited packages with CVEs fixed only in newer releases must be pinned at the
+fixed version or carry a floor at it, so a rebuild cannot resolve below it.
 gradio is gone: every release caps pillow below 13, and only the dev UI used it. The fine-tuning stack (unsloth,
 peft, ...) must be gone, and the serving/teacher pins must stay.
 """
 
 from pathlib import Path
 from typing import Optional
+
+import importlib.metadata
+import re
 
 import pytest
 
@@ -39,10 +42,21 @@ def _lowest_allowed(requirement: Requirement) -> Optional[Version]:
 
 
 FLOORS = {
+    "aiohttp": "3.14.4",
     "anyio": "4.14.2",
+    "brotli": "1.2.1",
     "certifi": "2026.10.19",
+    "filelock": "4.2.1",
+    "fsspec": "2026.6.0",
+    "idna": "3.15",
+    "oauthlib": "4.0.0",
     "pillow": "13.0.0",
+    "pypdf": "6.18.0",
+    "python-multipart": "0.0.30",
     "sentence-transformers": "5.6.0",
+    "starlette": "1.3.1",
+    "transformers": "5.10.0",
+    "urllib3": "2.7.0",
 }
 
 
@@ -67,7 +81,7 @@ def test_gradio_and_its_dev_ui_are_gone():
 
 def test_finetuning_stack_is_gone():
     requirements = _requirements()
-    for name in ("unsloth", "unsloth-zoo", "xformers", "torchao", "trl", "peft"):
+    for name in ("unsloth", "unsloth-zoo", "xformers", "torchao", "trl", "peft", "datasets"):
         assert canonicalize_name(name) not in requirements, (
             f"{name} is fine-tuning-only and must not be installed"
         )
@@ -105,3 +119,29 @@ def test_finetuning_entry_points_are_gone():
         "scripts/heretic_sweep.py",
     ):
         assert not (ROOT / path).exists(), f"{path} is fine-tuning-only"
+
+
+def test_nothing_imports_datasets():
+    pattern = re.compile(r"^\s*(import|from)\s+datasets\b", re.MULTILINE)
+    offenders = []
+    for folder in ("src", "scripts", "tests"):
+        base = ROOT / folder
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            if pattern.search(path.read_text(encoding="utf-8", errors="ignore")):
+                offenders.append(str(path.relative_to(ROOT)))
+    assert not offenders, f"datasets was dropped from requirements.txt but is imported by {offenders}"
+
+
+def test_requirements_do_not_move_torch():
+    match = re.search(r"Pinned against: torch==([0-9][0-9.]*)", (ROOT / "requirements.txt").read_text())
+    assert match, "requirements.txt header no longer names the torch pin"
+    try:
+        installed = importlib.metadata.version("torch")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("torch is not installed here")
+    assert Version(installed).public == Version(match.group(1)).public, (
+        f"torch {installed} is installed, but requirements.txt is pinned against {match.group(1)}; "
+        "a bumped package pulled a different torch"
+    )

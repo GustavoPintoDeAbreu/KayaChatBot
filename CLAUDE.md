@@ -1423,6 +1423,7 @@ Prod serves generation from the `llama` compose service (`gguf` profile) with `K
 - `transformers` stays for the tokenizer only (`engine._load_model`); nothing loads model weights in the app process.
 - `accelerate` and `bitsandbytes` stay for the local teacher (`src/data/local_teacher.py`, 4-bit, knowledge extraction).
 - Security floors from the nightly lab-audit (2026-10-26): `anyio>=4.14.2`, `certifi>=2026.10.19`, `pillow>=13.0.0`, `sentence-transformers==5.6.0`. `gradio` moved off 6.15.1, which capped pillow below 13.
+- Security floors from the lab-audit of 2026-11-01: `aiohttp>=3.14.4`, `brotli>=1.2.1`, `filelock>=4.2.1`, `fsspec>=2026.6.0`, `idna>=3.15`, `oauthlib>=4.0.0`, `python-multipart>=0.0.30`, `starlette>=1.3.1`, `urllib3>=2.7.0`; `transformers` and `pypdf` pinned past their fixes (5.10.0, 6.18.0). `datasets` was dropped (nothing imports it since fine-tuning went; it also capped `fsspec`). numpy 2.5.4, pandas 3.1.0, scipy 1.18.1 and scikit-learn 1.9.1 were kept only after the kaya-test suite passed on them; `tests/test_requirements_pins.py::test_requirements_do_not_move_torch` fails if a bump pulls a different torch than the Dockerfile's.
 
 ---
 
