@@ -26,7 +26,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from src.config_loader import load_config
@@ -40,8 +39,6 @@ from src.chat import metrics
 from src.chat import feedback
 from src.chat import poll_votes
 from src.chat import chats_mcp
-from src.chat import static_assets
-from src.chat import showcase_metrics
 from src.chat.web_search import CITATION_PREFIX
 
 # WAHA event names that carry an emoji reaction (engine-dependent spelling).
@@ -1003,32 +1000,9 @@ def relay_birthdays(x_relay_token: str = Header(default="")):
     return {"members": birthdays.roster(config, Path(config_path).parent, contacts=contacts)}
 
 
-# The public showcase page. "/" shows the Kaya ecosystem to anyone, with no login;
-# the Pi gateway serves the same file to the internet.
-_LANDING = Path(__file__).parent / "static" / "landing.html"
-_ASSETS = Path(__file__).parent / "static" / "showcase"
-
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def landing() -> HTMLResponse:
-    """The showcase page with labwatch's numbers injected server-side: the browser never
-    reaches the LAN, and the inline <script> is allowed by its CSP hash."""
-    try:
-        html = _LANDING.read_text(encoding="utf-8")
-    except OSError:
-        raise HTTPException(status_code=404)
-    view = showcase_metrics.build_view(showcase_metrics.fetch_public())
-    html = showcase_metrics.inject(html, view)
-    return HTMLResponse(html, headers={"Content-Security-Policy": static_assets.page_csp(html)})
-
-
-@app.get("/assets/{name}", include_in_schema=False)
-async def showcase_asset(name: str) -> FileResponse:
-    path = static_assets.asset_path(_ASSETS, name)
-    if path is None:
-        raise HTTPException(status_code=404)
-    return FileResponse(path, media_type=static_assets.media_type(path),
-                        headers=static_assets.headers_for(path))
+# The public showcase page (sigmakayachat.pt "/" and "/assets/<name>") is served only by the Pi
+# gateway (src/gateway/app.py), which Cloudflare routes all public traffic to. This app served a
+# copy on :7860 that nothing reached; it was removed on 2026-11-02.
 
 
 if __name__ == "__main__":
