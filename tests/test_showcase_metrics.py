@@ -1,7 +1,8 @@
 """The showcase page's injected numbers: what the page gets, and what it must never get.
 
 labwatch's LAN feed is unreachable here (and from the browser), so the tests pin both the
-feed mapping and the graceful fallback — flows and prompt with no metric bars. The feed mapping
+feed mapping and the graceful fallback — flows and prompt with no metric bars, and no lab-wide
+numbers standing in for a project's own. The feed mapping
 is pinned both ways: an unreachable feed still yields a page, and a feed that answers lands on
 the landing page's own project ids."""
 import sys
@@ -36,7 +37,7 @@ def test_build_view_without_feed_carries_flows_and_prompt():
         "kaya", "lab-assistant", "lab-notes", "idea-pipeline", "lab-medic", "labwatch",
         "flight-deals", "price-scout", "series-watch", "game-alerts", "redditcast", "subs",
     }
-    assert view["lab"]["stats"] == []
+    assert "lab" not in view
     assert view["products"] == {}
     assert view["prompt"]["labwatch"] == showcase_metrics.LABWATCH_PROMPT
 
@@ -56,12 +57,19 @@ def test_build_view_maps_feed_products_to_landing_ids_and_localises():
          "value": 12}
     ]
     assert "labwatch" not in view["products"]
-    bars = {row["key"]: row for row in view["lab"]["stats"]}
-    electricity = bars["electricity_kwh_this_week"]
-    assert electricity["value"] == 41.5
-    assert electricity["unit"] == " kWh"
-    assert electricity["en"] == "electricity this week"
-    assert electricity["pt"] == "eletricidade esta semana"
+
+
+def test_lab_wide_totals_never_stand_in_for_a_project():
+    """A card with no counters of its own once got the lab's tokens, so every project showed the
+    same numbers; the lab totals are not in the view at all now."""
+    payload = {
+        "lab": {"stats": {"local_ai_tokens_generated_this_week": 123456}},
+        "products": [{"name": "redditcast", "stats": [{"label": "episodes made this week", "value": 1}]}],
+    }
+    view = showcase_metrics.build_view(payload)
+    assert "lab" not in view
+    assert set(view["products"]) == {"redditcast"}
+    assert "123456" not in showcase_metrics.render_injection(view)
 
 
 def test_render_injection_escapes_html():

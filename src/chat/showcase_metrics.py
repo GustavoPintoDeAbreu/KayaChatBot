@@ -3,6 +3,8 @@
 The page is public and the browser must not reach the LAN, so Kaya's server reads labwatch's
 allowlisted feed (GET /api/catalog/public), caches it for ~10 minutes, and injects only those
 numbers into the page as an inline <script> that static_assets.page_csp hashes at serve time.
+Each project shows only its own counters: the feed's lab-wide totals are not passed on, because
+handing them to every card without counters made every project show the same tokens.
 Stdlib + httpx: the Pi gateway imports it (tests/gateway/test_torch_free.py)."""
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import json
 import os
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import httpx
 
@@ -26,15 +28,6 @@ PROJECT_FEED_NAMES: Dict[str, str] = {
     "flight-deals": "flight-deals",
 }
 FEED_NAME_TO_PROJECT: Dict[str, str] = {v: k for k, v in PROJECT_FEED_NAMES.items()}
-
-# (key as LabApi.public emits it, English label, Portuguese label, unit)
-LAB_STATS = [
-    ("local_ai_tokens_generated_this_week", "tokens generated this week", "tokens gerados esta semana", ""),
-    ("local_ai_tokens_read_this_week", "tokens read this week", "tokens lidos esta semana", ""),
-    ("euros_saved_vs_cloud_this_week", "saved vs. the cloud this week", "poupado face à nuvem esta semana", "€"),
-    ("electricity_kwh_this_week", "electricity this week", "eletricidade esta semana", " kWh"),
-    ("electricity_cost_eur_this_week", "electricity cost this week", "custo da eletricidade esta semana", "€"),
-]
 
 # The per-project stats the feed publishes, translated; anything unknown stays English.
 STAT_LABEL_PT: Dict[str, str] = {
@@ -151,12 +144,8 @@ def fetch_public(url: Optional[str] = None, timeout: float = FETCH_TIMEOUT_S) ->
 
 def build_view(payload: Optional[dict]) -> dict:
     """The page's view model from the feed, stable whatever the feed says."""
-    lab_stats: List[dict] = []
     products: Dict[str, Dict[str, list]] = {}
     if payload is not None:
-        lab_values = (payload.get("lab") or {}).get("stats", {})
-        for key, en, pt, unit in LAB_STATS:
-            lab_stats.append({"key": key, "value": lab_values.get(key), "en": en, "pt": pt, "unit": unit})
         for entry in payload.get("products") or []:
             project = FEED_NAME_TO_PROJECT.get(entry.get("name"))
             if project is None:
@@ -167,7 +156,7 @@ def build_view(payload: Optional[dict]) -> dict:
                      for stat in entry.get("stats") or [] if stat.get("value") is not None]
             if stats:
                 products[project] = {"stats": stats}
-    return {"lab": {"stats": lab_stats}, "products": products, "flows": FLOWS,
+    return {"products": products, "flows": FLOWS,
             "prompt": {"labwatch": LABWATCH_PROMPT}}
 
 
@@ -199,10 +188,9 @@ def _dry_run() -> None:
     view = build_view(payload)
     print(f"feed: {labwatch_url()}")
     if payload is None:
-        print("feed unreachable — the page keeps its flows and prompt and shows no metric bars")
+        print("feed unreachable — every metrics card shows its schedule, flow and no counters")
     else:
         print(f"feed answered: {len(view['products'])} projects carry their own stats")
-    print(f"lab-wide stats: {len(view['lab']['stats'])}")
     print(f"flows for {len(view['flows'])} projects; prompt for labwatch")
 
 

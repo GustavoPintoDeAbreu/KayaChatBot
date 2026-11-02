@@ -27,7 +27,7 @@ ASSETS = BASE_DIR / "src" / "chat" / "static" / "showcase"
 LINKEDIN = "https://www.linkedin.com/in/gustavo-abreu-7687b0133/"
 GITHUB = "https://github.com/GustavoPintoDeAbreu"
 
-SCRIPTS = ("scene.js", "motion.js", "details.js")
+SCRIPTS = ("scene.js", "motion.js", "metrics.js")
 
 
 def _css(landing: str) -> str:
@@ -226,7 +226,7 @@ def test_whatsapp_server_serves_the_showcase_assets():
 
 def test_scripts_are_local_assets_that_exist(landing):
     srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"[^>]*>', landing)
-    assert srcs == ["/assets/scene.js", "/assets/motion.js", "/assets/details.js"]
+    assert srcs == ["/assets/scene.js", "/assets/motion.js", "/assets/metrics.js"]
     for src in srcs:
         assert static_assets.asset_path(ASSETS, src[len("/assets/"):]) is not None, src
     assert {p.name for p in ASSETS.iterdir() if p.suffix == ".js"} == set(SCRIPTS)
@@ -311,14 +311,31 @@ def test_scripts_parse():
         assert result.returncode == 0, (name, result.stderr.decode())
 
 
-def test_four_colour_schemes_with_a_switch(landing):
-    css = _css(landing)
-    for n in "1234":
-        assert f'data-set="scheme" data-value="{n}"' in landing
-    assert 'data-value="1" aria-pressed="true"' in landing
-    for n in "234":
-        assert f':root[data-scheme="{n}"]{{' in css
-    assert "kaya:scheme" in landing and "kaya:scheme" in _script("scene.js")
+def test_one_colour_scheme_and_no_switch(landing):
+    """2026-11-02: only the blue scheme stays; the 1-4 switch went with the other three."""
+    assert "data-scheme" not in landing
+    assert 'data-set="scheme"' not in landing
+    assert "kaya:scheme" not in landing
+    for name in SCRIPTS:
+        assert "kaya:scheme" not in _script(name), name
+    assert "--teal:#3edbe3" in _css(landing)
+
+
+def test_clicking_a_card_opens_nothing():
+    """2026-11-02: the full-screen detail panel is gone; the hover overlay is what stays."""
+    for name in SCRIPTS:
+        text = _script(name)
+        assert "detail-panel" not in text, name
+        assert "closest('.project')" not in text, name
+
+
+def test_project_rows_slide_to_their_own_metrics():
+    text = _script("metrics.js")
+    assert "deck-toggle" in text and "deck-track" in text
+    assert "translate3d(-50%,0,0)" in text
+    assert "inert" in text
+    assert "data.lab" not in text
+    assert "products" in text and "flows" in text
 
 
 def test_every_project_has_details_in_both_languages(landing):
