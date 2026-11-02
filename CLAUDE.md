@@ -1405,8 +1405,10 @@ Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resi
 
 | Path | Who gets in | What it is |
 |---|---|---|
-| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images and its two scripts (`scene.js`, `motion.js`, hand-written, no CDN) in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT |
+| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images and its three scripts (`scene.js`, `motion.js`, `metrics.js`, hand-written, no CDN) in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT, one colour scheme |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
+
+**The showcase's project rows slide to their metrics (2026-11-02).** Hovering a card still shows How it works / Built with; clicking opens nothing (the full-screen detail panel is gone). Each row's toggle slides in cards of the same shape with that project's own labwatch counters, its request flow, and, on Labwatch, the idea prompt. A project with no counters shows its schedule and says so: the lab-wide totals once stood in for those, so every card showed the same tokens, and `showcase_metrics` no longer passes them to the page.
 
 **There is no web chat any more (2026-10-23).** The Gradio mount at `/app` was removed: the friends never used it. The dev UI (`web_app.py`, `kaya-dev`) and gradio itself went on 2026-10-26: every gradio release caps pillow below 13, which CVE-2026-112393 needs. `tests/test_landing_page.py` fails if `whatsapp_server` mounts it again.
 

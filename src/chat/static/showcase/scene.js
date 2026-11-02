@@ -214,7 +214,6 @@
   }, { passive: true });
   window.addEventListener('resize', resize);
   document.addEventListener('kaya:lang', build);
-  document.addEventListener('kaya:scheme', readColors);
   if (window.matchMedia) {
     var dark = window.matchMedia('(prefers-color-scheme: dark)');
     if (dark.addEventListener) dark.addEventListener('change', readColors);

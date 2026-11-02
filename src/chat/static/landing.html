@@ -13,9 +13,6 @@
     color-scheme: dark;
   }
   :root{--paper:#141b23;--surface:#1b2530;--surface-2:#22303c;--ink:#dcf6f0;--muted:#98adb5;--faint:#6a7f89;--rule:#2b3a47;--teal:#3edbe3;--teal-soft:#173640;--amber:#3b82f0;--amber-soft:#1b2b4a;--word-1:#e3fbf5;--word-2:#a8eef0;--k-1:#2a66e8;--k-2:#43e6ea;--on-accent:#0d1419}
-  :root[data-scheme="2"]{--paper:#17171b;--surface:#201f25;--surface-2:#28262d;--ink:#fbe8d3;--muted:#b9a896;--faint:#877868;--rule:#33303a;--teal:#f1a94b;--teal-soft:#3a2c1c;--amber:#e8673a;--amber-soft:#3a2119;--word-1:#fff0de;--word-2:#f6cfa4;--k-1:#d9622e;--k-2:#f6b54e;--on-accent:#17130e}
-  :root[data-scheme="3"]{--paper:#170f24;--surface:#20162f;--surface-2:#291d3b;--ink:#ecdffc;--muted:#ab9cc4;--faint:#7b6c93;--rule:#33264a;--teal:#d27cff;--teal-soft:#2f1c45;--amber:#ff5ccf;--amber-soft:#3d1838;--word-1:#f1e6ff;--word-2:#c9a9f5;--k-1:#a64dff;--k-2:#ff5ccf;--on-accent:#150c20}
-  :root[data-scheme="4"]{--paper:#18232a;--surface:#1f2d33;--surface-2:#26363c;--ink:#dfeedd;--muted:#a1b5aa;--faint:#71877d;--rule:#2f4248;--teal:#7cc59a;--teal-soft:#1f3a32;--amber:#dcb86a;--amber-soft:#3a3424;--word-1:#e7f3e2;--word-2:#d9d4a8;--k-1:#3f8f6b;--k-2:#e2c27a;--on-accent:#121b1f}
 
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
@@ -122,25 +119,32 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
   .project:hover .split-ch>span,.linkedin:hover .split-ch>span{transform:translate3d(0,-100%,0)}
 }
 .linkedin:focus-visible .split-ch>span{transform:translate3d(0,-100%,0)}
-.detail-panel{position:fixed;inset:0;z-index:40;background:var(--paper);overflow:auto;transform:translate3d(100%,0,0);transition:transform .45s cubic-bezier(.2,.7,.2,1)}
-.detail-panel.open{transform:translate3d(0,0,0)}
-.detail-close{position:absolute;top:1rem;right:1.5rem;font-family:var(--sans);font-size:1.5rem;border:0;background:none;color:var(--ink);cursor:pointer}
-.detail-close:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
-.detail-body{max-width:46rem;padding:2.5rem 1.5rem 1.5rem;margin:0 auto}
-.detail-body .more{position:static;inset:auto;transform:none;border-top:0;background:transparent;padding:0;overflow:visible}
-.detail-label{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);margin:0 0 .5rem}
-.meters{list-style:none;margin:.4rem 0 0;padding:0;display:grid;gap:.5rem}
-.meter{display:grid;grid-template-columns:1fr 12rem 6rem;gap:.8rem;align-items:center;font-size:.92rem}
-.meter span{color:var(--muted)}
+.deck{overflow:hidden;margin:1.2rem 0}
+.deck-track{display:flex;align-items:flex-start;width:200%;transform:translate3d(0,0,0);transition:transform .55s cubic-bezier(.2,.7,.2,1)}
+.deck-track>.projects{flex:0 0 50%;min-width:0;margin:0}
+.decks-still .deck-track{transition:none}
+.deck-head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin:2.4rem 0 0}
+.deck-head .group-title{margin:0}
+.deck-toggle{font:inherit;font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;padding:.35rem .8rem;border:1px solid var(--teal);background:var(--surface);color:var(--teal);cursor:pointer;white-space:nowrap}
+.deck-toggle:hover,.deck-toggle[aria-pressed="true"]{background:var(--teal);color:var(--on-accent)}
+.deck-toggle:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.metric-card{padding-bottom:1.6rem}
+.metric-card .more-label:first-of-type{margin-top:0}
+.metric-card .runs{font-size:.88rem;color:var(--muted);margin:0}
+.metric-none{font-family:var(--mono);font-size:.78rem;color:var(--faint);margin:.6rem 0 0}
+.meters{list-style:none;margin:.2rem 0 0;padding:0;display:grid;gap:.55rem}
+.meter{display:grid;grid-template-columns:1fr auto;gap:.2rem .8rem;align-items:center;font-size:.88rem}
+.meter-label{grid-column:1 / -1;color:var(--muted);line-height:1.3}
 .meter-track{position:relative;height:.6rem;background:var(--surface-2);border:1px solid var(--rule)}
 .meter-fill{position:absolute;inset:0;background:var(--teal);transform:scaleX(var(--v,0));transform-origin:left}
 .meter b{font-family:var(--mono);font-size:.85rem;color:var(--ink)}
-.flow-steps{list-style:none;margin:.4rem 0 0;padding:0;display:grid;gap:1.1rem}
-.flow-step{position:relative;background:var(--surface);border:1px solid var(--rule);padding:.55rem .9rem;font-size:.92rem}
-.flow-step::after{content:"↓";position:absolute;left:50%;bottom:-1.05rem;color:var(--teal);font-size:1rem;transform:translate3d(-50%,0,0)}
-.prompt-btn{display:inline-block;margin-top:.6rem;font-family:var(--mono);font-size:.85rem;padding:.55rem 1.1rem;background:var(--teal);color:var(--on-accent);border:0;cursor:pointer}
-.prompt-box{white-space:pre-wrap;display:none;font-family:var(--mono);font-size:.8rem;color:var(--muted);margin:.6rem 0 0;border:1px solid var(--rule);padding:.6rem .8rem;background:var(--surface)}
-.detail-body .prompt-box.show{display:block}
+.flow-steps{list-style:none;margin:.3rem 0 0;padding:0;display:grid;gap:1rem}
+.flow-step{position:relative;background:var(--surface-2);border:1px solid var(--rule);padding:.4rem .7rem;font-size:.85rem;line-height:1.35}
+.flow-step::after{content:"↓";position:absolute;left:50%;bottom:-1rem;color:var(--teal);font-size:.9rem;line-height:1;transform:translate3d(-50%,0,0)}
+.flow-step:last-child::after{content:none}
+.prompt-btn{display:inline-block;margin-top:.9rem;font-family:var(--mono);font-size:.8rem;padding:.5rem 1rem;background:var(--teal);color:var(--on-accent);border:0;cursor:pointer}
+.prompt-box{white-space:pre-wrap;display:none;max-height:16rem;overflow:auto;font-family:var(--mono);font-size:.75rem;color:var(--muted);margin:.6rem 0 0;border:1px solid var(--rule);padding:.6rem .8rem;background:var(--surface-2)}
+.prompt-box.show{display:block}
 .curtain{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--paper);color:var(--teal);pointer-events:none;transform:translate3d(0,0,0);animation:curtain-lift .8s cubic-bezier(.7,0,.2,1) .5s forwards}
 .curtain-word{font-family:var(--sans);font-weight:300;font-size:clamp(3rem,14vw,11rem);letter-spacing:.06em;text-transform:uppercase}
 @keyframes curtain-lift{to{transform:translate3d(0,-101%,0)}}
@@ -148,7 +152,7 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 .curtain[data-state="below"]{transform:translate3d(0,101%,0);transition:none}
 .curtain[data-state="cover"]{transform:translate3d(0,0,0)}
 .curtain[data-state="gone"]{transform:translate3d(0,-101%,0)}
-@media (prefers-reduced-motion: reduce){.curtain{display:none}.project::before,.split-ch>span,.more,.pop{transition:none}.detail-panel{transition:none}}
+@media (prefers-reduced-motion: reduce){.curtain{display:none}.project::before,.split-ch>span,.more,.pop,.deck-track{transition:none}}
 </style>
 </head>
 <body>
@@ -187,12 +191,6 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 </div>
 
 <div class="switches">
-<div class="seg" role="group" aria-label="Colour scheme">
-  <button type="button" data-set="scheme" data-value="1" aria-pressed="true">1</button>
-  <button type="button" data-set="scheme" data-value="2" aria-pressed="false">2</button>
-  <button type="button" data-set="scheme" data-value="3" aria-pressed="false">3</button>
-  <button type="button" data-set="scheme" data-value="4" aria-pressed="false">4</button>
-</div>
 <div class="seg" role="group" aria-label="Language">
   <button type="button" data-set="lang" data-value="en" aria-pressed="true">EN</button>
   <button type="button" data-set="lang" data-value="pt" aria-pressed="false">PT</button>
@@ -488,14 +486,14 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 (function () {
   var root = document.getElementById('page');
   if (!root) return;
-  var keys = { lang: 'kaya-showcase-lang', scheme: 'kaya-showcase-scheme' };
-  var allowed = { lang: ['en', 'pt'], scheme: ['1', '2', '3', '4'] };
-  var state = { lang: 'en', scheme: '1' };
+  var keys = { lang: 'kaya-showcase-lang' };
+  var allowed = { lang: ['en', 'pt'] };
+  var state = { lang: 'en' };
   var curtain = document.getElementById('curtain');
   var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var busy = false;
   var params = new URLSearchParams(window.location.search);
-  ['lang', 'scheme'].forEach(function (name) {
+  ['lang'].forEach(function (name) {
     var asked = params.get(name);
     if (allowed[name].indexOf(asked) >= 0) { state[name] = asked; return; }
     try { var saved = sessionStorage.getItem(keys[name]); if (allowed[name].indexOf(saved) >= 0) state[name] = saved; } catch (e) {}
@@ -506,12 +504,6 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
       var set = buttons[i].getAttribute('data-set');
       buttons[i].setAttribute('aria-pressed', String(buttons[i].getAttribute('data-value') === state[set]));
     }
-  }
-  function applyScheme() {
-    document.documentElement.setAttribute('data-scheme', state.scheme);
-    try { sessionStorage.setItem(keys.scheme, state.scheme); } catch (e) {}
-    press();
-    document.dispatchEvent(new CustomEvent('kaya:scheme', { detail: { scheme: state.scheme } }));
   }
   function apply() {
     root.setAttribute('data-lang', state.lang);
@@ -544,15 +536,13 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
     var chosen = button.getAttribute('data-value');
     if (chosen === state[set]) return;
     state[set] = chosen;
-    if (set === 'scheme') { applyScheme(); return; }
     swap();
   });
-  applyScheme();
   apply();
 })();
 </script>
 <script src="/assets/scene.js" defer></script>
 <script src="/assets/motion.js" defer></script>
-<script src="/assets/details.js" defer></script>
+<script src="/assets/metrics.js" defer></script>
 </body>
 </html>
