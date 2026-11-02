@@ -217,11 +217,14 @@ def test_whatsapp_server_no_longer_mounts_the_chat():
     assert "_web_credentials" not in source
 
 
-def test_whatsapp_server_serves_the_showcase_assets():
+def test_only_the_pi_gateway_serves_the_showcase():
+    """2026-11-02: the PC app's copy of "/" and "/assets/<name>" was unreachable from the
+    internet (Cloudflare routes everything to the Pi) and nothing on the LAN used it."""
     source = SERVER.read_text(encoding="utf-8")
-    assert '@app.get("/assets/{name}"' in source
-    assert "static_assets.asset_path(" in source
-    assert "static_assets.headers_for(path)" in source
+    assert '@app.get("/"' not in source and '"/assets/{name}"' not in source
+    assert "showcase_metrics" not in source and "landing.html" not in source
+    gateway = (BASE_DIR / "src" / "gateway" / "app.py").read_text(encoding="utf-8")
+    assert '@app.get("/assets/{name}")' in gateway and "static_assets.asset_path(" in gateway
 
 
 def test_scripts_are_local_assets_that_exist(landing):

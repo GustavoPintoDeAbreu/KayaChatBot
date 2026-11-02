@@ -1401,11 +1401,11 @@ Unified `LLMProvider` interface with `_retry_with_backoff()` for rate-limit resi
 
 `kaya-prod` is the **always-on** production web app. The box is **serving-only**. Access is via a **Cloudflare Tunnel** (`cloudflared` compose service, `tunnel` profile). The UI header shows the running env + commit (`KAYA_ENV`/`KAYA_VERSION`).
 
-**Two routes, one process** (`whatsapp_server.py`):
+**What `whatsapp_server.py` serves** (the public showcase `/` and `/assets/<name>` are served only by the **Pi gateway**, `src/gateway/app.py`, which Cloudflare routes all public traffic to; the PC copy of the page on :7860, unreachable from the internet and unused, was removed on 2026-11-02):
 
 | Path | Who gets in | What it is |
 |---|---|---|
-| `/` | **anyone** | the public showcase of the Kaya ecosystem (`src/chat/static/landing.html`, images and its three scripts (`scene.js`, `motion.js`, `metrics.js`, hand-written, no CDN) in `src/chat/static/showcase/` via `/assets/<name>`), EN / PT, one colour scheme |
+| (the showcase, on the Pi) | **anyone** | `src/chat/static/landing.html`, images and its three scripts (`scene.js`, `motion.js`, `metrics.js`, hand-written, no CDN) in `src/chat/static/showcase/` via `/assets/<name>`, EN / PT, one colour scheme |
 | `/whatsapp/*` | WAHA | the webhook — must stay open, it is how messages arrive |
 
 **The showcase's project rows slide to their metrics (2026-11-02).** Hovering a card still shows How it works / Built with; clicking opens nothing (the full-screen detail panel is gone). Each row's toggle slides in cards of the same shape with that project's own labwatch counters, its request flow, and, on Labwatch, the idea prompt. A project with no counters shows its schedule and says so: the lab-wide totals once stood in for those, so every card showed the same tokens, and `showcase_metrics` no longer passes them to the page.
