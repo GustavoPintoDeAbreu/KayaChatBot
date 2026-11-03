@@ -83,6 +83,11 @@ def _real_names() -> list:
 # anywhere — so it uses invented names throughout.
 REAL_NAMES = _real_names()
 
+# The page is the owner's own site, so it credits its author by real name in the byline, meta
+# description and footer. That credit is intentional and public (it links to his LinkedIn/GitHub),
+# not a group-member leak, so the guard below strips these exact author forms before matching.
+AUTHOR_CREDIT = ("Gustavo Abreu", "GustavoPintoDeAbreu", "gustavo-abreu")
+
 
 @pytest.fixture(scope="module")
 def landing() -> str:
@@ -197,7 +202,10 @@ def test_the_idea_prompt_is_not_baked_into_the_page(landing):
 
 def test_no_real_member_names_are_published():
     for name, text in _public_texts():
-        leaked = [n for n in REAL_NAMES if re.search(rf"(?<![\w-]){n}(?![\w-])", text)]
+        body = text
+        for author in AUTHOR_CREDIT:
+            body = body.replace(author, "")
+        leaked = [n for n in REAL_NAMES if re.search(rf"(?<![\w-]){n}(?![\w-])", body)]
         assert not leaked, f"{name} publishes real member name(s): {leaked}"
 
 

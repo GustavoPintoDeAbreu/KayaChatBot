@@ -26,11 +26,23 @@ PROJECT_FEED_NAMES: Dict[str, str] = {
     "labwatch": "labwatch",
     "redditcast": "redditcast",
     "flight-deals": "flight-deals",
+    "lab-notes": "lab-notes",
+    "idea-pipeline": "idea-pipeline",
+    "lab-medic": "lab-medic",
+    "price-scout": "price-scout",
+    "Subtitle translator": "subs",
 }
 FEED_NAME_TO_PROJECT: Dict[str, str] = {v: k for k, v in PROJECT_FEED_NAMES.items()}
 
 # The per-project stats the feed publishes, translated; anything unknown stays English.
 STAT_LABEL_PT: Dict[str, str] = {
+    "notes added, all time": "nota added, in total",
+    "ideas sent, all time": "ideias sent, in total",
+    "average idea to pull request, minutes": "minutes average from idea to pull request",
+    "local code Claude graded pass, %": "% de local code Claude graded pass",
+    "fixes shipped by the medic, all time": "fixes shipped by the medic, in total",
+    "subtitle files translated, all time": "subtitle files translated, in total",
+    "items followed": "items followed",
     "messages Kaya read this week": "mensagens que Kaya leu esta semana",
     "replies Kaya sent this week": "respostas que Kaya enviou esta semana",
     "voice replies this week": "respostas por voz esta semana",
@@ -41,54 +53,168 @@ STAT_LABEL_PT: Dict[str, str] = {
 
 # How a request flows, per project: plain words, no infrastructure.
 FLOWS: Dict[str, Dict[str, list]] = {
-    "kaya": {"en": ["A friend writes in the group", "Kaya reads it and sorts it",
-                    "It searches the group's history", "It answers — text or voice"],
-             "pt": ["Um amigo escreve no grupo", "Kaya lê e classifica",
-                    "Procura no histórico do grupo", "Responde — por texto ou voz"]},
-    "lab-assistant": {"en": ["A voice note arrives", "It is transcribed at home",
-                             "A local model picks the tool", "It answers, or waits for your yes"],
-                      "pt": ["Chega um áudio", "É transcrito em casa",
-                             "Um modelo local escolhe a ferramenta", "Responde, ou espera pelo teu sim"]},
-    "lab-notes": {"en": ["You dictate a note", "It is transcribed",
-                         "It lands on the right notebook page"],
-                  "pt": ["Ditas uma nota", "É transcrita",
-                         "Vai para a página certa do caderno"]},
-    "idea-pipeline": {"en": ["You send an idea", "Agents ask their questions",
-                             "A plan, then code in a sandbox", "A pull request waits for your yes"],
-                      "pt": ["Envias uma ideia", "Os agentes fazem perguntas",
-                             "Um plano e código numa sandbox", "Um pull request espera pelo teu sim"]},
-    "lab-medic": {"en": ["It reads every log and site", "It fingerprints the errors",
-                         "A recurring bug becomes a fix", "Nothing ships until you say yes"],
-                  "pt": ["Lê os registos e os sites", "Dá uma impressão digital aos erros",
-                         "Um erro recorrente vira correção", "Nada sai sem o teu sim"]},
-    "labwatch": {"en": ["An agent samples the machines", "A hub keeps the numbers in memory",
-                        "Money, power and tokens are worked out", "One dashboard shows it all"],
-                 "pt": ["Um agente recolhe das máquinas", "Um hub guarda os números em memória",
-                        "Dinheiro, energia e tokens são calculados", "Um painel mostra tudo"]},
-    "flight-deals": {"en": ["It sweeps airline prices", "Compares to what each trip usually costs",
-                            "Flags the outliers", "One message a day when it's cheap"],
-                     "pt": ["Pesquisa preços de voos", "Compara com o custo habitual",
-                            "Assinala as exceções", "Uma mensagem por dia quando é barato"]},
-    "price-scout": {"en": ["It follows the items you want", "Keeps each price history",
-                           "A target or a new low is hit", "You get a ping"],
-                    "pt": ["Segue os artigos que queres", "Guarda o histórico de preços",
-                           "Atinge o alvo ou um novo mínimo", "Recebes um aviso"]},
-    "series-watch": {"en": ["It watches the release slates", "A season is confirmed, dated or out",
-                           "You get told, with where to watch"],
-                     "pt": ["Vigia os calendários de estreias", "Uma temporada é confirmada, datada ou estreia",
-                            "Ficas a saber, com onde ver"]},
-    "game-alerts": {"en": ["It watches game news", "A limited-time event is announced",
-                           "You get a ping, then another at go-live"],
-                    "pt": ["Vigia as notícias dos jogos", "Um evento temporário é anunciado",
-                           "Recebes um aviso, e outro no arranque"]},
-    "redditcast": {"en": ["The week's top posts are collected", "A model writes a two-host script",
-                          "It is voiced at home", "A voice note lands on Monday"],
-                   "pt": ["Recolhe os melhores posts da semana", "Um modelo escreve um guião a duas vozes",
-                          "É narrado em casa", "Um áudio chega na segunda"]},
-    "subs": {"en": ["Subtitles come in", "Translated in validated batches",
-                    "Each line is checked", "European Portuguese out"],
-             "pt": ["Entram legendas", "Traduzidas em lotes validados",
-                    "Cada linha é verificada", "Sai português europeu"]},
+    "kaya": {
+        "en": [
+            "A friend writes in the WhatsApp group",
+            "Kaya reads it and sorts it by intention",
+            "It retrieves what the group already said",
+            "It answers, text or voice"
+        ],
+        "pt": [
+            "Um amigo escreve no grupo de WhatsApp",
+            "Kaya lê e classifies by intention",
+            "Procura no histórico do grupo",
+            "Responde, por text or voice"
+        ]
+    },
+    "lab-assistant": {
+        "en": [
+            "A voice note arrives, by DM",
+            "Kaya transcribes it at home",
+            "Kaya picks the tool",
+            "It answers, or waits for my yes"
+        ],
+        "pt": [
+            "Chega um áudio, por DM",
+            "É transcrito em casa",
+            "Kaya picks the tool",
+            "Responde, ou espera pelo teu sim"
+        ]
+    },
+    "lab-notes": {
+        "en": [
+            "You dictate a note, or write it down, on WhatsApp",
+            "Kaya transcribes it",
+            "It lands on the right OneNote page"
+        ],
+        "pt": [
+            "Ditas una nota, o write it down, on WhatsApp",
+            "É transcrita",
+            "Vai para la page certa del caderno"
+        ]
+    },
+    "idea-pipeline": {
+        "en": [
+            "I send an idea from my phone, by voice",
+            "A planning agent asks the questions and writes a plan",
+            "The implementation agent builds it in a sandbox",
+            "A QA agent reviews it and opens a pull request for my review"
+        ],
+        "pt": [
+            "Envia a idea from my phone, by voice or text",
+            "A planning agent asks the questions and writes a plan",
+            "The implementation agent builds it in a sandbox",
+            "A QA agent reviews it and opens a pull request for my review"
+        ]
+    },
+    "lab-medic": {
+        "en": [
+            "It reads every log and site",
+            "It fingerprints the errors",
+            "A recurring bug becomes a fix",
+            "Nothing ships until you say yes"
+        ],
+        "pt": [
+            "Lê os registos e os sites",
+            "Dá uma impressão digital aos erros",
+            "Um erro recorrente vira correção",
+            "Nada sai sem o teu sim"
+        ]
+    },
+    "labwatch": {
+        "en": [
+            "An agent samples the machines",
+            "A hub keeps the numbers in memory",
+            "Money, power and tokens are worked out",
+            "One dashboard shows it all"
+        ],
+        "pt": [
+            "Um agente recolhe das máquinas",
+            "Um hub guarda os números em memória",
+            "Dinheiro, energia e tokens são calculados",
+            "Um painel mostra tudo"
+        ]
+    },
+    "flight-deals": {
+        "en": [
+            "It sweeps airline prices",
+            "Compares to what each trip usually costs",
+            "Flags the outliers",
+            "One message a day when it's cheap"
+        ],
+        "pt": [
+            "Pesquisa preços de voos",
+            "Compara com o custo habitual",
+            "Assinala as exceções",
+            "Uma mensagem por dia quando é barato"
+        ]
+    },
+    "price-scout": {
+        "en": [
+            "It follows the items you want",
+            "Keeps each price history",
+            "A target or a new low is hit",
+            "You get a ping"
+        ],
+        "pt": [
+            "Segue os artigos que queres",
+            "Guarda o histórico de preços",
+            "Atinge o alvo ou um novo mínimo",
+            "Recebes um aviso"
+        ]
+    },
+    "series-watch": {
+        "en": [
+            "It watches the release slates",
+            "A season is confirmed, dated or out",
+            "You get told, with where to watch"
+        ],
+        "pt": [
+            "Vigia os calendários de estreias",
+            "Uma temporada é confirmada, datada ou estreia",
+            "Ficas a saber, com onde ver"
+        ]
+    },
+    "game-alerts": {
+        "en": [
+            "It watches game news",
+            "A limited-time event is announced",
+            "You get a ping, then another at go-live"
+        ],
+        "pt": [
+            "Vigia as notícias dos jogos",
+            "Um evento temporário é anunciado",
+            "Recebes um aviso, e outro no arranque"
+        ]
+    },
+    "redditcast": {
+        "en": [
+            "The week's top posts are collected",
+            "A model writes a two-host script",
+            "It is voiced at home",
+            "A voice note lands on Monday"
+        ],
+        "pt": [
+            "Recolhe os melhores posts da semana",
+            "Um modelo escreve um guião a duas vozes",
+            "É narrado em casa",
+            "Um áudio chega na segunda"
+        ]
+    },
+    "subs": {
+        "en": [
+            "Subtitles come in",
+            "Translated in validated batches",
+            "Each line is checked",
+            "European Portuguese out"
+        ],
+        "pt": [
+            "Entram legendas",
+            "Traduzidas em lotes validados",
+            "Cada linha é verificada",
+            "Sai português europeu"
+        ]
+    }
 }
 
 # The original labwatch /idea prompt, owner-approved for the showcase page.
@@ -152,7 +278,8 @@ def build_view(payload: Optional[dict]) -> dict:
                 continue
             stats = [{"en": stat["label"],
                       "pt": STAT_LABEL_PT.get(stat.get("label"), stat.get("label")),
-                      "value": stat["value"]}
+                      "value": stat["value"],
+                      "scope": stat.get("scope", "week")}
                      for stat in entry.get("stats") or [] if stat.get("value") is not None]
             if stats:
                 products[project] = {"stats": stats}

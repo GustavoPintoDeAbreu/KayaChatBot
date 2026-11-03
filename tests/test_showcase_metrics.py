@@ -54,7 +54,8 @@ def test_build_view_maps_feed_products_to_landing_ids_and_localises():
     assert view["products"]["kaya"]["stats"] == [
         {"en": "replies Kaya sent this week",
          "pt": "respostas que Kaya enviou esta semana",
-         "value": 12}
+         "value": 12,
+         "scope": "week"}
     ]
     assert "labwatch" not in view["products"]
 

@@ -124,7 +124,10 @@
     card.appendChild(element('h3', '', title ? (title.getAttribute('data-text') || title.textContent.trim()) : project));
     var stats = ownStats(project);
     if (stats.length) {
-      card.appendChild(element('p', 'more-label', LABELS[language].week));
+      // The shared header only holds when every bar is week-scoped; a lifetime or derived bar carries
+      // its window inside its own label instead, so a mixed card gets no "This week" header.
+      var allWeek = stats.every(function (row) { return (row.scope || 'week') === 'week'; });
+      if (allWeek) card.appendChild(element('p', 'more-label', LABELS[language].week));
       appendMeters(card, stats, language);
     } else {
       appendNoCounters(card, source, language);
