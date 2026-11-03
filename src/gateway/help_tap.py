@@ -25,10 +25,10 @@ HELP_TEXT = (
     "Kaya — o que podes pedir\n"
     "\n"
     "No grupo:\n"
-    "- /bug <texto> — reporta um problema\n"
-    "- /feedback <texto> — dá uma sugestão\n"
-    "- /clear — apaga o contexto recente da conversa\n"
-    "- /aniversario <dia/mês> — regista o teu aniversário\n"
+    "- /bug <texto> (/erro) — reporta um problema\n"
+    "- /feedback <texto> (/sugestao) — dá uma sugestão\n"
+    "- /clear (/limpar) — apaga o contexto recente da conversa\n"
+    "- /aniversario <dia/mês> (/birthday, /anos) — regista o teu aniversário\n"
     '- "responde só em áudio" / "volta a responder por texto" — voz ou texto\n'
     '- "resume o que decidimos sobre X" — ponto de situação de um assunto\n'
     '- "faz uma sondagem com as opções" — cria uma votação\n'
@@ -38,9 +38,12 @@ HELP_TEXT = (
     "- pergunta sobre o mundo (sem nomes do grupo) — pesquisa na web\n"
     "\n"
     "Por DM (só tu):\n"
-    "- /idea <texto> — ideia para o pipeline\n"
-    "- /homelaboff · /homelabon · /homelabrc [home] — ligar/desligar o PC\n"
+    "- /idea <texto> — ideia para o pipeline (flags: !new !local !uncensored !claude !deepseek !glm)\n"
+    "- /idea list · /idea pending · /idea merge all · /idea help · /idea allow <site>\n"
+    "- /homelaboff · /homelabon — desligar / ligar o PC\n"
     "- /homelaboff_bruteforce — desligar o PC já, sem esperar por nada (pede um sim)\n"
+    "- /homelabrc [home] — sessão Claude Remote Control no PC (/homelabrc stop [home] termina)\n"
+    "- /homelabqc [home] — sessão Qwen Code (qcode) no PC (/homelabqc stop [home] termina)\n"
     "- /help — esta lista"
 )
 
