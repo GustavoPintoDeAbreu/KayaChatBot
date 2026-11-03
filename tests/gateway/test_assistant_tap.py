@@ -89,6 +89,16 @@ def test_groups_other_people_and_echoes(rig):
     assert assistant.received == []
 
 
+def test_untagged_alerts_sent_from_the_account_never_reach_the_assistant(rig):
+    """labwatch and the other lab senders post through Kaya's own WhatsApp session (fromMe) with no 🤖 tag.
+    Only our own 🤖 echoes are "echo"; an alert must never become something the owner said."""
+    gateway, _, assistant, _, _ = rig
+    alert = "⚠️ labwatch: Price source unreliable: PCComponentes\nblocked 403 for 7 runs"
+    assert "assistant" not in _post(gateway, _message("w1", alert, from_me=True))
+    assert "assistant" not in _post(gateway, _message("w2", "💾 RAM DDR5 2x32\nAmazon.es: 214 €", from_me=True))
+    assert assistant.received == []
+
+
 def test_inbox_down_leaves_the_message_to_kaya(rig):
     gateway, _, assistant, _, _ = rig
     assistant.raises = True
