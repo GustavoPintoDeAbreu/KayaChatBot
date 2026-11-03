@@ -47,6 +47,7 @@ STAT_LABEL_PT: Dict[str, str] = {
     "replies Kaya sent this week": "respostas que Kaya enviou esta semana",
     "voice replies this week": "respostas por voz esta semana",
     "episodes made this week": "episódios feitos esta semana",
+    "episodes generated, all time": "episódios feitos, in total",
     "price sweeps this week": "pesquisas de preços esta semana",
     "deal alerts sent this week": "alertas de promoções esta semana",
 }
