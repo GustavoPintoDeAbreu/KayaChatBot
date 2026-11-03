@@ -12,7 +12,7 @@ says otherwise).
 
 ### Slash commands (exact)
 
-- `/bug <texto>` — report a problem (the reply is fixed, nothing generated).
+- `/bug <texto>` (`/erro`) — report a problem (the reply is fixed, nothing generated).
 - `/feedback <texto>` (`/sugestao`, `/sugestão`) — a suggestion.
 - `/clear` (`/limpar`) — forget this chat's recent context so the next message
   starts fresh.
@@ -77,12 +77,17 @@ gets a fixed refusal, not a promise.
 These are handled by the Pi gateway, so they work even while the PC is off:
 
 - `/help` — this command list, with a link to the Help page.
-- `/idea <texto>` / `/idea list` — send an idea to the idea pipeline (turns it
-  into a planned, implemented draft PR).
+- `/idea <texto>` — send an idea to the idea pipeline (turns it into a planned,
+  implemented draft PR); flags `!new !local !uncensored !claude !deepseek !glm`.
+- `/idea list` · `/idea pending` · `/idea merge all` · `/idea help` ·
+  `/idea allow <site>` — look around, merge, help, allow a site.
 - `/homelaboff` — ask what is running on the PC and shut it down once free.
+- `/homelaboff_bruteforce` — shut the PC down at once, skipping every wait (asks for a yes).
 - `/homelabon` — wake the PC (Wake-on-LAN) and send its Claude session link.
 - `/homelabrc [home]` / `/homelabrc stop [home]` — start/end a Claude Remote
   Control session on the PC.
+- `/homelabqc [home]` / `/homelabqc stop [home]` — start/end a Qwen Code
+  (qcode) Web Shell session on the PC.
 
 Anything else in your DM — a voice note or plain text — goes to the lab
 assistant, which answers lab questions and hands group questions back to Kaya.

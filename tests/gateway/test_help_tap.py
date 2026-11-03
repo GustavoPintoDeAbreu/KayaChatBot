@@ -1,5 +1,7 @@
 """The owner's /help DM: a fixed command list answered by the Pi, never journaled."""
+import re
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -117,3 +119,18 @@ def test_the_tap_is_off_without_an_owner():
     tap = HelpTap.from_env({"HELP_OWNER_NUMBERS": "351922222222@c.us, 351933333333"})
     assert tap.owner_numbers == {"351922222222", "351933333333"}
     assert HelpTap.from_env({"IDEA_OWNER_NUMBERS": "351922222222"}) is not None
+
+
+def test_help_lists_every_command_the_taps_and_the_adapter_claim():
+    from src.chat.whatsapp_adapter import WhatsAppAdapter
+    root = Path(__file__).parent.parent.parent
+    homelab = (root / "src/gateway/homelab.py").read_text()
+    claimed = set(re.findall(r'first == "(/[a-z_]+)"', homelab))
+    assert {"/homelabrc", "/homelabqc", "/homelaboff", "/homelabon"} <= claimed
+    adapter = (root / "src/chat/whatsapp_adapter.py").read_text()
+    for name in ("clear_commands", "bug_commands", "feedback_commands", "birthday_commands"):
+        claimed |= set(re.findall(r'"(/[^"]+)"', re.search(rf"self\.{name} = \{{([^}}]*)\}}", adapter).group(1)))
+    claimed |= {"/idea", "/help"}
+    plain = lambda text: unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode()
+    missing = sorted(command for command in claimed if plain(command) not in plain(HELP_TEXT))
+    assert not missing, f"/help does not list {missing}"
