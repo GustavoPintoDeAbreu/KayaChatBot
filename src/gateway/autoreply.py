@@ -33,8 +33,18 @@ FAULT_TEXT = ("Estou em baixo neste momento e não consigo responder. "
               "Já fiquei com a tua mensagem e respondo assim que voltar.")
 
 
-def offline_text(next_wake: datetime.datetime, now: datetime.datetime, hours: str = "") -> str:
-    """The scheduled-off line: off now, the hours, and when it is back."""
+MANUAL_TEXT = ("Estou desligado agora. Volto quando o Gustavo me ligar "
+               "e respondo-te nessa altura.")
+
+
+def offline_text(next_wake: Optional[datetime.datetime], now: datetime.datetime, hours: str = "") -> str:
+    """The scheduled-off line: off now, the hours, and when it is back.
+
+    Without a next wake (lab-infra power.yaml is manual-only since 2026-11-06) nothing is promised:
+    she is back when the owner turns the PC on.
+    """
+    if next_wake is None:
+        return MANUAL_TEXT
     clock = next_wake.strftime("%H:%M")
     if next_wake.date() == now.date():
         back = f"às {clock}"
@@ -89,6 +99,9 @@ class OfflineResponder:
         if monitor.degraded:
             return FAULT
         if state is PcState.OFFLINE and monitor.unreachable_for() >= self._grace_seconds:
+            # Manual-only: an unannounced loss (crash, power cut) is a fault, never "scheduled".
+            if self._schedule.wake_time is None:
+                return FAULT
             local_now = datetime.datetime.fromtimestamp(self._now(), self._schedule.timezone)
             return FAULT if self._schedule.is_scheduled_on(local_now) else SCHEDULED
         if state is PcState.APP_DOWN and monitor.down_for() >= self._app_down_grace_seconds:

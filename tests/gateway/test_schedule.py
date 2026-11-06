@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.gateway.schedule import PowerSchedule
+from src.gateway.schedule import PowerSchedule, schedule_sentence
 
 
 # The config from plan section 1.
@@ -342,6 +342,20 @@ def test_the_gateway_reads_the_labs_power_file(tmp_path):
     lab.write_text('timezone: "Europe/Lisbon"\nwake_time: "06:30"\nshutdown: {mon: "23:00"}\n')
     kaya = {"power": {"timezone": "Europe/Lisbon"}}
     assert power_config(str(lab), kaya)["wake_time"] == "06:30"
-    assert power_config(str(tmp_path / "missing.yaml"), kaya) == {"timezone": "Europe/Lisbon"}
+    # No file mounted: assume manual-only, never the default 07:00 wake.
+    missing = power_config(str(tmp_path / "missing.yaml"), kaya)
+    assert missing["wake_time"] is None and missing["shutdown"] == {}
     assert PowerSchedule.from_config(power_config(str(Path(__file__).parent / "power.yaml"), kaya)) \
         .shutdown_oncalendar() == ["Sat,Sun 02:00", "Mon..Thu,Sun 23:00"]
+
+
+def test_a_manual_only_power_file_is_taken_as_is(tmp_path):
+    """`wake_time:` empty must not fall through to config.yaml (its default wake is 07:00)."""
+    from src.gateway.app import power_config
+    lab = tmp_path / "power.yaml"
+    lab.write_text('timezone: "Europe/Lisbon"\nwake_time:\nshutdown: {}\n')
+    schedule = PowerSchedule.from_config(power_config(str(lab), {"power": {"timezone": "Europe/Lisbon"}}))
+    assert schedule.wake_time is None
+    assert schedule.next_wake(_at(21, 23, 30)) is None
+    assert schedule.is_scheduled_on(_at(21, 12, 0)) is False
+    assert schedule_sentence(schedule) == ""

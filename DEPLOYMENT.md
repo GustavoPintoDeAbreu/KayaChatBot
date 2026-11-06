@@ -65,9 +65,8 @@ again.
 
 ## The Pi edge and the GPU broker (2026-09-24)
 
-The PC is no longer always on: it wakes at 07:00 (lab-infra `power.yaml`) and,
-since 2026-10-15, turns itself off from 23:00 (02:00 after Friday and Saturday)
-once nothing is running (lab-infra `docs/agent/power.md`). Everything that
+The PC is no longer always on: since 2026-11-06 it has no schedule at all (lab-infra `power.yaml`: no wake
+time, no nightly shutdown); `/homelabon` turns it on and `/homelaboff` off (lab-infra `docs/agent/power.md`). Everything that
 must be up all the time moved to the Raspberry Pi, and every LLM on the PC now
 loads through one broker instead of holding a GPU permanently.
 

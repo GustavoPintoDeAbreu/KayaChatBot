@@ -132,10 +132,15 @@ def power_config(path: str, config: Mapping[str, Any]) -> Dict[str, Any]:
             data = yaml.safe_load(handle) or {}
     except OSError:
         data = {}
-    if isinstance(data, dict) and data.get("wake_time"):
+    # The key being present is what counts: `wake_time:` empty is the manual-only schedule (2026-11-06),
+    # and must not fall through to config.yaml's block, whose default wake would promise 07:00.
+    if isinstance(data, dict) and "wake_time" in data:
         return data
-    logger.warning("no power schedule at %s: using config.yaml power (the offline reply may be vague)", path)
-    return dict(config.get("power") or {})
+    logger.warning("no power schedule at %s: assuming manual-only (the offline reply promises no time)", path)
+    fallback = dict(config.get("power") or {})
+    if "wake_time" not in fallback:     # config.yaml has only the timezone: never default to a 07:00 wake
+        fallback.update(wake_time=None, shutdown={})
+    return fallback
 
 
 class Gateway:
@@ -379,12 +384,12 @@ class Gateway:
     def status(self) -> Dict[str, Any]:
         """PC state, the schedule, and the journal's size."""
         now = datetime.datetime.fromtimestamp(self._now(), self.schedule.timezone)
-        next_wake = self.schedule.next_wake(now)
+        next_wake = self.schedule.next_wake(now)   # None = manual-only: nothing wakes the PC
         return {
             "pc": self.monitor.state.value,
             "pc_online": self.monitor.state is PcState.ONLINE,
-            "next_wake": next_wake.isoformat(),
-            "next_wake_hhmm": next_wake.strftime("%H:%M"),
+            "next_wake": next_wake.isoformat() if next_wake else None,
+            "next_wake_hhmm": next_wake.strftime("%H:%M") if next_wake else None,
             "scheduled_on": self.schedule.is_scheduled_on(now),
             "outage": self.responder.outage(),
             "journal": self.journal.stats(),

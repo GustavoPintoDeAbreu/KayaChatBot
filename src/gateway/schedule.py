@@ -41,7 +41,7 @@ class PowerSchedule:
     """When the PC wakes (daily) and when it shuts down (per evening)."""
 
     timezone: ZoneInfo
-    wake_time: datetime.time
+    wake_time: Optional[datetime.time]
     wol_lead: datetime.timedelta
     shutdown: Dict[int, datetime.time]
     early_wake_margin: datetime.timedelta = datetime.timedelta(minutes=60)
@@ -53,9 +53,11 @@ class PowerSchedule:
             _DAY_NAMES.index(day.capitalize()[:3]): datetime.time.fromisoformat(str(at))
             for day, at in (power.get("shutdown") or {}).items()
         }
+        wake = power.get("wake_time", "07:00")
         return cls(
             timezone=ZoneInfo(power.get("timezone", "Europe/Lisbon")),
-            wake_time=datetime.time.fromisoformat(str(power.get("wake_time", "07:00"))),
+            # None / "" = manual only (lab-infra power.yaml since 2026-11-06): no scheduled wake.
+            wake_time=datetime.time.fromisoformat(str(wake)) if wake else None,
             wol_lead=datetime.timedelta(minutes=float(power.get("wol_lead_minutes", 5))),
             shutdown=shutdown,
             early_wake_margin=datetime.timedelta(
@@ -72,7 +74,8 @@ class PowerSchedule:
         """``(moment, is_wake)`` for every wake and shutdown near ``around``."""
         for offset in range(-_WINDOW_DAYS, _WINDOW_DAYS + 1):
             day = around.date() + datetime.timedelta(days=offset)
-            yield datetime.datetime.combine(day, self.wake_time, tzinfo=self.timezone), True
+            if self.wake_time is not None:
+                yield datetime.datetime.combine(day, self.wake_time, tzinfo=self.timezone), True
             at = self.shutdown.get(day.weekday())
             if at is not None:
                 fire_day = day + datetime.timedelta(days=1) if at.hour < 12 else day
@@ -85,12 +88,16 @@ class PowerSchedule:
 
     def is_scheduled_on(self, moment: datetime.datetime) -> bool:
         """Whether the schedule has the PC on at ``moment`` (last event was a wake)."""
+        if self.wake_time is None:
+            return False
         local = self._local(moment)
         past = [event for event in self._events(local) if event[0] <= local]
         return max(past)[1] if past else True
 
-    def next_wake(self, moment: datetime.datetime) -> datetime.datetime:
-        """The first wake strictly after ``moment``."""
+    def next_wake(self, moment: datetime.datetime) -> Optional[datetime.datetime]:
+        """The first wake strictly after ``moment``, or None when nothing wakes the PC on schedule."""
+        if self.wake_time is None:
+            return None
         local = self._local(moment)
         return min(at for at, is_wake in self._events(local) if is_wake and at > local)
 
@@ -111,7 +118,7 @@ class PowerSchedule:
         ``early_wake_margin`` before the next scheduled wake — the PC still
         gives up that long before 07:00.
         """
-        if not self.shutdown:
+        if not self.shutdown or self.wake_time is None:
             return None
         local_now = self._local(now)
         local_requested = self._local(requested)
@@ -135,7 +142,9 @@ class PowerSchedule:
         return lines
 
     def wake_oncalendar(self) -> str:
-        """systemd ``OnCalendar=`` for the Wake-on-LAN packet: wake time minus the lead."""
+        """systemd ``OnCalendar=`` for the Wake-on-LAN packet: wake time minus the lead ("" = no wake)."""
+        if self.wake_time is None:
+            return ""
         anchor = datetime.datetime.combine(datetime.date(2000, 1, 3), self.wake_time)
         return (anchor - self.wol_lead).strftime("*-*-* %H:%M:%S")
 
@@ -156,9 +165,9 @@ def schedule_sentence(schedule: PowerSchedule) -> str:
     shutdown times the PC is turned off by hand, so there are no hours to give
     and this is empty.
     """
-    wake = schedule.wake_time.strftime("%H:%M")
-    if not schedule.shutdown:
+    if not schedule.shutdown or schedule.wake_time is None:
         return ""
+    wake = schedule.wake_time.strftime("%H:%M")
     by_time: Dict[str, List[int]] = {}
     for evening, at in sorted(schedule.shutdown.items()):
         by_time.setdefault(at.strftime("%H:%M"), []).append(evening)
@@ -238,7 +247,9 @@ def main() -> None:
     elif args.action == "oncalendar-wake":
         print(schedule.wake_oncalendar())
     elif args.action == "next-wake-epoch":
-        print(int(schedule.next_wake(now).timestamp()))
+        wake = schedule.next_wake(now)
+        if wake is not None:
+            print(int(wake.timestamp()))
     elif args.action == "next-shutdown":
         print(schedule.next_shutdown(now).isoformat())
     elif args.action == "early-wake-epoch":
