@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.gateway.autoreply import FAULT, FAULT_TEXT, SCHEDULED, OfflineResponder, offline_text
+from src.gateway.autoreply import FAULT, FAULT_TEXT, MANUAL_TEXT, SCHEDULED, OfflineResponder, offline_text
 from src.gateway.journal import Journal
 from src.gateway.monitor import PcMonitor, PcState
 from src.gateway.schedule import PowerSchedule, schedule_sentence
@@ -182,3 +182,30 @@ def test_a_failed_send_records_nothing(tmp_path):
     entry = _entry(journal, "m1")
     assert not responder.maybe_reply(entry)
     assert not journal.autoreply_sent("group@g.us", monitor.down_since)
+
+
+# ── manual-only power.yaml (since 2026-11-06): no promised wake time ──
+
+NO_SCHEDULE = {"timezone": "Europe/Lisbon", "wake_time": None, "shutdown": {}}
+
+
+def test_manual_only_announced_off_promises_no_time(rig):
+    clock, monitor, journal, responder, sent = rig(NIGHT, NO_SCHEDULE)
+    monitor.announce_going_down()
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 600
+    assert responder.outage() == SCHEDULED
+    assert responder.maybe_reply(_entry(journal, "m1"))
+    assert sent[0][1] == MANUAL_TEXT
+    assert "07:00" not in sent[0][1] and "amanhã" not in sent[0][1]
+
+
+def test_manual_only_unannounced_loss_is_a_fault_even_at_night(rig):
+    clock, monitor, journal, responder, sent = rig(NIGHT, NO_SCHEDULE)
+    monitor.observe(PcState.OFFLINE)
+    clock.value += 120
+    assert responder.outage() == FAULT
+
+
+def test_manual_only_text_has_no_dash_clause_separators():
+    assert not any(d in MANUAL_TEXT for d in DASHES)

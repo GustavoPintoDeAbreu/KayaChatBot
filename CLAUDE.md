@@ -224,11 +224,13 @@ Every failure returns the semantic results unchanged.
 
 ### Always on, and on demand (2026-09-24)
 
-The PC stopped being always on. It wakes at 07:00 (the Pi's Wake-on-LAN, the BIOS
-alarm as backup) and, since 2026-10-15, turns itself off at night once nothing is
-running: from 23:00 (02:00 after Friday and Saturday) lab-infra's `lab-power-shutdown.sh` waits for
-the idea pipeline, Qwen runs, CI, GPU jobs, the keyboard and Claude Code sessions,
-then powers off (between 2026-10-05 and 10-15 it was turned off by hand only).
+The PC stopped being always on. **Since 2026-11-06 its power is manual only**: no scheduled wake and no
+nightly shutdown (lab-infra `power.yaml` has an empty `wake_time`; every poweroff clears the RTC alarm). It comes
+on with `/homelabon` or the power button and goes off with `/homelaboff` (between 2026-10-15 and 11-06 it woke at
+07:00 and shut itself down once idle; before that it was manual-only). Her offline reply therefore promises no
+time: *"Estou desligado agora. Volto quando o Gustavo me ligar e respondo-te nessa altura."*; an unannounced loss
+is the fault line. `power_config` (`src/gateway/app.py`) takes the mounted file as-is when it has a `wake_time` key,
+even an empty one.
 He can also turn it off from WhatsApp: `/homelaboff` in
 his DM (gateway `src/gateway/homelab.py`, never reaches Kaya) asks what is running, and on
 `yes` the PC's `lab-power-listener` starts `lab-power-shutdown.sh --manual`, which waits for jobs
