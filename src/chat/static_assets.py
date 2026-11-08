@@ -66,7 +66,8 @@ def page_csp(html: str) -> str:
     return "; ".join([
         "default-src 'none'", "script-src 'self' " + " ".join(hashes["script"]),
         "style-src 'self' " + " ".join(hashes["style"]), "img-src 'self' data:",
-        "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]).replace("  ", " ")
+        # form-action 'self' since the "Get in touch" form POSTs to /contact on this origin.
+        "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"]).replace("  ", " ")
 
 
 def headers_for(path: Path) -> Dict[str, str]:

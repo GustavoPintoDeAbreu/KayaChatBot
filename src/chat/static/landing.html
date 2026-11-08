@@ -106,6 +106,18 @@ footer{margin-top:4rem;padding:1.5rem 0 3rem;border-top:1px solid var(--rule);co
 .group-title{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin:2.4rem 0 0}
 .linkedin{display:inline-block;margin-top:.4rem;text-decoration:none;font-family:var(--mono);font-size:.85rem;padding:.55rem 1.1rem;background:var(--teal);color:var(--on-accent);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px))}
 .linkedin + .linkedin{margin-left:.6rem}
+.contact{display:grid;gap:1.2rem;margin:2.4rem 0 0}
+.contact-lead{font-size:1rem;color:var(--muted);max-width:38rem;margin:0 0 .6rem}
+.contact-form{background:var(--surface);border:1px solid var(--rule);padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:.7rem}
+.contact-form label{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--amber)}
+.contact-form input,.contact-form textarea{font:inherit;font-size:.95rem;background:var(--surface-2);color:var(--ink);border:1px solid var(--rule);border-radius:6px;padding:.45rem .6rem;width:100%}
+.contact-form button{font-family:var(--mono);font-size:.8rem;padding:.5rem 1.1rem;background:var(--teal);color:var(--on-accent);border:0;border-radius:6px;cursor:pointer}
+.contact-offer{background:var(--surface);border:1px solid var(--rule);padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:.35rem}
+.contact-offer b{font-size:1.05rem;color:var(--teal)}
+.contact-offer ul{list-style:none;margin:0;padding:0;display:grid;gap:.4rem}
+.contact-offer li{font-size:.92rem;color:var(--muted)}
+.hp{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@media (min-width:900px){.contact{grid-template-columns:minmax(0,1fr) minmax(0,18rem);align-items:start}}
 .figure{margin:1.6rem 0}
 figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -329,10 +341,26 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
   </article>
 </div>
 
-<h2 data-scrub="slide">How I build</h2>
+<h2 data-scrub="slide">How I build and what motivates me</h2>
 <p><strong>Private by default.</strong> My friends&#x27; messages, photos and voice notes are processed at home and are never sent to a cloud AI.</p>
 <p><strong>Agents propose, a person approves.</strong> Anything that writes, merges or deploys waits for my yes.</p>
 <p><strong>Measured, not assumed.</strong> Changes to the group chat are checked against a test set before they go live; when a fine-tuned model did not beat a stock one, the stock one won.</p>
+
+<h2 data-scrub="slide">Get in touch</h2>
+<div class="contact">
+<form class="contact-form" action="/contact" method="post">
+<p class="contact-lead">Send your name, your email and what you would like help with. It reaches me directly.</p>
+<label for="c-name">Your name</label>
+<input id="c-name" name="name" type="text" required maxlength="120" autocomplete="name">
+<label for="c-email">Your email</label>
+<input id="c-email" name="email" type="email" required maxlength="254" autocomplete="email">
+<label for="c-message">What can I help with?</label>
+<textarea id="c-message" name="message" required maxlength="2000" rows="5"></textarea>
+<input class="hp" name="website" type="text" aria-hidden="true" tabindex="-1">
+<button type="submit">Send</button>
+</form>
+<aside class="contact-offer"><b>I can help with</b><ul><li>Website full-stack development</li><li>Foundational data architecture for companies</li><li>Hardware &amp; IoT project integration</li><li>Everything multilingual and cross-platform when needed</li></ul></aside>
+</div>
 
 </div>
 
@@ -470,10 +498,26 @@ figcaption{margin-top:.7rem;font-size:.86rem;color:var(--muted);max-width:42rem}
   </article>
 </div>
 
-<h2 data-scrub="slide">Como construo</h2>
+<h2 data-scrub="slide">Como construo e o que me motiva</h2>
 <p><strong>Privado por defeito.</strong> As mensagens, fotos e áudios dos meus amigos são processados em casa e nunca vão para uma IA na nuvem.</p>
 <p><strong>Os agentes propõem, uma pessoa aprova.</strong> Tudo o que escreve, junta ou publica espera pelo meu sim.</p>
 <p><strong>Medido, não assumido.</strong> As mudanças ao chat do grupo são testadas contra um conjunto de testes antes de irem para produção; quando um modelo afinado não bateu um modelo de base, ganhou o de base.</p>
+
+<h2 data-scrub="slide">Fala comigo</h2>
+<div class="contact">
+<form class="contact-form" action="/contact" method="post">
+<p class="contact-lead">Envia teu nome, teu email e de que se trata; ligo responde logo.</p>
+<label for="c-name-pt">O teu nome</label>
+<input id="c-name-pt" name="name" type="text" required maxlength="120" autocomplete="name">
+<label for="c-email-pt">O teu email</label>
+<input id="c-email-pt" name="email" type="email" required maxlength="254" autocomplete="email">
+<label for="c-message-pt">De que se trata?</label>
+<textarea id="c-message-pt" name="message" required maxlength="2000" rows="5"></textarea>
+<input class="hp" name="website" type="text" aria-hidden="true" tabindex="-1">
+<button type="submit">Enviar</button>
+</form>
+<aside class="contact-offer"><b>Posso ajuda com</b><ul><li>Desenvolvimento web full-stack</li><li>Arquitetura de data fundacional para empresas</li><li>Integração de projetos de hardware e IoT</li><li>Tudo multilingue e multiplatform quando eu quiser</li></ul></aside>
+</div>
 
 </div>
 
