@@ -13,7 +13,7 @@ WhatsApp ──▶ WAHA (Pi) ──▶ gateway (Pi) ──journal──▶ POST 
 
 | Container | What it does | Port |
 |---|---|---|
-| `kaya-gateway` | Journals every WhatsApp event in SQLite. Downloads media at once, because WAHA deletes it after 180 s. Forwards events to the PC one at a time, in order. Buffers them while the PC is off and replays them when it is back. Sends the offline reply. Serves the showcase page `/`, its images and scripts `/assets/<name>` and `/status`. | 8080 public (tunnel only), 8088 LAN (PC only) |
+| `kaya-gateway` | Journals every WhatsApp event in SQLite. Downloads media at once, because WAHA deletes it after 180 s. Forwards events to the PC one at a time, in order. Buffers them while the PC is off and replays them when it is back. Sends the offline reply. Serves the showcase page `/`, its images and scripts `/assets/<name>`, `POST /contact` (the page's "Get in touch" form) and `/status`. | 8080 public (tunnel only), 8088 LAN (PC only) |
 | `kaya-waha` | WhatsApp (NOWEB), `noweb-arm-2026.9.2` (2026-10-27: clears ImageMagick CVE-2026-25971) | 3000 LAN (PC only) |
 | `kaya-cloudflared` | The public tunnel for `sigmakayachat.pt`, its only connector since 2026-09-25 | none |
 
@@ -81,6 +81,37 @@ The dates come from the PC
 the last copy is kept in `data/gateway/birthdays.json`, so it works with the PC
 off. What was sent is in `data/gateway/birthday_state.json`; `/status` on the
 internal port shows the roster size and the last send.
+
+## The "Get in touch" form (`POST /contact`)
+
+The showcase page ends with a "Get in touch" section (PT: "Fala comigo"): a plain
+HTML `<form method="post" action="/contact">` for the visitor's name, email and what
+they want help with. No JS on the page posts it — the CSP's `form-action` is `'self'`
+(`static_assets.page_csp`), so the submit lands on this gateway.
+
+`src/gateway/contact.py` relays one note to the owner over two independent channels:
+
+- **WhatsApp** — the same WAHA sender the taps use, into the owner's DM. Nothing new has to be
+  set: the DM is derived from `IDEA_OWNER_NUMBERS` (the same convention as `homelab.default_chat`
+  and `/help`). `GATEWAY_CONTACT_CHAT` (a JID) or `CONTACT_OWNER_NUMBERS` only override that
+  target. Without an owner number at all, the channel is off.
+- **Email** — the optional extra: SMTP with STARTTLS (`CONTACT_SMTP_HOST`/`PORT`/`USER`/`PASSWORD`).
+  `CONTACT_EMAIL_TO` is the owner's own address and stays a server-side secret: it is
+  never on the page, and the email in the form is always the *visitor's*. Empty host
+  turns the channel off.
+
+A submit that fills the hidden honeypot field (`name="website"`) or that is missing a
+required field never sends; a throttled one (per-IP cooldown plus a per-hour cap,
+in-memory — the gateway is one worker) is accepted silently so a bot cannot tell it was
+dropped. `/status` does not list the form: there is nothing to inspect, failures log at
+warning. The route lives on the public listener only (8080, which only the tunnel reaches), so
+the way to see one end to end is from anywhere at all:
+
+```bash
+curl -s -X POST https://sigmakayachat.pt/contact \
+  -d 'name=Test&email=test@example.com&message=hello'      # expect the thank-you page
+docker logs -f kaya-gateway                                # the note, then "contact:" lines
+```
 
 ## Deploying
 

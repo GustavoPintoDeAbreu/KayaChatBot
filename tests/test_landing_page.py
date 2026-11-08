@@ -309,6 +309,45 @@ def test_the_language_switch_tells_the_scene(landing):
         assert "kaya:lang" in _script(name)
 
 
+CONTACT_EN_BULLETS = ("Website full-stack development", "Foundational data architecture for companies",
+                      "Hardware &amp; IoT project integration", "Everything multilingual and cross-platform when needed")
+CONTACT_PT_BULLETS = ("Desenvolvimento web full-stack", "Arquitetura de data fundacional para empresas",
+                      "Integração de projetos de hardware e IoT", "Tudo multilingue e multiplatform quando eu quiser")
+
+
+def test_how_i_build_heading_names_the_motivation(landing):
+    """2026-11-08: Gustavo asked for the section to say what motivates it, not just how."""
+    for heading in ("How I build and what motivates me", "Como construo e o que me motiva"):
+        assert f'<h2 data-scrub="slide">{heading}</h2>' in landing, heading
+
+
+def test_get_in_touch_is_a_plain_form_posting_to_the_gateway(landing):
+    """No JS on the page submits it (the CSP has no fetch and the scripts stay inert), so the
+    submit is a form whose action is this origin's /contact — never an external endpoint."""
+    for heading in ("Get in touch", "Fala comigo"):
+        assert f'<h2 data-scrub="slide">{heading}</h2>' in landing, heading
+    assert landing.count('<form class="contact-form" action="/contact" method="post">') == 2
+    assert not re.search(r"<form[^>]*action=\"https?://", landing)
+    for field in ("name", "email", "message"):
+        assert landing.count(f'name="{field}"') == 2, field
+    assert landing.count('<input class="hp" name="website"') == 2
+    assert "<button type=\"submit\">Send</button>" in landing
+    assert "<button type=\"submit\">Enviar</button>" in landing
+
+
+def test_the_contact_offer_box_lists_what_he_can_do(landing):
+    for label in ("I can help with", "Posso ajuda com"):
+        assert f"<b>{label}</b>" in landing, label
+    for bullet in CONTACT_EN_BULLETS + CONTACT_PT_BULLETS:
+        assert f"<li>{bullet}</li>" in landing, bullet
+
+
+def test_the_contact_form_carries_no_owner_email(landing):
+    """The form takes the visitor's email; the owner's stays server-side (CONTACT_EMAIL_TO)."""
+    assert "mailto:" not in landing
+    assert re.search(r"[\w.+-]+@[\w-]+\.\w+", _without_code(landing)) is None
+
+
 def test_console_easter_egg():
     assert "console.log('%cKaya'" in _script("motion.js")
 

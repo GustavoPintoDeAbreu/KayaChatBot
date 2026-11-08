@@ -4,9 +4,9 @@ WAHA posts every WhatsApp event here. The gateway journals it, downloads its
 media at once (WAHA deletes media 180 s after receipt), sends the offline reply
 when the PC is really off, and wakes the forwarder that delivers events to the
 PC's ``/whatsapp/relay`` in order. It also serves the public showcase page, its
-images (``/assets/<name>``) and ``/status``. See deploy/pi/README.md.
+images (``/assets/<name>``), the "Get in touch" form (``POST /contact``) and ``/status``. See deploy/pi/README.md.
 
-Two listeners, on purpose: the public one (showcase page, its images and a reduced status) is
+Two listeners, on purpose: the public one (showcase page, its images, the contact form and a reduced status) is
 the only thing the Cloudflare tunnel reaches; the internal one (webhook, media,
 going-down) is bound to the LAN and firewalled to the PC.
 
@@ -53,6 +53,8 @@ from src.gateway.homelab import HomelabPower
 from src.gateway.assistant_tap import ASLEEP_TEXT, AssistantTap, handback_event
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.gateway.help_tap import HELP_TAG, HelpTap
+from src.gateway.contact import (ContactNotifier, ContactThrottle, clean_contact_fields,
+                                 is_honeypot, render_thanks)
 from src.chat.poll_votes import (POLL_VOTE_EVENTS, POLL_VOTE_FAILED_EVENTS,
                                  parse_waha_poll_vote)
 from src.gateway.journal import Journal
@@ -98,6 +100,18 @@ class GatewaySettings:
     power_path: str = "/lab-infra/power.yaml"
     # The showcase page's images, served by the public app at /assets/<name>.
     assets_dir: str = "src/chat/static/showcase"
+    # The "Get in touch" form (POST /contact): WhatsApp is the zero-config channel — the DM is
+    # derived from IDEA_OWNER_NUMBERS (GATEWAY_CONTACT_CHAT overrides it) — so nothing new has to
+    # be filled. Email is the optional extra; the owner's own address (CONTACT_EMAIL_TO) stays a
+    # server-side secret, never on the page. An empty host turns that channel off.
+    contact_chat: str = ""
+    contact_owner_numbers: Tuple[str, ...] = ()
+    contact_smtp_host: str = ""
+    contact_smtp_port: int = 587
+    contact_smtp_user: str = ""
+    contact_smtp_password: str = ""
+    contact_email_to: str = ""
+    contact_email_from: str = ""
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "GatewaySettings":
@@ -121,6 +135,16 @@ class GatewaySettings:
             max_media_bytes=int(float(env.get("GATEWAY_MAX_MEDIA_MB", "50")) * 1024 * 1024),
             power_path=env.get("GATEWAY_POWER_FILE", "/lab-infra/power.yaml"),
             assets_dir=env.get("GATEWAY_ASSETS_DIR", "src/chat/static/showcase"),
+            contact_chat=env.get("GATEWAY_CONTACT_CHAT", "").strip(),
+            contact_owner_numbers=tuple(
+                n.strip() for n in (env.get("CONTACT_OWNER_NUMBERS")
+                                    or env.get("IDEA_OWNER_NUMBERS", "")).split(",") if n.strip()),
+            contact_smtp_host=env.get("CONTACT_SMTP_HOST", "").strip(),
+            contact_smtp_port=int(env.get("CONTACT_SMTP_PORT", "587")),
+            contact_smtp_user=env.get("CONTACT_SMTP_USER", ""),
+            contact_smtp_password=env.get("CONTACT_SMTP_PASSWORD", ""),
+            contact_email_to=env.get("CONTACT_EMAIL_TO", "").strip(),
+            contact_email_from=env.get("CONTACT_EMAIL_FROM", "").strip(),
         )
 
 
@@ -186,6 +210,13 @@ class Gateway:
                                           self.monitor, now=now)
         self.early_wake = EarlyWake(self.journal, self.monitor, self.schedule,
                                     settings.data_dir, now=now)
+        self.contact_notifier = ContactNotifier(
+            send_text=self._send_text, contact_chat=settings.contact_chat,
+            owner_numbers=settings.contact_owner_numbers,
+            smtp_host=settings.contact_smtp_host, smtp_port=settings.contact_smtp_port,
+            smtp_user=settings.contact_smtp_user, smtp_password=settings.contact_smtp_password,
+            email_to=settings.contact_email_to, email_from=settings.contact_email_from)
+        self.contact_throttle = ContactThrottle()
         if homelab:
             homelab.attach(journal=self.journal, monitor=self.monitor, send_text=self._send_text,
                            data_dir=settings.data_dir, now=now)
@@ -426,6 +457,31 @@ class Gateway:
                 raise HTTPException(status_code=404)
             return FileResponse(path, media_type=static_assets.media_type(path),
                                 headers=static_assets.headers_for(path))
+
+        @app.post("/contact")
+        async def contact(request: Request):
+            """The "Get in touch" form: relay a visitor's note to the owner (WhatsApp + email).
+
+            A plain HTML form posts here (the page's CSP allows form-action 'self'). A filled
+            honeypot or an over-eager same-IP submit answers the thank-you silently, so a bot is
+            not tipped off; a genuinely empty submission is a 400. Delivery itself is best-effort.
+            """
+            thanks_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"}
+            form = await request.form()
+            if is_honeypot(form):
+                return HTMLResponse(render_thanks(), headers=thanks_headers)
+            fields = clean_contact_fields(form)
+            if fields is None:
+                raise HTTPException(status_code=400, detail="missing field")
+            ip = (request.headers.get("cf-connecting-ip")
+                  or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+                  or (request.client.host if request.client else ""))
+            if not self.contact_throttle.allow(ip, self._now()):
+                return HTMLResponse(render_thanks(), headers=thanks_headers)
+            await asyncio.to_thread(self.contact_notifier.notify,
+                                    fields["name"], fields["email"], fields["message"])
+            lang = "pt" if request.headers.get("accept-language", "").lower().startswith("pt") else "en"
+            return HTMLResponse(render_thanks(lang), headers=thanks_headers)
 
         # No /status here since 2026-10-27: the page never read it, and it told anyone when the
         # PC was on. The LAN listener still serves it.

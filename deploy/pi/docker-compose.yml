@@ -1,6 +1,6 @@
 # The always-on front door, on the Raspberry Pi. See README.md.
 #
-#   gateway      landing page + /status (public, via the tunnel), WAHA webhook,
+#   gateway      landing page + /contact (public, via the tunnel) and /status, WAHA webhook,
 #                journal, media cache, forwarder to the PC (LAN)
 #   waha         WhatsApp (NOWEB). Profile `waha`: started only once its session
 #                has been moved here; never alongside the PC's.
@@ -41,6 +41,18 @@ services:
       # The chat the birthday line goes to (src/gateway/birthdays.py): the
       # Community's general group. Empty turns birthday messages off.
       - GATEWAY_BIRTHDAY_CHAT=${GATEWAY_BIRTHDAY_CHAT:-}
+      # The "Get in touch" form (POST /contact, src/gateway/contact.py): the note reaches the owner
+      # on WhatsApp with nothing new to set — the DM is derived from IDEA_OWNER_NUMBERS. These two
+      # only change that target; the SMTP block is the optional email extra and CONTACT_EMAIL_TO
+      # (the owner's own address) stays a server-side secret, never on the page.
+      - GATEWAY_CONTACT_CHAT=${GATEWAY_CONTACT_CHAT:-}
+      - CONTACT_OWNER_NUMBERS=${CONTACT_OWNER_NUMBERS:-}
+      - CONTACT_SMTP_HOST=${CONTACT_SMTP_HOST:-}
+      - CONTACT_SMTP_PORT=${CONTACT_SMTP_PORT:-587}
+      - CONTACT_SMTP_USER=${CONTACT_SMTP_USER:-}
+      - CONTACT_SMTP_PASSWORD=${CONTACT_SMTP_PASSWORD:-}
+      - CONTACT_EMAIL_TO=${CONTACT_EMAIL_TO:-}
+      - CONTACT_EMAIL_FROM=${CONTACT_EMAIL_FROM:-}
     volumes:
       - ./data/gateway:/data
       - ./data/runtime:/config:ro
