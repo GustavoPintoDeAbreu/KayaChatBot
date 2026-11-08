@@ -227,3 +227,12 @@ def test_the_public_app_answers_in_the_visitor_language(rig):
     _, client, _ = rig
     response = client.post("/contact", data=_note(), headers={"accept-language": "pt-BR,pt;q=0.9"})
     assert "responde logo" in response.text
+
+
+def test_the_public_app_refuses_a_giant_or_off_body(rig):
+    """The body is parsed by hand (no python-multipart in the Pi image), so it must be capped
+    and a non-form submission must not sneak through."""
+    _, client, sent = rig
+    assert client.post("/contact", data={"name": "A" * 40_000}).status_code == 400
+    assert client.post("/contact", json=_note()).status_code == 400
+    assert sent == []
