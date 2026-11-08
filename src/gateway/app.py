@@ -53,8 +53,8 @@ from src.gateway.homelab import HomelabPower
 from src.gateway.assistant_tap import ASLEEP_TEXT, AssistantTap, handback_event
 from src.gateway.idea_tap import OFFLINE_TEXT as IDEA_OFFLINE_TEXT, IdeaTap
 from src.gateway.help_tap import HELP_TAG, HelpTap
-from src.gateway.contact import (ContactNotifier, ContactThrottle, clean_contact_fields,
-                                 is_honeypot, render_thanks)
+from src.gateway.contact import (ContactNotifier, ContactThrottle, check_proof, clean_contact_fields,
+                                 is_honeypot, make_proof, proof_key, render_thanks)
 from src.chat.poll_votes import (POLL_VOTE_EVENTS, POLL_VOTE_FAILED_EVENTS,
                                  parse_waha_poll_vote)
 from src.gateway.journal import Journal
@@ -217,6 +217,12 @@ class Gateway:
             smtp_user=settings.contact_smtp_user, smtp_password=settings.contact_smtp_password,
             email_to=settings.contact_email_to, email_from=settings.contact_email_from)
         self.contact_throttle = ContactThrottle()
+        # The form's proof token is signed with a secret the Pi already carries (the relay token),
+        # so enabling the form needs no new configuration anywhere.
+        self.contact_proof_key = proof_key(settings.relay_token)
+        self.contact_stats: Dict[str, int] = {"sent": 0, "dropped_proof": 0,
+                                              "dropped_honeypot": 0, "dropped_throttle": 0,
+                                              "rejected": 0}
         if homelab:
             homelab.attach(journal=self.journal, monitor=self.monitor, send_text=self._send_text,
                            data_dir=settings.data_dir, now=now)
@@ -427,6 +433,9 @@ class Gateway:
             "birthdays": self.birthdays.status() if self.birthdays else None,
             "early_wake": (datetime.datetime.fromtimestamp(pending, self.schedule.timezone).isoformat()
                            if (pending := self.early_wake.pending()) is not None else None),
+            # LAN-only like the rest of this payload: what the form saw, so spam is visible
+            # without anything public leaking it.
+            "contact": self.contact_stats,
         }
 
     def _build_public_app(self) -> FastAPI:
@@ -448,6 +457,10 @@ class Gateway:
             html = page.read_text(encoding="utf-8")
             view = showcase_metrics.build_view(showcase_metrics.fetch_public())
             html = showcase_metrics.inject(html, view)
+            # The form's proof token is minted per serve: only whoever fetched the page has one
+            # to echo back, and the CSP below hashes the final html, so it stays valid.
+            html = html.replace('value="PROOF-TOKEN"',
+                                f'value="{make_proof(self.contact_proof_key, self._now())}"')
             return HTMLResponse(html, headers={"Content-Security-Policy": static_assets.page_csp(html)})
 
         @app.get("/assets/{name}")
@@ -462,9 +475,11 @@ class Gateway:
         async def contact(request: Request):
             """The "Get in touch" form: relay a visitor's note to the owner (WhatsApp + email).
 
-            A plain HTML form posts here (the page's CSP allows form-action 'self'). A filled
-            honeypot or an over-eager same-IP submit answers the thank-you silently, so a bot is
-            not tipped off; a genuinely empty submission is a 400. Delivery itself is best-effort.
+            A plain HTML form posts here (the page's CSP allows form-action 'self'). Every submit
+            must carry the proof token the page minted when it was served and show at least three
+            seconds of dwell, so a curl loop or a replayed page has nothing to post; on top of that
+            a filled honeypot and an over-eager same-IP submit answer the thank-you silently, so a
+            bot is not tipped off. A genuinely empty submission is a 400. Delivery itself is best-effort.
             """
             thanks_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"}
             # The Pi image is stdlib plus four pinned deps, and starlette's form parser needs
@@ -474,16 +489,26 @@ class Gateway:
                 raise HTTPException(status_code=400, detail="body too large")
             form = {key: values[-1] for key, values in
                     parse_qs(body.decode("utf-8", "ignore")).items()}
-            if is_honeypot(form):
-                return HTMLResponse(render_thanks(), headers=thanks_headers)
-            fields = clean_contact_fields(form)
-            if fields is None:
-                raise HTTPException(status_code=400, detail="missing field")
             ip = (request.headers.get("cf-connecting-ip")
                   or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
                   or (request.client.host if request.client else ""))
-            if not self.contact_throttle.allow(ip, self._now()):
+            # The throttle records every submit, whatever it decides below: a bot hammering the
+            # route burns its own budget even when its notes are dropped for other reasons.
+            allowed = self.contact_throttle.allow(ip, self._now())
+            if not check_proof(self.contact_proof_key, form.get("proof", ""), self._now()):
+                self.contact_stats["dropped_proof"] += 1
                 return HTMLResponse(render_thanks(), headers=thanks_headers)
+            if is_honeypot(form):
+                self.contact_stats["dropped_honeypot"] += 1
+                return HTMLResponse(render_thanks(), headers=thanks_headers)
+            fields = clean_contact_fields(form)
+            if fields is None:
+                self.contact_stats["rejected"] += 1
+                raise HTTPException(status_code=400, detail="missing field")
+            if not allowed:
+                self.contact_stats["dropped_throttle"] += 1
+                return HTMLResponse(render_thanks(), headers=thanks_headers)
+            self.contact_stats["sent"] += 1
             await asyncio.to_thread(self.contact_notifier.notify,
                                     fields["name"], fields["email"], fields["message"])
             lang = "pt" if request.headers.get("accept-language", "").lower().startswith("pt") else "en"

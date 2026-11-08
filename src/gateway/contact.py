@@ -10,6 +10,8 @@ Stdlib only: the Pi gateway imports this and must stay torch-free (tests/gateway
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -20,6 +22,9 @@ logger = logging.getLogger(__name__)
 _MAX_NAME = 120
 _MAX_EMAIL = 254
 _MAX_MESSAGE = 2000
+_PROOF_MIN_AGE = 3.0
+_PROOF_MAX_AGE = 259_200.0
+_PROOF_DIGEST = 16
 
 
 def clean_contact_fields(form) -> Optional[dict]:
@@ -44,19 +49,61 @@ def is_honeypot(form) -> bool:
     return bool(str(form.get("website") or "").strip())
 
 
+def proof_key(secret: str) -> bytes:
+    """The HMAC key for the form's proof token, from a secret already in the environment."""
+    return hashlib.sha256(f"contact-proof|{secret}".encode("utf-8")).digest()
+
+
+def make_proof(key: bytes, now: float) -> str:
+    """A token stamped into the page when it is served: ``<issued-at>.<signature>``.
+
+    The route hands it out only to whoever fetched the page, so a submit that carries a valid one
+    proved it came from a rendered form — a plain curl loop has nothing to echo back.
+    """
+    issued = int(now)
+    return f"{issued}.{_proof_sig(key, issued)[:_PROOF_DIGEST]}"
+
+
+def _proof_sig(key: bytes, issued: int) -> str:
+    return hmac.new(key, str(issued).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def check_proof(key: bytes, proof: str, now: float,
+                *, min_age: float = _PROOF_MIN_AGE, max_age: float = _PROOF_MAX_AGE) -> bool:
+    """Whether the form's token was signed by us and is fresh enough.
+
+    ``min_age`` rejects a submit that lands seconds after the page was fetched (no human types a
+    name, an email and a message that fast); ``max_age`` keeps someone from replaying a saved page
+    forever — 72 h of slack so a tab left open overnight still sends.
+    """
+    issued_text, _, signature = str(proof or "").partition(".")
+    if not issued_text.isdigit() or len(signature) != _PROOF_DIGEST:
+        return False
+    issued = int(issued_text)
+    age = now - issued
+    if age < min_age or age > max_age:
+        return False
+    return hmac.compare_digest(signature, _proof_sig(key, issued)[:_PROOF_DIGEST])
+
+
 class ContactThrottle:
     """A per-IP cooldown so one visitor cannot flood the owner's WhatsApp or email inbox.
 
     In-memory and single-process (the gateway is one asyncio worker), which is enough for a
     personal site: it stops a determined bot and a runaway auto-submitter, not a coordinated
-    multi-IP swarm.
+    multi-IP swarm — that is Cloudflare's edge in front of the tunnel. The table itself is bounded
+    so a distributed flood cannot grow it.
     """
 
-    def __init__(self, *, cooldown_seconds: int = 60, max_per_window: int = 10,
-                 window_seconds: int = 3600) -> None:
+    def __init__(self, *, cooldown_seconds: int = 120, max_per_window: int = 5,
+                 window_seconds: int = 3_600, max_per_day: int = 20, day_seconds: int = 86_400,
+                 max_ips: int = 5_000) -> None:
         self._cooldown = cooldown_seconds
         self._max_per_window = max_per_window
         self._window = window_seconds
+        self._max_per_day = max_per_day
+        self._day = day_seconds
+        self._max_ips = max_ips
         self._hits: dict = {}
 
     def allow(self, ip: str, now: float) -> bool:
@@ -66,15 +113,30 @@ class ContactThrottle:
         falls back to a shared bucket so the cap still applies.
         """
         key = ip or "?"
-        recent = [t for t in self._hits.get(key, []) if now - t < self._window]
+        recent = [t for t in self._hits.get(key, []) if now - t < self._day]
         last = recent[-1] if recent else None
         if last is not None and now - last < self._cooldown:
             return False
-        if len(recent) >= self._max_per_window:
+        if len([t for t in recent if now - t < self._window]) >= self._max_per_window:
+            return False
+        if len(recent) >= self._max_per_day:
             return False
         recent.append(now)
         self._hits[key] = recent
+        if len(self._hits) > self._max_ips:
+            self._prune(now)
         return True
+
+    def _prune(self, now: float) -> None:
+        """Drop visitors whose day expired; if that did not free enough room, start the table over.
+
+        Losing the memory of who submitted what is acceptable under a distributed flood — the
+        point of the bound is that RAM stays flat while it happens.
+        """
+        live = {key: [t for t in hits if now - t < self._day] for key, hits in self._hits.items()}
+        self._hits = {key: hits for key, hits in live.items() if hits}
+        if len(self._hits) > self._max_ips:
+            self._hits = {}
 
 
 class ContactNotifier:

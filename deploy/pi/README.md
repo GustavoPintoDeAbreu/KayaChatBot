@@ -101,17 +101,38 @@ they want help with. No JS on the page posts it — the CSP's `form-action` is `
   turns the channel off.
 
 A submit that fills the hidden honeypot field (`name="website"`) or that is missing a
-required field never sends; a throttled one (per-IP cooldown plus a per-hour cap,
-in-memory — the gateway is one worker) is accepted silently so a bot cannot tell it was
-dropped. `/status` does not list the form: there is nothing to inspect, failures log at
-warning. The route lives on the public listener only (8080, which only the tunnel reaches), so
-the way to see one end to end is from anywhere at all:
+required field never sends. The form is flood-proofed in three layers, none of which needs
+a widget on the page (the CSP and the page's own test guards reject one):
+
+- **A proof token minted when the page is served.** `landing()` stamps a fresh
+  `<issued-at>.<hmac>` into a hidden field (`name="proof"`), signed with `KAYA_RELAY_TOKEN` —
+  no new key. `/contact` delivers only notes that carry one: valid, at least three seconds old
+  (nobody types a name, an email and a message faster), and no older than 72 h, so a tab left
+  open overnight still sends. A curl loop or a saved page has nothing to echo back.
+- **The honeypot** (`name="website"`, hidden by CSS): a bot that fills every field it finds
+  gets the thank-you and nothing is sent.
+- **Per-IP limits**, in-memory (the gateway is one worker): a two-minute cooldown, five an hour,
+  twenty a day, with the table bounded so a distributed flood cannot grow its memory.
+
+Anything dropped answers the same thank-you page, so a bot cannot tell it was dropped. `/status`
+on the LAN port carries the counters (`sent`, `dropped_proof`, `dropped_honeypot`,
+`dropped_throttle`, `rejected`); the public listener never serves them. In front of the tunnel,
+add the edge rule once in the Cloudflare dashboard — Security → WAF → Rate limiting rules:
+*Method is POST* and *URI Path equals `/contact`*, block after **20 requests per IP in 60 s**
+for 1 h; plus Bot Fight Mode. That is what stops a multi-IP swarm, which an in-process table
+cannot see.
+
+The route lives on the public listener only (8080, which only the tunnel reaches), so the way to
+watch it is from anywhere at all:
 
 ```bash
 curl -s -X POST https://sigmakayachat.pt/contact \
-  -d 'name=Test&email=test@example.com&message=hello'      # expect the thank-you page
-docker logs -f kaya-gateway                                # the note, then "contact:" lines
+  -d 'name=Test&email=test@example.com&message=hello'      # thank-you, but nothing sends: no token
+docker logs -f kaya-gateway                                # "contact:" lines only for a real submit
 ```
+
+To see one end to end, open the page and use the form — fetching it is what hands a browser the
+token in the first place.
 
 ## Deploying
 
