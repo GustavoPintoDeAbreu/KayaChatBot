@@ -25,7 +25,7 @@ _MAX_MESSAGE = 2000
 def clean_contact_fields(form) -> Optional[dict]:
     """The form's name/email/message, trimmed to their caps; None if any is missing.
 
-    ``form`` is the posted ``application/x-www-form-urlencoded`` body. A browser enforces the
+    ``form`` is the urlencoded body parsed by the route (a plain dict). A browser enforces the
     required attributes, so a submit that arrives without one of these is not a real visitor.
     """
     name = str(form.get("name") or "").strip()[:_MAX_NAME]

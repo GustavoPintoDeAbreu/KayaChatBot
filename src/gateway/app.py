@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import yaml
@@ -467,7 +467,13 @@ class Gateway:
             not tipped off; a genuinely empty submission is a 400. Delivery itself is best-effort.
             """
             thanks_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"}
-            form = await request.form()
+            # The Pi image is stdlib plus four pinned deps, and starlette's form parser needs
+            # python-multipart, which is not one of them — so the urlencoded body is decoded here.
+            body = await request.body()
+            if len(body) > 32_768:
+                raise HTTPException(status_code=400, detail="body too large")
+            form = {key: values[-1] for key, values in
+                    parse_qs(body.decode("utf-8", "ignore")).items()}
             if is_honeypot(form):
                 return HTMLResponse(render_thanks(), headers=thanks_headers)
             fields = clean_contact_fields(form)
