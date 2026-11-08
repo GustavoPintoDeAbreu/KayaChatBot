@@ -100,10 +100,12 @@ class GatewaySettings:
     power_path: str = "/lab-infra/power.yaml"
     # The showcase page's images, served by the public app at /assets/<name>.
     assets_dir: str = "src/chat/static/showcase"
-    # The "Get in touch" form (POST /contact): the WhatsApp DM to notify, and SMTP to email.
-    # All optional; the owner's own email (CONTACT_EMAIL_TO) is a server-side secret, never on
-    # the page. Empty turns that channel off.
+    # The "Get in touch" form (POST /contact): WhatsApp is the zero-config channel — the DM is
+    # derived from IDEA_OWNER_NUMBERS (GATEWAY_CONTACT_CHAT overrides it) — so nothing new has to
+    # be filled. Email is the optional extra; the owner's own address (CONTACT_EMAIL_TO) stays a
+    # server-side secret, never on the page. An empty host turns that channel off.
     contact_chat: str = ""
+    contact_owner_numbers: Tuple[str, ...] = ()
     contact_smtp_host: str = ""
     contact_smtp_port: int = 587
     contact_smtp_user: str = ""
@@ -134,6 +136,9 @@ class GatewaySettings:
             power_path=env.get("GATEWAY_POWER_FILE", "/lab-infra/power.yaml"),
             assets_dir=env.get("GATEWAY_ASSETS_DIR", "src/chat/static/showcase"),
             contact_chat=env.get("GATEWAY_CONTACT_CHAT", "").strip(),
+            contact_owner_numbers=tuple(
+                n.strip() for n in (env.get("CONTACT_OWNER_NUMBERS")
+                                    or env.get("IDEA_OWNER_NUMBERS", "")).split(",") if n.strip()),
             contact_smtp_host=env.get("CONTACT_SMTP_HOST", "").strip(),
             contact_smtp_port=int(env.get("CONTACT_SMTP_PORT", "587")),
             contact_smtp_user=env.get("CONTACT_SMTP_USER", ""),
@@ -207,6 +212,7 @@ class Gateway:
                                     settings.data_dir, now=now)
         self.contact_notifier = ContactNotifier(
             send_text=self._send_text, contact_chat=settings.contact_chat,
+            owner_numbers=settings.contact_owner_numbers,
             smtp_host=settings.contact_smtp_host, smtp_port=settings.contact_smtp_port,
             smtp_user=settings.contact_smtp_user, smtp_password=settings.contact_smtp_password,
             email_to=settings.contact_email_to, email_from=settings.contact_email_from)

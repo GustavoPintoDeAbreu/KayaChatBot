@@ -80,16 +80,18 @@ class ContactThrottle:
 class ContactNotifier:
     """Send one visitor's note to the owner over WhatsApp and/or email. Never raises.
 
-    Both channels are optional and independent: an unconfigured channel is skipped (logged), so
-    a half-wired deployment still delivers over whichever channel it has. A send failure on one
-    never drops the other or crashes the request.
+    WhatsApp needs nothing new to configure: without ``GATEWAY_CONTACT_CHAT`` the DM is derived
+    from the owner's number(s) the taps already know (``IDEA_OWNER_NUMBERS``), the same way
+    ``homelab.default_chat`` does it. Both channels are optional and independent: an unconfigured
+    channel is skipped (logged), so a half-wired deployment still delivers over whichever it has.
+    A send failure on one never drops the other or crashes the request.
     """
 
-    def __init__(self, *, send_text, contact_chat: str = "", smtp_host: str = "",
-                 smtp_port: int = 587, smtp_user: str = "", smtp_password: str = "",
-                 email_to: str = "", email_from: str = "") -> None:
+    def __init__(self, *, send_text, contact_chat: str = "", owner_numbers: Tuple[str, ...] = (),
+                 smtp_host: str = "", smtp_port: int = 587, smtp_user: str = "",
+                 smtp_password: str = "", email_to: str = "", email_from: str = "") -> None:
         self._send_text = send_text
-        self.contact_chat = contact_chat.strip()
+        self.contact_chat = contact_chat.strip() or _owner_dm(owner_numbers)
         self.smtp_host = smtp_host.strip()
         self.smtp_port = smtp_port
         self.smtp_user = smtp_user
@@ -126,9 +128,15 @@ class ContactNotifier:
             except Exception as exc:  # noqa: BLE001 — a lost email must not fail the request
                 logger.warning("contact: email send failed: %s", exc)
         if not sent["whatsapp"] and not sent["email"]:
-            logger.error("contact: no channel configured (GATEWAY_CONTACT_CHAT / CONTACT_SMTP_*), "
-                         "note was not delivered")
+            logger.error("contact: no channel configured (no owner number, GATEWAY_CONTACT_CHAT "
+                         "or CONTACT_SMTP_*), note was not delivered")
         return sent
+
+
+def _owner_dm(owner_numbers: Tuple[str, ...]) -> str:
+    """The owner's DM JID from his number(s) — homelab's ``default_chat`` convention."""
+    numbers = sorted(n.strip() for n in owner_numbers if n.strip())
+    return f"{numbers[0]}@c.us" if numbers else ""
 
 
 def _contact_text(name: str, email: str, message: str) -> str:

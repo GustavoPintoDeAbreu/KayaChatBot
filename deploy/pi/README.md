@@ -91,9 +91,11 @@ they want help with. No JS on the page posts it — the CSP's `form-action` is `
 
 `src/gateway/contact.py` relays one note to the owner over two independent channels:
 
-- **WhatsApp** — the same WAHA sender the taps use, into `GATEWAY_CONTACT_CHAT`
-  (the owner's DM JID). Empty turns that channel off.
-- **Email** — SMTP with STARTTLS (`CONTACT_SMTP_HOST`/`PORT`/`USER`/`PASSWORD`).
+- **WhatsApp** — the same WAHA sender the taps use, into the owner's DM. Nothing new has to be
+  set: the DM is derived from `IDEA_OWNER_NUMBERS` (the same convention as `homelab.default_chat`
+  and `/help`). `GATEWAY_CONTACT_CHAT` (a JID) or `CONTACT_OWNER_NUMBERS` only override that
+  target. Without an owner number at all, the channel is off.
+- **Email** — the optional extra: SMTP with STARTTLS (`CONTACT_SMTP_HOST`/`PORT`/`USER`/`PASSWORD`).
   `CONTACT_EMAIL_TO` is the owner's own address and stays a server-side secret: it is
   never on the page, and the email in the form is always the *visitor's*. Empty host
   turns the channel off.

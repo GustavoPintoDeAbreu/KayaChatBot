@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.gateway.app import Gateway, GatewaySettings
 from src.gateway.contact import ContactNotifier, ContactThrottle, clean_contact_fields, is_honeypot, render_thanks
 
-OWNER = "351900000000@c.us"
+OWNER_NUMBER = "351900000000"
+OWNER = f"{OWNER_NUMBER}@c.us"
 SECRET_EMAIL = "gustavo@private-domain-example.invalid"
 
 _sessions: list = []
@@ -63,7 +64,9 @@ def rig(tmp_path):
         "GATEWAY_LANDING_HTML": str(landing), "GATEWAY_WHITELIST": str(tmp_path / "none.json"),
         "GATEWAY_ASSETS_DIR": str(tmp_path / "assets"),
         "KAYA_RELAY_TOKEN": "relay",
-        "GATEWAY_CONTACT_CHAT": OWNER,
+        # Nothing contact-specific is set: IDEA_OWNER_NUMBERS is what the taps already know, and
+        # the DM target is derived from it.
+        "IDEA_OWNER_NUMBERS": OWNER_NUMBER,
         "CONTACT_SMTP_HOST": "smtp.private-domain-example.invalid", "CONTACT_SMTP_PORT": "587",
         "CONTACT_SMTP_USER": "", "CONTACT_SMTP_PASSWORD": "",
         "CONTACT_EMAIL_TO": SECRET_EMAIL, "CONTACT_EMAIL_FROM": "",
@@ -113,6 +116,18 @@ def test_the_throttle_cools_down_one_ip_and_caps_the_hour(smtp):
     assert throttle.allow("1.2.3.4", 5_000.0) is True   # the window has rolled over
 
 
+def test_the_dm_target_needs_nothing_new_to_fill():
+    """WhatsApp is the zero-config channel: the taps' owner numbers already say who to DM."""
+    def quiet(chat, text):
+        pass
+
+    assert ContactNotifier(send_text=quiet, owner_numbers=(OWNER_NUMBER,)).contact_chat == OWNER
+    assert ContactNotifier(send_text=quiet, owner_numbers=("351900000001", "351900000000")).contact_chat == OWNER
+    assert ContactNotifier(send_text=quiet, contact_chat="120363000000000000@g.us",
+                           owner_numbers=(OWNER_NUMBER,)).contact_chat == "120363000000000000@g.us"
+    assert ContactNotifier(send_text=quiet).contact_chat == ""
+
+
 def test_a_note_reaches_both_channels(smtp):
     notifier = ContactNotifier(send_text=lambda chat, text: None, contact_chat=OWNER,
                                smtp_host="smtp.private-domain-example.invalid",
@@ -155,7 +170,8 @@ def test_a_broken_channel_never_eats_the_other(smtp):
 
 
 def test_an_unconfigured_channel_is_simply_skipped(smtp):
-    whatsapp_only = ContactNotifier(send_text=lambda chat, text: None, contact_chat=OWNER)
+    whatsapp_only = ContactNotifier(send_text=lambda chat, text: None,
+                                    owner_numbers=(OWNER_NUMBER,))
     assert whatsapp_only.notify("A", "v@e.co", "hi") == {"whatsapp": True, "email": False}
     assert _sessions == []
 
