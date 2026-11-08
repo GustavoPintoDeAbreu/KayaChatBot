@@ -102,8 +102,14 @@ A submit that fills the hidden honeypot field (`name="website"`) or that is miss
 required field never sends; a throttled one (per-IP cooldown plus a per-hour cap,
 in-memory — the gateway is one worker) is accepted silently so a bot cannot tell it was
 dropped. `/status` does not list the form: there is nothing to inspect, failures log at
-warning. To see one end to end on the Pi, `curl -s -X POST localhost:8088/contact -d
-'name=Test&email=test@example.com&message=hello'` and watch `docker logs -f kaya-gateway`.
+warning. The route lives on the public listener only (8080, which only the tunnel reaches), so
+the way to see one end to end is from anywhere at all:
+
+```bash
+curl -s -X POST https://sigmakayachat.pt/contact \
+  -d 'name=Test&email=test@example.com&message=hello'      # expect the thank-you page
+docker logs -f kaya-gateway                                # the note, then "contact:" lines
+```
 
 ## Deploying
 
