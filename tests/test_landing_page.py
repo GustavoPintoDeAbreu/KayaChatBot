@@ -331,6 +331,8 @@ def test_get_in_touch_is_a_plain_form_posting_to_the_gateway(landing):
     for field in ("name", "email", "message"):
         assert landing.count(f'name="{field}"') == 2, field
     assert landing.count('<input class="hp" name="website"') == 2
+    assert landing.count('name="proof"') == 2
+    assert landing.count('value="PROOF-TOKEN"') == 2, "the gateway stamps a token here on every serve"
     assert "<button type=\"submit\">Send</button>" in landing
     assert "<button type=\"submit\">Enviar</button>" in landing
 
