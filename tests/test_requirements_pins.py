@@ -42,22 +42,23 @@ def _lowest_allowed(requirement: Requirement) -> Optional[Version]:
 
 
 FLOORS = {
-    "aiohttp": "3.14.4",
-    "anyio": "4.14.2",
+    "aiohttp": "3.14.5",
+    "anyio": "4.16.0",
     "brotli": "1.2.1",
-    "certifi": "2026.10.19",
+    "certifi": "2026.10.23",
     "filelock": "4.2.1",
     "fsspec": "2026.6.0",
-    "idna": "3.15",
-    "oauthlib": "4.0.0",
+    "idna": "3.20",
+    "oauthlib": "4.0.1",
     "pillow": "13.0.0",
     "pypdf": "6.18.0",
-    "python-multipart": "0.0.30",
+    "python-multipart": "0.0.33",
     "sentence-transformers": "5.6.0",
-    "starlette": "1.3.1",
+    "starlette": "1.10.0",
     "transformers": "5.10.0",
-    "urllib3": "2.7.0",
+    "urllib3": "2.8.0",
 }
+
 
 
 @pytest.mark.parametrize("name, floor", sorted(FLOORS.items()))
@@ -144,4 +145,27 @@ def test_requirements_do_not_move_torch():
     assert Version(installed).public == Version(match.group(1)).public, (
         f"torch {installed} is installed, but requirements.txt is pinned against {match.group(1)}; "
         "a bumped package pulled a different torch"
+    )
+
+
+
+def test_dockerfile_torch_matches_the_requirements_header():
+    dockerfile = ROOT / "Dockerfile"
+    if not dockerfile.exists():
+        pytest.skip("the Dockerfile is not copied into the image CI tests in")
+    match = re.search(r"torch==([0-9][0-9.]*)", dockerfile.read_text())
+    assert match, "the Dockerfile no longer names a torch pin"
+    header = re.search(r"Pinned against: torch==([0-9][0-9.]*)",
+                       (ROOT / "requirements.txt").read_text())
+    assert header and Version(match.group(1)) == Version(header.group(1)), (
+        "the Dockerfile torch pin and the requirements.txt header must bump together"
+    )
+
+
+def test_torch_installs_from_a_cuda_index():
+    dockerfile = ROOT / "Dockerfile"
+    if not dockerfile.exists():
+        pytest.skip("the Dockerfile is not copied into the image CI tests in")
+    assert re.search(r"--index-url https://download\.pytorch\.org/whl/cu\d+", dockerfile.read_text()), (
+        "torch must come from the CUDA-specific PyTorch index, not PyPI"
     )
