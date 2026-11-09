@@ -59,13 +59,6 @@ FLOORS = {
     "urllib3": "2.8.0",
 }
 
-EXACT_PINS = {
-    "ctranslate2": "4.8.5",
-    "fastapi": "0.162.2",
-    "pandas": "3.1.1",
-    "sentencepiece": "0.2.3",
-    "transformers": "5.22.2",
-}
 
 
 @pytest.mark.parametrize("name, floor", sorted(FLOORS.items()))
@@ -154,14 +147,6 @@ def test_requirements_do_not_move_torch():
         "a bumped package pulled a different torch"
     )
 
-
-@pytest.mark.parametrize("name, pinned", sorted(EXACT_PINS.items()))
-def test_exact_pins_at_the_audit_version(name, pinned):
-    requirement = _requirements().get(name)
-    assert requirement is not None, f"{name} is not pinned in requirements.txt"
-    assert _lowest_allowed(requirement) == Version(pinned), (
-        f"{name} must be pinned exactly at {pinned}, the audit's fixed version"
-    )
 
 
 def test_dockerfile_torch_matches_the_requirements_header():

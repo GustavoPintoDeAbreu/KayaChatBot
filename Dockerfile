@@ -41,10 +41,9 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
 
 # Install PyTorch with CUDA 12.4 wheels. Kept separate from requirements.txt
 # because torch must come from the CUDA-specific index, not PyPI.
-# torch 2.10.0 / cu124: the host venv must be re-resolved from this same index
-# (torch is outside requirements.txt), or test_requirements_do_not_move_torch fails on the host.
+# torch 2.6.0 / cu124: matches the kaya_chatbot_env venv.
 RUN python -m pip install --no-cache-dir \
-    torch==2.10.0 \
+    torch==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Install all remaining dependencies from requirements.txt, the single source
