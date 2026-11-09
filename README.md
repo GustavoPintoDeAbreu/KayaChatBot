@@ -281,14 +281,15 @@ KayaChatBot/
 
 2. **Create and activate virtual environment**
    ```bash
-   python -m venv kaya_chatbot_env
+   uv venv kaya_chatbot_env        # or: python -m venv kaya_chatbot_env if uv is not installed
    source kaya_chatbot_env/bin/activate   # Linux/Mac
    # kaya_chatbot_env\Scripts\activate   # Windows
    ```
 
 3. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   $(command -v uv || echo "$HOME/.local/bin/uv") pip install -r requirements.txt \
+     || pip install -r requirements.txt        # fallback when uv is not installed (e.g. the Pi host)
    ```
 
 4. **Set up credentials** *(optional — web-search / eval judge only)*

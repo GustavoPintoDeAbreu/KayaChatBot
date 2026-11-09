@@ -2,8 +2,9 @@
 # (scripts/deploy_pi.sh), so no cross-building.
 FROM python:3.12-slim
 WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
 COPY deploy/pi/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN uv pip install --python /usr/local/bin/python3 --no-cache -r /tmp/requirements.txt
 # Only what the gateway imports: the gateway package and the few pure modules of
 # the chat bridge it shares addressing and parsing with. tests/gateway/
 # test_torch_free.py keeps that set honest.
