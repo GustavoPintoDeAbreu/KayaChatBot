@@ -29,11 +29,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3.12 the default `python` (run_full_pipeline.py and the compose
-# commands invoke bare `python`) and bootstrap pip for it.
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
-    && python -m pip install --no-cache-dir \
-    "pip==24.3.1" \
+# commands invoke bare `python`) and install uv, which installs into that
+# system interpreter — the image has no venv.
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+
+RUN uv pip install --python /usr/bin/python3.12 --no-cache \
     "setuptools==75.6.0" \
     "wheel==0.45.1" \
     "packaging==24.2" \
@@ -42,14 +43,14 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
 # Install PyTorch with CUDA 12.4 wheels. Kept separate from requirements.txt
 # because torch must come from the CUDA-specific index, not PyPI.
 # torch 2.6.0 / cu124: matches the kaya_chatbot_env venv.
-RUN python -m pip install --no-cache-dir \
+RUN uv pip install --python /usr/bin/python3.12 --no-cache \
     torch==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Install all remaining dependencies from requirements.txt, the single source
 # of truth for everything except torch.
 COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --python /usr/bin/python3.12 --no-cache -r requirements.txt
 
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \

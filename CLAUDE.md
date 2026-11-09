@@ -96,7 +96,7 @@ source kaya_chatbot_env/bin/activate
 kaya_chatbot_env/bin/python <script>
 ```
 
-Install dependencies inside the venv: `pip install -r requirements.txt`
+Install dependencies inside the venv: `uv pip install -r requirements.txt` (find uv with `command -v uv || $HOME/.local/bin/uv`; fall back to `pip install -r requirements.txt` when uv is not installed — the Pi host has no uv)
 
 ---
 
