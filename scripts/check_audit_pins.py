@@ -4,9 +4,11 @@
 For every exact pin in EXACT_PINS this reads https://pypi.org/project/<name>/<version>/
 and checks the HTTP status (200 = the audit version exists on PyPI, 404 = it does not)
 plus one markup-light check (the version string in the body and the page being at
-least MIN_REAL_PAGE_BYTES): a sandbox tunnel can
-serve an interstitial page with status 200, and a real PyPI release page for pandas or
-transformers is hundreds of KB, so status alone would accept those fakes as 'exists'.
+least MIN_REAL_PAGE_BYTES). This deliberately deviates from the audit plan's dry-run
+spec ('assert nothing about page markup — only HTTP status'): the live run showed the
+sandbox tunnel serving ~3 KB interstitial pages with status 200 for pandas,
+transformers and ctranslate2, so status alone reported three pins as 'exists' that
+were never verified. A 200 without the marker is reported as unverified instead.
 For each cuNNN PyTorch index it reads the index page and prints how many wheel links
 it lists plus the torch wheels it names, so a reviewer can see real index data rather
 than an error page.
