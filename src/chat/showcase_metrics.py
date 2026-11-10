@@ -188,6 +188,30 @@ FLOWS: Dict[str, Dict[str, list]] = {
             "Recebes um aviso, e outro no arranque"
         ]
     },
+    "paywatch": {
+        "en": [
+            "The payslip arrives by email",
+            "Each line is checked against the rules and the days I worked",
+            "All good, or a note ready for HR"
+        ],
+        "pt": [
+            "O recibo chega por email",
+            "Cada linha é conferida com as regras e os dias trabalhados",
+            "Tudo certo, ou uma nota pronta para os RH"
+        ]
+    },
+    "personal-hub": {
+        "en": [
+            "Each project keeps its own numbers",
+            "The dashboard asks them when I open it",
+            "One page per year, with charts"
+        ],
+        "pt": [
+            "Cada projeto guarda os seus números",
+            "O painel pergunta-lhes quando o abro",
+            "Uma página por ano, com gráficos"
+        ]
+    },
     "redditcast": {
         "en": [
             "The week's top posts are collected",
