@@ -36,6 +36,7 @@ def test_build_view_without_feed_carries_flows_and_prompt():
     assert set(view["flows"]) == {
         "kaya", "lab-assistant", "lab-notes", "idea-pipeline", "lab-medic", "labwatch",
         "flight-deals", "price-scout", "series-watch", "game-alerts", "redditcast", "subs",
+        "paywatch", "personal-hub",
     }
     assert "lab" not in view
     assert view["products"] == {}
