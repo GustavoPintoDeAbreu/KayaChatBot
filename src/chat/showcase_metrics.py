@@ -188,6 +188,18 @@ FLOWS: Dict[str, Dict[str, list]] = {
             "Recebes um aviso, e outro no arranque"
         ]
     },
+    "lab-browser": {
+        "en": [
+            "I ask by voice: reply to that post, how many unread emails",
+            "A local model works in my browser, one checked step at a time",
+            "It answers, or shows me the draft and waits for my word"
+        ],
+        "pt": [
+            "Peço por voz: responde a esse post, quantos emails por ler",
+            "Um modelo local trabalha no meu browser, um passo verificado de cada vez",
+            "Responde, ou mostra-me o rascunho e espera pela minha palavra"
+        ]
+    },
     "paywatch": {
         "en": [
             "The payslip arrives by email",

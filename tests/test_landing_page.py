@@ -40,7 +40,7 @@ def _script(name: str) -> str:
 
 SHOWN = ("kaya", "lab-assistant", "idea-pipeline", "lab-medic", "labwatch", "lab-notes",
          "redditcast", "series-watch", "flight-deals", "price-scout", "game-alerts", "subs",
-         "paywatch", "personal-hub")
+         "paywatch", "personal-hub", "lab-browser")
 HIDDEN = ("lab-audit", "lab audit", "lab-infra", "house-hunt", "house hunt", "daily-git",
           "daily git", "photoshop", "comfyui")
 # Model and framework names (Gemma, Qwen, FastAPI, SQLite...) may be named since 2026-10-27
