@@ -126,6 +126,15 @@ def test_every_shown_project_has_a_card_in_both_languages(landing):
     assert len(re.findall(r'data-project="', landing)) == 2 * len(SHOWN)
 
 
+def test_the_glance_card_counts_the_projects_the_page_shows(landing):
+    """2026-11-12: the card said 12 while the page showed 15 project cards. The number is
+    derived from the page's own project list now, so a new card without a new count fails."""
+    shown = set(re.findall(r'data-project="([a-z-]+)"', landing))
+    assert len(shown) >= 12
+    assert f"<b>{len(shown)} projects</b>" in landing
+    assert f"<b>{len(shown)} projetos</b>" in landing
+
+
 def test_hidden_projects_are_not_mentioned():
     for name, text in _public_texts():
         lowered = text.lower()
