@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import httpx
@@ -20,6 +22,8 @@ LABWATCH_PUBLIC_URL_DEFAULT = "http://192.168.1.238:8095/api/catalog/public"
 CACHE_TTL_S = 600
 FAILURE_TTL_S = 60
 FETCH_TIMEOUT_S = 3.0
+LIVE_PAGE_URL_DEFAULT = "https://sigmakayachat.pt/"
+LIVE_TIMEOUT_S = 10.0
 
 PROJECT_FEED_NAMES: Dict[str, str] = {
     "kaya": "Kaya",
@@ -36,18 +40,18 @@ FEED_NAME_TO_PROJECT: Dict[str, str] = {v: k for k, v in PROJECT_FEED_NAMES.item
 
 # The per-project stats the feed publishes, translated; anything unknown stays English.
 STAT_LABEL_PT: Dict[str, str] = {
-    "notes added, all time": "nota added, in total",
-    "ideas sent, all time": "ideias sent, in total",
-    "average idea to pull request, minutes": "minutes average from idea to pull request",
-    "local code Claude graded pass, %": "% de local code Claude graded pass",
-    "fixes shipped by the medic, all time": "fixes shipped by the medic, in total",
-    "subtitle files translated, all time": "subtitle files translated, in total",
-    "items followed": "items followed",
+    "notes added, all time": "notas adicionadas, desde sempre",
+    "ideas sent, all time": "ideias enviadas, desde sempre",
+    "average idea to pull request, minutes": "minutos em média da ideia ao pull request",
+    "local code Claude graded pass, %": "% de código local aprovado pelo Claude",
+    "fixes shipped by the medic, all time": "correções enviadas pelo médico, desde sempre",
+    "subtitle files translated, all time": "ficheiros de legendas traduzidos, desde sempre",
+    "items followed": "artigos seguidos",
     "messages Kaya read this week": "mensagens que Kaya leu esta semana",
     "replies Kaya sent this week": "respostas que Kaya enviou esta semana",
     "voice replies this week": "respostas por voz esta semana",
     "episodes made this week": "episódios feitos esta semana",
-    "episodes generated, all time": "episódios feitos, in total",
+    "episodes generated, all time": "episódios feitos, desde sempre",
     "price sweeps this week": "pesquisas de preços esta semana",
     "deal alerts sent this week": "alertas de promoções esta semana",
 }
@@ -63,9 +67,9 @@ FLOWS: Dict[str, Dict[str, list]] = {
         ],
         "pt": [
             "Um amigo escreve no grupo de WhatsApp",
-            "Kaya lê e classifies by intention",
+            "Kaya lê e classifica pela intenção",
             "Procura no histórico do grupo",
-            "Responde, por text or voice"
+            "Responde, por texto ou por voz"
         ]
     },
     "lab-assistant": {
@@ -78,7 +82,7 @@ FLOWS: Dict[str, Dict[str, list]] = {
         "pt": [
             "Chega um áudio, por DM",
             "É transcrito em casa",
-            "Kaya picks the tool",
+            "Kaya escolhe a ferramenta",
             "Responde, ou espera pelo teu sim"
         ]
     },
@@ -89,9 +93,9 @@ FLOWS: Dict[str, Dict[str, list]] = {
             "It lands on the right OneNote page"
         ],
         "pt": [
-            "Ditas una nota, o write it down, on WhatsApp",
+            "Ditas uma nota, ou escreves, no WhatsApp",
             "É transcrita",
-            "Vai para la page certa del caderno"
+            "Vai para a página certa do caderno"
         ]
     },
     "idea-pipeline": {
@@ -102,10 +106,10 @@ FLOWS: Dict[str, Dict[str, list]] = {
             "A QA agent reviews it and opens a pull request for my review"
         ],
         "pt": [
-            "Envia a idea from my phone, by voice or text",
-            "A planning agent asks the questions and writes a plan",
-            "The implementation agent builds it in a sandbox",
-            "A QA agent reviews it and opens a pull request for my review"
+            "Envio uma ideia pelo telemóvel, por voz ou texto",
+            "Um agente de planeamento faz as perguntas e escreve um plano",
+            "O agente de implementação constrói-o numa sandbox",
+            "Um agente de QA revê-o e abre um pull request para eu rever"
         ]
     },
     "lab-medic": {
@@ -276,6 +280,11 @@ def labwatch_url() -> str:
     return os.environ.get("KAYA_LABWATCH_PUBLIC_URL", LABWATCH_PUBLIC_URL_DEFAULT)
 
 
+def live_page_url() -> str:
+    """The deployed showcase page, or KAYA_SHOWCASE_LIVE_URL for a different one."""
+    return os.environ.get("KAYA_SHOWCASE_LIVE_URL", LIVE_PAGE_URL_DEFAULT)
+
+
 def fetch_public(url: Optional[str] = None, timeout: float = FETCH_TIMEOUT_S) -> Optional[dict]:
     """The feed's JSON, or the last numbers it gave, or None when there are none.
 
@@ -346,8 +355,34 @@ def inject(html: str, view: dict) -> str:
     return html[:index] + script + html[index:]
 
 
+def _at_a_glance(html: str) -> Dict[str, Optional[int]]:
+    """The glance card's project count per language, as a served page states it."""
+    counts: Dict[str, Optional[int]] = {}
+    for lang, pattern in (("en", r"<b>(\d+) projects?</b>"), ("pt", r"<b>(\d+) projetos</b>")):
+        match = re.search(pattern, html)
+        counts[lang] = int(match.group(1)) if match else None
+    return counts
+
+
+def _project_cards(html: str) -> int:
+    """How many distinct project cards a page shows (both language docs list the same ones)."""
+    return len(set(re.findall(r'data-project="([a-z-]+)"', html)))
+
+
+def _showcase_script(html: str) -> Optional[dict]:
+    """The injected window.KAYA_SHOWCASE view, as served (None when the page carries none)."""
+    match = re.search(r"window\.KAYA_SHOWCASE = (\{.*?\});</script>", html, flags=re.S)
+    if match is None:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except ValueError:
+        return None
+
+
 def _dry_run() -> None:
-    """What the page would get from the feed, without writing anything."""
+    """What the page would get from the feed, what this checkout's page says and what the
+    deployed site says — reads only, writes nothing."""
     payload = fetch_public()
     view = build_view(payload)
     print(f"feed: {labwatch_url()}")
@@ -356,6 +391,37 @@ def _dry_run() -> None:
     else:
         print(f"feed answered: {len(view['products'])} projects carry their own stats")
     print(f"flows for {len(view['flows'])} projects; prompt for labwatch")
+
+    local = Path(__file__).with_name("static") / "landing.html"
+    if local.exists():
+        html = local.read_text(encoding="utf-8")
+        print(f"local page: lists {_project_cards(html)} project cards; "
+              f"at a glance says {_at_a_glance(html)}")
+
+    try:
+        response = httpx.get(live_page_url(), timeout=LIVE_TIMEOUT_S, follow_redirects=True)
+    except (httpx.HTTPError, ValueError, OSError):
+        print(f"live page: {live_page_url()} unreachable")
+        return
+    title = re.search(r"<title>(.*?)</title>", response.text)
+    print(f"live page: {live_page_url()} -> HTTP {response.status_code}, "
+          f"{len(response.content)} bytes, title {title.group(1) if title else '(none)'}")
+    if response.status_code != 200:
+        return
+    print(f"live page lists {_project_cards(response.text)} project cards; "
+          f"at a glance says {_at_a_glance(response.text)}")
+    script = _showcase_script(response.text)
+    if script is None:
+        print("live page carries no window.KAYA_SHOWCASE script")
+        return
+    products = script.get("products") or {}
+    with_stats = [name for name in sorted(products) if products[name].get("stats")]
+    print(f"live showcase script: {len(with_stats)} products carry stats")
+    for name in with_stats[:3]:
+        first = products[name]["stats"][0]
+        print(f"  {name}: '{first['en']}' -> pt '{first['pt']}'")
+    flow = ((script.get("flows") or {}).get("kaya") or {}).get("pt") or []
+    print(f"  kaya pt flow: {flow}")
 
 
 def main(argv: Optional[list] = None) -> int:
