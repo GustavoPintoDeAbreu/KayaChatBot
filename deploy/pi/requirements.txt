@@ -1,4 +1,7 @@
-fastapi==0.115.*
-uvicorn==0.32.*
+fastapi==0.162.2
+# security floor: CVE-2026-48710 (known exploited), CVE-2026-48818, CVE-2026-54283, CVE-2025-62727.
+# fastapi 0.115 held starlette at 0.46.2 on the public gateway until 2026-11-12.
+starlette>=1.10.0
+uvicorn==0.54.0
 httpx==0.28.*
 pyyaml==6.*

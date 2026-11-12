@@ -1,6 +1,11 @@
 # The Pi gateway: torch-free, arm64, a few MB of Python. Built on the Pi itself
 # (scripts/deploy_pi.sh), so no cross-building.
 FROM python:3.12-slim
+# Debian's security fixes since the base image was built (zlib CVE-2026-85091 sat here for
+# days). scripts/deploy_pi.sh passes the ISO week, so this layer is rebuilt at most weekly.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: $APT_REFRESH" && apt-get update && apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
 COPY deploy/pi/requirements.txt /tmp/requirements.txt

@@ -12,6 +12,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/pi/Dockerfile
+      args:
+        # set by scripts/deploy_pi.sh (the ISO week): re-runs the image's apt upgrade layer
+        APT_REFRESH: ${APT_REFRESH:-unset}
     image: kaya-gateway:latest
     container_name: kaya-gateway
     restart: unless-stopped
