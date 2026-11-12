@@ -62,6 +62,7 @@ ssh "$PI" "test -f $REMOTE_DIR/deploy/pi/.env" \
   || { echo "❌ $REMOTE_DIR/deploy/pi/.env missing: run with --init-env" >&2; exit 1; }
 
 echo "🔨 Building and (re)starting on the Pi ..."
-ssh "$PI" "cd $REMOTE_DIR/deploy/pi && docker compose up -d --build --remove-orphans && docker image prune -f >/dev/null"
+# APT_REFRESH (the ISO week) re-runs the Dockerfile's apt upgrade layer once a week.
+ssh "$PI" "cd $REMOTE_DIR/deploy/pi && APT_REFRESH=$(date +%G-W%V) docker compose up -d --build --remove-orphans && docker image prune -f >/dev/null"
 ssh "$PI" "cd $REMOTE_DIR/deploy/pi && docker compose ps --format '{{.Name}}  {{.Status}}'"
 echo "✅ Pi deployed. Status: curl -s http://${PI_LAN_IP:-192.168.1.238}:8088/status"
