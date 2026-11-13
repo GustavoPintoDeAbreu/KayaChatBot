@@ -52,6 +52,16 @@ RUN uv pip install --python /usr/bin/python3.12 --no-cache \
 COPY requirements.txt ./
 RUN uv pip install --python /usr/bin/python3.12 --no-cache -r requirements.txt
 
+# Ubuntu's security fixes since the base image was built (lab audit, 2026-11-12: apt, gnupg and
+# binutils CVEs sat in the image because nothing ever re-ran apt). After the Python layers on
+# purpose: those stay cached, so no Python version can drift. The CUDA / NVIDIA packages and
+# python3.12 are held: this layer must not move the GPU stack or the interpreter. The InRelease
+# file changes whenever Ubuntu publishes a security update, which re-runs the layer on the next build.
+ADD http://security.ubuntu.com/ubuntu/dists/jammy-security/InRelease /tmp/ubuntu-security-InRelease
+RUN apt-mark hold $(dpkg-query -W -f='${Package}\n' | grep -E '^(cuda|libcu|libnv|libnpp|nvidia|libcudnn|python3\.12)') >/dev/null \
+    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/* /tmp/ubuntu-security-InRelease
+
 # Set environment variables for GPU and caching
 ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/app/models/.cache \
