@@ -319,7 +319,7 @@ def test_the_language_switch_tells_the_scene(landing):
         assert "kaya:lang" in _script(name)
 
 
-CONTACT_EN_BULLETS = ("Website full-stack development", "Foundational data architecture for companies",
+CONTACT_EN_BULLETS = ("Website full-stack development", "Foundational enterprise data architecture",
                       "Hardware &amp; IoT project integration", "Everything multilingual and cross-platform when needed")
 CONTACT_PT_BULLETS = ("Desenvolvimento web full-stack", "Arquitetura de data fundacional para empresas",
                       "Integração de projetos de hardware e IoT", "Tudo multilingue e multiplatform quando eu quiser")
