@@ -244,14 +244,14 @@ FLOWS: Dict[str, Dict[str, list]] = {
     },
     "subs": {
         "en": [
-            "Subtitles come in",
-            "Translated in validated batches",
+            "A video on the TV has no Portuguese subtitles",
+            "English subtitles found and translated",
             "Each line is checked",
             "European Portuguese out"
         ],
         "pt": [
-            "Entram legendas",
-            "Traduzidas em lotes validados",
+            "Um vídeo da televisão não tem legendas em português",
+            "Legendas inglesas encontradas e traduzidas",
             "Cada linha é verificada",
             "Sai português europeu"
         ]
