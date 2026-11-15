@@ -182,13 +182,13 @@ FLOWS: Dict[str, Dict[str, list]] = {
     },
     "game-alerts": {
         "en": [
-            "It watches game news",
-            "A limited-time event is announced",
+            "It watches game news and Reddit",
+            "A limited-time event is announced or talked about",
             "You get a ping, then another at go-live"
         ],
         "pt": [
-            "Vigia as notícias dos jogos",
-            "Um evento temporário é anunciado",
+            "Vigia as notícias dos jogos e o Reddit",
+            "Um evento temporário é anunciado ou comentado",
             "Recebes um aviso, e outro no arranque"
         ]
     },
