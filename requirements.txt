@@ -14,7 +14,7 @@
 # (engine._load_model); the weights are served by Ollama / llama.cpp.
 # accelerate + bitsandbytes: the local teacher (src/data/local_teacher.py) loads
 # its model in 4-bit with device_map="cuda" for knowledge extraction.
-transformers==5.22.2  # PYSEC-2026-3929, CVE-2026-9856 fixed in 5.10.0
+transformers==5.23.0  # PYSEC-2026-3929, CVE-2026-9856 fixed in 5.10.0
 accelerate==1.15.0
 bitsandbytes==0.50.2
 # pyarrow: only datasets needed it, and datasets is gone (2026-11-01, nothing
@@ -31,7 +31,7 @@ numpy==2.5.4
 pandas==3.1.1
 scipy==1.18.1
 scikit-learn==1.9.1
-PyYAML==6.0.2
+PyYAML==6.0.3
 
 # --- Tokenization ---
 sentencepiece==0.2.3
@@ -45,7 +45,7 @@ xai-sdk==1.21.0  # >=1.7 needed for xai_sdk.tools.web_search (web-search Agent T
 # --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
 # The WhatsApp webhook server + WAHA client. (The Gradio dev UI is gone since 2026-10-26:
 # every gradio release caps pillow below 13, which CVE-2026-112393 needs.)
-fastapi==0.162.2
+fastapi==0.163.1
 uvicorn==0.54.0
 httpx==0.28.1
 
@@ -83,6 +83,6 @@ ipython==8.30.0
 # --- Testing (used by the kaya-test container / CI) ---
 pytest==9.2.0
 av==18.0.0
-ctranslate2==4.8.5
+ctranslate2==4.9.0
 faster-whisper==1.2.1
 piper-tts==1.8.0

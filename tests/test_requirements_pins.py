@@ -72,6 +72,34 @@ def test_audited_packages_cannot_resolve_below_the_fix(name, floor):
     )
 
 
+AUDIT_BUMPS_2026_11 = {
+    "ctranslate2": "4.9.0",
+    "fastapi": "0.163.1",
+    "pyyaml": "6.0.3",
+    "transformers": "5.23.0",
+}
+
+
+@pytest.mark.parametrize("name, fixed", sorted(AUDIT_BUMPS_2026_11.items()))
+def test_audit_bumps_of_2026_11_are_applied(name, fixed):
+    requirement = _requirements().get(name)
+    assert requirement is not None, f"{name} is not pinned in requirements.txt"
+    lowest = _lowest_allowed(requirement)
+    assert lowest is not None, f"{name} has no lower bound"
+    assert lowest >= Version(fixed), (
+        f"{name} may resolve to {lowest}, below the audit-fixed version {fixed}"
+    )
+
+
+def test_pi_gateway_fastapi_follows_the_audit():
+    text = (ROOT / "deploy" / "pi" / "requirements.txt").read_text()
+    match = re.search(r"^fastapi==([0-9.]+)", text, re.MULTILINE)
+    assert match, "the Pi gateway no longer pins fastapi explicitly"
+    assert Version(match.group(1)) >= Version("0.163.1"), (
+        f"the Pi gateway fastapi pin {match.group(1)} is below the audit fix 0.163.1"
+    )
+
+
 def test_gradio_and_its_dev_ui_are_gone():
     assert "gradio" not in _requirements(), "every gradio release caps pillow below 13.0"
     assert not (ROOT / "src" / "chat" / "web_app.py").exists()
