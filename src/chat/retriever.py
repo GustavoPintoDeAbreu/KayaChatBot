@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import chromadb
-from sentence_transformers import SentenceTransformer
+from src.data.embedder import load_encoder_from_config
 from src.chat.scope import SHARED, is_readable, parse_iso, scope_filter
 
 
@@ -248,9 +248,7 @@ class ConversationRetriever:
             print(f"✅ Documents collection loaded "
                   f"({self.documents_collection.count()} chunks)")
 
-        # Load embedding model (GTE requires trust_remote_code)
-        self.encoder = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True,
-                                           device=EMBEDDING_DEVICE)
+        self.encoder = load_encoder_from_config(config, EMBEDDING_MODEL, EMBEDDING_DEVICE)
 
         conv_count = self.collection.count()
         if conv_count == 0:

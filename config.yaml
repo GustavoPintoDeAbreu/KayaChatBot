@@ -927,6 +927,10 @@ rag:
   always_on: true  # Retrieve context for every message, not just detected questions
   vector_db: "chromadb"
   embedding_model: "BAAI/bge-m3"  # Multi-lingual, multi-granularity, multi-functionality — best for messy chat retrieval
+  # The exact Hugging Face commit of embedding_model, loaded from the local cache with no
+  # request to huggingface.co (src/data/embedder.py). Changing the model or this commit
+  # changes every vector: rebuild the store (build_vector_db.py) in the same change.
+  embedding_revision: "5617a9f61b028005a4858fdac845db406aefb181"
   # null lets sentence-transformers choose (CUDA when present, ~2.2 GB on the
   # serving card for as long as the app runs). "cpu" frees that for the broker
   # at the cost of slower encoding; see reports/benchmarks/runtime_* for the

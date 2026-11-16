@@ -388,14 +388,10 @@ def _encoder(config: Dict[str, Any]):
     except Exception as exc:  # noqa: BLE001 — fall back to our own
         logger.debug("could not borrow the retriever's encoder: %s", exc)
 
-    from sentence_transformers import SentenceTransformer
+    from src.data.embedder import load_encoder_from_config
 
     logger.info("loading a private embedder for documents")
-    return SentenceTransformer(
-        (config.get("rag", {}) or {}).get("embedding_model", "BAAI/bge-m3"),
-        trust_remote_code=True,
-        device=(config.get("rag", {}) or {}).get("embedding_device") or None,
-    )
+    return load_encoder_from_config(config)
 
 
 def index_document(payload: bytes, filename: str, scope: str, sender: str,

@@ -302,11 +302,11 @@ class Ingester:
             except Exception as exc:  # noqa: BLE001 — fall back to our own
                 logger.debug("could not borrow the retriever's encoder: %s", exc)
 
-            from sentence_transformers import SentenceTransformer
+            from src.data.embedder import load_encoder_from_config
 
             logger.info("loading a private embedder (%s)", self.embedding_model)
-            self._encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True,
-                                                device=self.embedding_device)
+            self._encoder = load_encoder_from_config(self.config, self.embedding_model,
+                                                     self.embedding_device)
         return self._encoder
 
     @property
