@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 import chromadb
-from sentence_transformers import SentenceTransformer
+from src.data.embedder import load_encoder_from_config
 import tiktoken
 from src.chat.scope import SHARED
 
@@ -238,7 +238,7 @@ class VectorDatabaseBuilder:
 
         # Load embedding model FIRST to get embedding dimension
         print(f"🤖 Loading embedding model: {self.embedding_model}")
-        self.encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+        self.encoder = load_encoder_from_config(config, self.embedding_model)
         embedding_dim = self.encoder.get_sentence_embedding_dimension()
         print(f"✅ Embedding model loaded (dimension: {embedding_dim})")
 
@@ -340,7 +340,7 @@ class KnowledgeBaseBuilder:
         """Initialize the KB collection and embedding model (reusing already-loaded encoder if possible)."""
         print(f"🔧 Initializing knowledge base collection '{collection_name}'")
 
-        self.encoder = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+        self.encoder = load_encoder_from_config(config, self.embedding_model)
 
         # Always rebuild the KB collection so it stays in sync with the JSON file
         try:
