@@ -51,6 +51,10 @@ HOMELAB_TAG = "🖥️[homelab]"
 POWER_PORT = 8099
 CONFIRM_TTL_SECONDS = 300.0
 WAKE_TIMEOUT_SECONDS = 900.0
+# A normal wake is up in about a minute (the first magic packet works). Still dark after 3 min
+# usually means the PC lost power (cord out, outage): its network card then is not listening,
+# and only the power button starts it (2026-11-16: cord pulled mid-shutdown, 7 packets ignored).
+WAKE_NUDGE_SECONDS = 180.0
 STALE_SECONDS = 300.0
 ACTIVE_META_KEY = "homelab_off_chat"
 WAKE_REQUEST_NAME = "pc-wake.request"
@@ -83,6 +87,8 @@ ALREADY_ON = "The PC is already on."
 WAKE_FAILED = "Couldn't ask the Pi to send Wake-on-LAN ({error})."
 PC_ONLINE = "The PC is on and Kaya is answering."
 WAKE_TIMEOUT = "The PC isn't up after 15 min. Check the power and the BIOS Wake-on-LAN setting."
+WAKE_NUDGE = ("Still asleep after 3 min. If it lost power (cord out, an outage), Wake-on-LAN can't "
+              "reach it: press its power button. I keep trying until 15 min.")
 RC_STARTED = "Claude session {name} is up: {url}"
 RC_STARTED_NO_LINK = "Claude session {name} is starting. Open it from the Claude app → Code."
 RC_ALREADY = "{name} is already running. /homelabrc stop{suffix} ends it."
@@ -151,6 +157,7 @@ class HomelabPower:
     _pending: Dict[str, float] = field(default_factory=dict)      # chat_id -> asked at
     _pending_bruteforce: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at
     _waking: Dict[str, float] = field(default_factory=dict)       # chat_id -> requested at
+    _nudged: Set[str] = field(default_factory=set)                # chats told to press the button
     _journal: Optional[Journal] = None
     _monitor: Optional[PcMonitor] = None
     _send: Optional[Callable[[str, str, Optional[str]], Any]] = None
@@ -431,6 +438,7 @@ class HomelabPower:
                                     msg.message_id)
             return {"homelab": "on-failed"}
         self._waking[msg.chat_id] = self._now()
+        self._nudged.discard(msg.chat_id)
         await asyncio.to_thread(self._say, msg.chat_id, WAKE_SENT, msg.message_id)
         return {"homelab": "on-requested"}
 
@@ -617,9 +625,16 @@ class HomelabPower:
             if self._monitor.state is PcState.ONLINE:
                 online.append(chat)
                 del self._waking[chat]
+                self._nudged.discard(chat)
             elif self._now() - started > WAKE_TIMEOUT_SECONDS:
                 self._say(chat, WAKE_TIMEOUT)
                 del self._waking[chat]
+                self._nudged.discard(chat)
+            elif (self._now() - started > WAKE_NUDGE_SECONDS and chat not in self._nudged
+                  and self._monitor.state is PcState.OFFLINE):
+                # OFFLINE only: APP_DOWN means it answers and is booting
+                self._say(chat, WAKE_NUDGE)
+                self._nudged.add(chat)
         stale = [chat for chat, asked in self._pending.items()
                  if self._now() - asked > CONFIRM_TTL_SECONDS]
         for chat in stale:

@@ -18,7 +18,7 @@ from src.gateway.homelab import (
     CANCEL_FAILED, CANCELLING, DECLINED, HOMELAB_TAG, NOTHING_TO_CANCEL, PC_ONLINE,
     QC_ALREADY, QC_FAILED, QC_NOT_RUNNING, QC_PC_OFF, QC_STARTED, QC_STARTED_NO_LINK, QC_STOPPED, QC_USAGE,
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
-    RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_SENT, WAKE_TIMEOUT,
+    RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_NUDGE, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
 )
 from src.gateway.monitor import PcMonitor, PcState
@@ -349,6 +349,33 @@ def test_homelabon_times_out(rig):
     homelab.tick()
     assert sent[1][1] == f"{HOMELAB_TAG} " + WAKE_TIMEOUT
     assert OWNER not in homelab._waking
+
+
+def test_homelabon_says_press_the_button_once_after_3_min(rig):
+    gateway, clock, monitor, sent, _, homelab = rig
+    monitor.observe(PcState.OFFLINE)
+    _post(gateway, _message("h29n", "/homelabon"))
+    clock.value += 170
+    homelab.tick()
+    assert len(sent) == 1                                   # a normal wake takes about a minute
+    clock.value += 20
+    homelab.tick()
+    assert sent[1][1] == f"{HOMELAB_TAG} " + WAKE_NUDGE
+    clock.value += 60
+    homelab.tick()
+    assert len(sent) == 2                                   # once
+    monitor.observe(PcState.ONLINE)                         # he pressed it
+    assert homelab.tick() == [OWNER] and len(sent) == 2 and OWNER not in homelab._nudged
+
+
+def test_no_nudge_while_the_pc_is_booting(rig):
+    gateway, clock, monitor, sent, _, homelab = rig
+    monitor.observe(PcState.OFFLINE)
+    _post(gateway, _message("h29b", "/homelabon"))
+    monitor.observe(PcState.APP_DOWN)                       # it answers: booting, Kaya not up yet
+    clock.value += 200
+    homelab.tick()
+    assert len(sent) == 1
 
 
 def test_power_update_needs_the_token(rig):
