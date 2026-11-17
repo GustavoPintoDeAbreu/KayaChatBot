@@ -114,9 +114,18 @@ and `app_up.sh`:
 | Hostname | Path | Service |
 |---|---|---|
 | `sigmakayachat.pt` | *(empty)* | `http://kaya-gateway:8080` |
+| `my.sigmakayachat.pt` | *(empty)* | `http://lab-hub:8096` |
+| `flights.sigmakayachat.pt` | *(empty)* | `http://flight-deals-web:8090` |
+| `homes.sigmakayachat.pt` | *(empty)* | `http://house-hunt-web:8093` |
 
-That one rule (plus the catch-all 404) is all there should be: the public site is
-the gateway's showcase page and nothing on the PC is published. lab-audit checks the
+Those rules (plus the catch-all 404) are all there should be: the public site is
+the gateway's showcase page and nothing on the PC is published. The three others
+(2026-11-17) are the private sites, each behind the Cloudflare Access app "Private
+sites" (One-time PIN, the reusable policy "Trusted people", 2-week session; `/mcp` on
+flights./homes. is blocked by its own app) and re-checked in the app by
+`labkit.access`. The tunnel reaches them by container name: `kaya-cloudflared` joins
+the external `lab-edge` network (`docker network create lab-edge` once on the Pi).
+labwatch checks each answers the Access login, never a page, to a request without one. lab-audit checks the
 live routes against this list every night (`AUDIT_EXPECTED_ROUTES`); any other is a
 public finding. On 2026-10-27 the `^/app` → PC:7860 and `dev.sigmakayachat.pt` →
 PC:7861 rules were found still live (the 2026-10-23 deletion had not landed: the
