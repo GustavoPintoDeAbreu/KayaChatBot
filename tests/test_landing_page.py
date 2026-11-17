@@ -26,6 +26,8 @@ ASSETS = BASE_DIR / "src" / "chat" / "static" / "showcase"
 
 LINKEDIN = "https://www.linkedin.com/in/gustavo-abreu-7687b0133/"
 GITHUB = "https://github.com/GustavoPintoDeAbreu"
+# The one way into the private side (Cloudflare Access login, lab-infra's hub), 2026-11-17.
+LOGIN = "https://my.sigmakayachat.pt/"
 
 SCRIPTS = ("scene.js", "motion.js", "metrics.js")
 
@@ -144,7 +146,7 @@ def test_hidden_projects_are_not_mentioned():
 
 def test_no_infrastructure_details_are_published():
     for name, text in _public_texts():
-        body = _without_code(text).replace(LINKEDIN, "").replace(GITHUB, "")
+        body = _without_code(text).replace(LINKEDIN, "").replace(GITHUB, "").replace(LOGIN, "")
         # The page references its own images by path (e.g. /assets/idea-pipeline.svg);
         # those filenames are not infrastructure, so drop them before the checks.
         body = re.sub(r'src="/assets/[^"]+"', " ", body)
@@ -159,7 +161,8 @@ def test_no_infrastructure_details_are_published():
 def test_only_linkedin_and_github_are_external(landing):
     hrefs = re.findall(r'href="(https?://[^"]+)"', landing)
     assert hrefs, "the page must link somewhere"
-    assert all(href in (LINKEDIN, GITHUB) for href in hrefs), hrefs
+    assert all(href in (LINKEDIN, GITHUB, LOGIN) for href in hrefs), hrefs
+    assert landing.count(f'href="{LOGIN}"') == 1, "one discreet Login link, in the footer"
     for profile in (LINKEDIN, GITHUB):
         total = landing.count(f'href="{profile}"')
         safe = landing.count(f'href="{profile}" target="_blank" rel="noopener noreferrer"')

@@ -103,3 +103,11 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
+    # lab-edge: the private sites behind Cloudflare Access (my./flights./homes.sigmakayachat.pt,
+    # lab-infra's lab-hub, flight-deals-web, house-hunt-web), reached by container name.
+    networks: [default, lab-edge]
+
+networks:
+  # Shared with the private sites' containers: `docker network create lab-edge` once.
+  lab-edge:
+    external: true
