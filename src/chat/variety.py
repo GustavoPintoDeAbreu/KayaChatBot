@@ -202,3 +202,49 @@ def opener_hint_for(rows: Iterable[Dict[str, Any]], mode: str,
     except Exception as exc:  # noqa: BLE001 — a hint is never worth a dropped reply
         logger.warning("could not build the opener hint: %s", exc)
         return ""
+
+
+# A friend's tag tacked onto the end of a sentence: ", bro." / ", mano." / ", honestly.".
+# Mirroring the group's slang is wanted (the 2026-10-10 voice); the same tag on every other
+# reply is not. On 2026-11-18, 5 of 13 replies ended a sentence that way (about 1 in 50 before).
+_CLOSING_TAG = re.compile(
+    r",\s*(bro|brother|mano|man|meu|pa|pá|puto|honestly|mate|dude|fam|irmao|irmão|parceiro|chefe|"
+    r"amigo|meu caro|my guy)\s*[.!?…]*\s*$", re.IGNORECASE)
+
+
+def closing_tags(reply: str) -> List[str]:
+    """The tag words that end the sentences of ``reply`` (", bro." → "bro")."""
+    tags = []
+    for sentence in re.split(r"(?<=[.!?…])\s+|\n+", reply or ""):
+        found = _CLOSING_TAG.search(sentence.strip())
+        if found:
+            tags.append(found.group(1).lower())
+    return tags
+
+
+def recent_closing_tags(rows: Iterable[Dict[str, Any]], window: int = 8) -> List[str]:
+    """Tag words that ended a sentence in the bot's last ``window`` replies (any mode, any chat),
+    newest first, deduplicated."""
+    seen: List[str] = []
+    replies = [row for row in rows if not row.get("route_command") and row.get("assistant_response")]
+    for row in reversed(replies[-window:]):
+        for tag in closing_tags(row["assistant_response"]):
+            if tag not in seen:
+                seen.append(tag)
+    return seen
+
+
+def closer_hint_for(rows: Iterable[Dict[str, Any]], window: int = 8) -> str:
+    """The nudge that keeps the bot from ending yet another sentence on ", bro". "" when it
+    hasn't lately, or on failure."""
+    try:
+        tags = recent_closing_tags(rows, window=window)
+    except Exception as exc:  # noqa: BLE001 — a hint is never worth a dropped reply
+        logger.warning("could not build the closer hint: %s", exc)
+        return ""
+    if not tags:
+        return ""
+    listed = ", ".join(f"«, {tag}»" for tag in tags)
+    return (f"\n\n(Ultimamente acabaste frases com {listed}. Nesta resposta não acabes nenhuma "
+            "frase com uma palavra de tratamento colada no fim, nem essas nem outras do género "
+            "(«, bro», «, mano», «, man», «, puto», «, honestly», «, pá»).)")

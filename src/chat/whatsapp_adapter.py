@@ -30,7 +30,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from src.chat import documents, enrichment, feedback
 from src.chat.channels import ChannelNames
 from src.chat.memory import ChatPreferences, KeyedSessionMemory
-from src.chat.response_utils import truncate_history_line
+from src.chat import mode_directive
+from src.chat.response_utils import language_signal, truncate_history_line
 from src.chat.scope import scope_for_chat
 from src.data.message_log import MessageLog, message_uid
 from src.chat.waha_client import extract_sent_id
@@ -628,6 +629,8 @@ class WhatsAppAdapter:
         self.command_replies = {
             "audio": "Feito, passo a responder-te por áudio.",
             "text": "Feito, volto a responder por texto.",
+            "audio_en": "Got it, I'll answer by voice from now on.",
+            "text_en": "Got it, text only from now on.",
             "clear": "Contexto limpo, esqueci as mensagens recentes desta conversa.",
             # Until TTS exists, saying yes and then answering in text forever is
             # worse than saying no. See chat.audio.reply_enabled.
@@ -754,7 +757,7 @@ class WhatsAppAdapter:
                             self.whitelist_numbers)
 
     def _deliver(self, chat_id: str, text: str, reply_to: Optional[str] = None,
-                 force_voice: bool = False, citation: str = ""):
+                 force_voice: bool = False, citation: str = "", mode_key: Optional[str] = None):
         """Send the reply as text, or as a voice note if this chat asked for it.
 
         Falls back to text whenever synthesis fails — a silent non-reply is much
@@ -768,7 +771,8 @@ class WhatsAppAdapter:
         Returns ``(sent, delivered_as, spoken_text)`` so the caller can record what
         was actually said, which the metrics log had no way of knowing before.
         """
-        wants_voice = force_voice or self.prefs.output_mode(chat_id) == ChatPreferences.OUTPUT_AUDIO
+        wants_voice = (force_voice or
+                       self.prefs.output_mode(mode_key or chat_id) == ChatPreferences.OUTPUT_AUDIO)
         written = f"{text}\n\n{citation}" if citation else text
         if not wants_voice:
             return self.waha_client.send_text(chat_id, written, reply_to=reply_to), "text", ""
@@ -1178,20 +1182,36 @@ class WhatsAppAdapter:
             "poll_id": extract_sent_id(sent), "telemetry": telemetry,
         }
 
-    def _apply_command(self, chat_id: str, command: str) -> str:
-        """Execute a routed command and return the confirmation to send back."""
+    def _apply_command(self, chat_id: str, command: str, mode_key: Optional[str] = None,
+                       said: str = "") -> str:
+        """Execute a routed command and return the confirmation to send back.
+
+        ``mode_key`` is whose reply mode changes (``_mode_key``: the chat, or one person in a
+        group); ``said`` picks the confirmation's language."""
         if command == ChatPreferences.OUTPUT_AUDIO and not self.audio_reply_enabled:
             # Don't confirm a mode we cannot honour, and don't persist it either —
             # a stored preference that changes nothing is how "it said yes and
             # then kept typing" happens.
             return self.command_replies["audio_unavailable"]
         if command in (ChatPreferences.OUTPUT_AUDIO, ChatPreferences.OUTPUT_TEXT):
-            self.prefs.set_output_mode(chat_id, command)
+            self.prefs.set_output_mode(mode_key or chat_id, command)
+            if (language_signal(said) or mode_directive.language(said)) == "en":
+                return self.command_replies.get(f"{command}_en", self.command_replies.get(command, ""))
         elif command == "clear":
             self.session_store._store(chat_id).clear()
         else:
             return ""
         return self.command_replies.get(command, "")
+
+    @staticmethod
+    def _mode_key(msg: "InboundMessage") -> str:
+        """Whose reply mode a message reads and sets: the DM, or the sender within a group.
+
+        Per person in groups (Gustavo's choice, 2026-11-18): his "answer in audio" must not
+        make the bot send voice notes to everyone else in the group."""
+        if not msg.is_group:
+            return msg.chat_id
+        return f"{msg.chat_id}~{_normalize_jid(msg.sender_id) or msg.sender_id}"
 
     def output_mode(self, chat_id: str) -> str:
         """The sticky reply modality for this chat (``"text"`` or ``"audio"``)."""
@@ -1945,6 +1965,31 @@ class WhatsAppAdapter:
     def complete(self, pending: PendingReply) -> Optional[Dict[str, Any]]:
         """Generate and deliver the answer to a message ``ingest_event`` accepted."""
         msg, speaker, text = pending.msg, pending.speaker, pending.text
+        mode_key = self._mode_key(msg)
+
+        # "…, answer in audio" / "responde em texto" at the END of a message, typed or spoken
+        # (2026-11-18). Found in code before the router, which gives one label per message and
+        # so either dropped the question or ignored the switch. The instruction alone gets a
+        # fixed confirmation and nothing else: it must not re-answer the conversation. With a
+        # question in front, the mode switches first and only the question is answered, in
+        # the new mode.
+        directive = mode_directive.find(text)
+        voice_once = False
+        if directive is not None:
+            if directive.mode == mode_directive.AUDIO_ONCE:
+                voice_once = True
+            else:
+                confirm = self._apply_command(msg.chat_id, directive.mode, mode_key=mode_key, said=text)
+                unavailable = confirm == self.command_replies.get("audio_unavailable")
+                if not directive.rest or unavailable:
+                    if confirm:
+                        self._deliver(msg.chat_id, confirm, mode_key=mode_key)
+                    if not directive.rest:
+                        return {"chat_id": msg.chat_id, "speaker": speaker,
+                                "reply": confirm, "command": directive.mode}
+            if directive.rest:
+                pending.asked = pending.asked[:len(pending.asked) - len(text)] + directive.rest
+                text = directive.rest
         if self.send_seen:
             self.waha_client.send_seen(msg.chat_id)
             self.waha_client.start_typing(msg.chat_id)
@@ -1976,8 +2021,8 @@ class WhatsAppAdapter:
         # A one-off voice request changes only how THIS reply is delivered, so it
         # falls through to normal generation rather than being executed as a
         # state change.
-        deliver_as_voice_once = command == "audio_once"
-        if deliver_as_voice_once:
+        deliver_as_voice_once = command == "audio_once" or voice_once
+        if command == "audio_once":
             command = None
         # A count was answered by generating, not by changing any state — the
         # engine counted the log and the model phrased it. It reaches here as a
@@ -1996,11 +2041,11 @@ class WhatsAppAdapter:
             return self._handle_poll_status(msg, speaker, text, telemetry)
 
         if command:
-            reply = self._apply_command(msg.chat_id, command)
+            reply = self._apply_command(msg.chat_id, command, mode_key=mode_key, said=text)
             if reply:
                 # Deliver via the (possibly just-changed) preference, so "passo a
                 # responder-te por áudio" arrives as the first voice note.
-                self._deliver(msg.chat_id, reply)
+                self._deliver(msg.chat_id, reply, mode_key=mode_key)
             return {
                 "chat_id": msg.chat_id, "speaker": speaker,
                 "reply": reply, "command": command,
@@ -2021,7 +2066,7 @@ class WhatsAppAdapter:
         reply_to = msg.message_id if (msg.is_group or msg.deferred) else None
         sent, delivered_as, spoken = self._deliver(
             msg.chat_id, reply, reply_to=reply_to,
-            force_voice=deliver_as_voice_once, citation=citation,
+            force_voice=deliver_as_voice_once, citation=citation, mode_key=mode_key,
         )
 
         # The model is warm now: whatever media waited for the card goes next.

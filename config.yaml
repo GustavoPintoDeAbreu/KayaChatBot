@@ -264,6 +264,9 @@ inference:
   # repeating the shape of the sentence, which is the banter failure ("Estás só
   # a tentar…", "É só mais um exemplo…", "Pelo menos eu não…"). 0 disables it.
   variety_recent_openers: 6
+  # The same goes for how replies END: a tag word (", bro.", ", mano.", ", honestly.") used in the
+  # bot's last N replies (any chat) is named in the prompt and not used again (2026-11-18). 0 = off.
+  variety_recent_closers: 8
   # Words kept per line of verbatim history. Not a context-saving measure: a prior
   # bot turn pasted back in full invites the model to copy it wholesale (the
   # observed "stuck" / repetition bug). With whatsapp.history_turns at 60 this is
@@ -501,7 +504,12 @@ chat:
     whisper_model: "large-v3"
     whisper_device: "cuda"
     whisper_compute: "int8_float16"
-    language: "pt"
+    # Whisper's language. "auto" picks the likelier of `languages` per voice note: forced to "pt",
+    # an English note came out translated into Portuguese (2026-11-18). `hotwords` biases the
+    # decoder towards the reply-mode words, so a short "responde em texto" is heard right.
+    language: "auto"
+    languages: ["pt", "en"]
+    hotwords: "áudio, texto, voz, responde em áudio, responde em texto, answer in audio, answer in text, voice, text"
     # Free Whisper's VRAM after this many minutes without a voice note (0 keeps
     # it loaded). It reloads on the next one, which costs that voice note the
     # load time. whisper_preload loads it at boot, which pins it from the start.

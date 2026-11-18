@@ -320,6 +320,7 @@ class KayaEngine:
         # it. Separate from the per-member recall above: this one is about the
         # shape of a sentence, not about who it is aimed at.
         self._opener_window = int(self._inf.get("variety_recent_openers", 6))
+        self._closer_window = int(self._inf.get("variety_recent_closers", 8))
         # Set by the surface (the WhatsApp bridge) so an open-ended turn can be
         # given a freshly drawn handful of member facts. Left None by the CLI,
         # the benchmarks and the tests, which must stay reproducible.
@@ -897,6 +898,8 @@ class KayaEngine:
                 if subjects else ""
             if mode in (router.BANTER, router.MIXED) and self._opener_window:
                 hint += variety.opener_hint_for(rows, mode, limit=self._opener_window)
+            if self._closer_window:
+                hint += variety.closer_hint_for(rows, window=self._closer_window)
             return hint
         except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
             print(f"⚠️  could not build the variety hint: {exc}")
