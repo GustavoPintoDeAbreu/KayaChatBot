@@ -1,4 +1,4 @@
-"""The owner's ``/homelaboff``, ``/homelaboff_bruteforce``, ``/homelabon``, ``/homelabrc`` and
+"""The owner's ``/homelaboff``, ``/homelaboff_bruteforce``, ``/homelabon``, ``/gamingoff``, ``/homelabrc`` and
 ``/homelabqc`` DMs go to the PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
@@ -58,6 +58,12 @@ WAKE_NUDGE_SECONDS = 180.0
 STALE_SECONDS = 300.0
 ACTIVE_META_KEY = "homelab_off_chat"
 WAKE_REQUEST_NAME = "pc-wake.request"
+# /gamingoff (2026-11-18): the Pi's gaming-off-request.path (lab-infra) sees the request, runs
+# pi/gaming-off.sh (SSH with a key forced to "shutdown /s /t 60" on the gaming PC) and writes
+# the outcome next to it: ok | already | unreachable | error <detail>.
+GAMING_REQUEST_NAME = "gaming-off.request"
+GAMING_RESULT_NAME = "gaming-off.result"
+GAMING_RESULT_WAIT_SECONDS = 25
 CONFIRM_WORDS = frozenset({"yes", "y", "sim", "s", "confirm", "confirmo"})
 CANCEL_WORDS = frozenset({"no", "n", "não", "nao", "cancel", "cancela", "cancelar", "stop", "para"})
 
@@ -83,6 +89,15 @@ TOO_LATE = "Too late to cancel: Kaya is being stopped and the PC is going down."
 NOTHING_TO_CANCEL = "Nothing to cancel: no shutdown is running."
 CANCEL_FAILED = "Couldn't reach the PC to cancel ({error})."
 WAKE_SENT = "Wake-on-LAN sent. I'll tell you when the PC is up."
+GAMING_ASK = ('Turn off the gaming PC? Open games and unsaved work close.\n'
+              'Reply "yes" within 5 min, or "no".')
+GAMING_STARTED = ("OK. The gaming PC turns off in 1 min. It shows a warning first; "
+                  "`shutdown /a` on it cancels.")
+GAMING_ALREADY_STOPPING = "The gaming PC is already shutting down."
+GAMING_ALREADY_OFF = "The gaming PC isn't answering: it's probably already off."
+GAMING_FAILED = "Couldn't turn off the gaming PC ({error})."
+GAMING_NO_ANSWER = "Asked the Pi to turn off the gaming PC; no answer from it yet."
+GAMING_DECLINED = "OK, the gaming PC stays on."
 ALREADY_ON = "The PC is already on."
 WAKE_FAILED = "Couldn't ask the Pi to send Wake-on-LAN ({error})."
 PC_ONLINE = "The PC is on and Kaya is answering."
@@ -156,12 +171,14 @@ class HomelabPower:
     _seen: Set[str] = field(default_factory=set)
     _pending: Dict[str, float] = field(default_factory=dict)      # chat_id -> asked at
     _pending_bruteforce: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at
+    _pending_gaming: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at (/gamingoff)
     _waking: Dict[str, float] = field(default_factory=dict)       # chat_id -> requested at
     _nudged: Set[str] = field(default_factory=set)                # chats told to press the button
     _journal: Optional[Journal] = None
     _monitor: Optional[PcMonitor] = None
     _send: Optional[Callable[[str, str, Optional[str]], Any]] = None
     _wake_request: Optional[Path] = None
+    _gaming_request: Optional[Path] = None
     _now: Callable[[], float] = time.time
     _sudo: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # request id -> request
 
@@ -189,6 +206,7 @@ class HomelabPower:
         self._monitor = monitor
         self._send = send_text
         self._wake_request = Path(data_dir) / WAKE_REQUEST_NAME
+        self._gaming_request = Path(data_dir) / GAMING_REQUEST_NAME
         self._now = now
 
     def _is_owner(self, msg: InboundMessage) -> bool:
@@ -221,6 +239,8 @@ class HomelabPower:
             return "off-bruteforce"
         if first == "/homelabon":
             return "on"
+        if first == "/gamingoff":
+            return "gaming-off"
         if first == "/homelabrc":
             return "rc"
         if first == "/homelabqc":
@@ -234,6 +254,12 @@ class HomelabPower:
                 return "confirm"
             if word in CANCEL_WORDS:
                 return "decline"
+        gaming_asked = self._pending_gaming.get(msg.chat_id)
+        if gaming_asked is not None and self._now() - gaming_asked <= CONFIRM_TTL_SECONDS:
+            if word in CONFIRM_WORDS:
+                return "confirm-gaming"
+            if word in CANCEL_WORDS:
+                return "decline-gaming"
         brute_asked = self._pending_bruteforce.get(msg.chat_id)
         if brute_asked is not None and self._now() - brute_asked <= CONFIRM_TTL_SECONDS:
             if word in CONFIRM_WORDS:
@@ -256,6 +282,16 @@ class HomelabPower:
             return {"homelab": "stale"}
         if kind == "off":
             return await self._off(msg)
+        if kind == "gaming-off":
+            self._pending_gaming[msg.chat_id] = self._now()
+            await asyncio.to_thread(self._say, msg.chat_id, GAMING_ASK, msg.message_id)
+            return {"homelab": "gaming-asked"}
+        if kind == "decline-gaming":
+            self._pending_gaming.pop(msg.chat_id, None)
+            await asyncio.to_thread(self._say, msg.chat_id, GAMING_DECLINED, msg.message_id)
+            return {"homelab": "gaming-declined"}
+        if kind == "confirm-gaming":
+            return await self._gaming_off(msg)
         if kind == "off-bruteforce":
             return await self._off_bruteforce(msg)
         if kind == "confirm":
@@ -441,6 +477,34 @@ class HomelabPower:
         self._nudged.discard(msg.chat_id)
         await asyncio.to_thread(self._say, msg.chat_id, WAKE_SENT, msg.message_id)
         return {"homelab": "on-requested"}
+
+    async def _gaming_off(self, msg: InboundMessage) -> Dict[str, Any]:
+        """Ask the Pi to turn the gaming PC off, then report what its script found."""
+        self._pending_gaming.pop(msg.chat_id, None)
+        result = self._gaming_request.with_name(GAMING_RESULT_NAME)
+        try:
+            result.unlink(missing_ok=True)
+            self._gaming_request.write_text(str(self._now()))
+        except OSError as exc:
+            await asyncio.to_thread(self._say, msg.chat_id, GAMING_FAILED.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "gaming-failed"}
+        outcome = ""
+        for _ in range(GAMING_RESULT_WAIT_SECONDS):
+            await self.pause(1)
+            try:
+                outcome = result.read_text().strip()
+            except OSError:
+                continue
+            if outcome:
+                break
+        word, _, detail = outcome.partition(" ")
+        line = {"ok": GAMING_STARTED, "already": GAMING_ALREADY_STOPPING,
+                "unreachable": GAMING_ALREADY_OFF}.get(word)
+        if line is None:
+            line = GAMING_FAILED.format(error=detail or word) if word else GAMING_NO_ANSWER
+        await asyncio.to_thread(self._say, msg.chat_id, line, msg.message_id)
+        return {"homelab": f"gaming-{word or 'no-answer'}"}
 
     async def _rc(self, msg: InboundMessage) -> Dict[str, Any]:
         words = (msg.text or "").strip().lower().split()[1:]
