@@ -571,7 +571,22 @@ The interaction log records `delivered_as` and `spoken_text`, and
 `MockWahaClient.send_voice` keeps the spoken text rather than only its byte count
 — that missing field is why no test caught this.
 
-Voice replies use Piper on CPU (~28× realtime, so speaking never competes with the GPU). Kokoro, the usual default, only ships Brazilian Portuguese. A Piper voice speaks **one** language, so `synthesize_wav()` splits the reply into sentences, groups consecutive same-language runs (`split_by_language()`, using `language_signal()` from `response_utils.py`), and speaks each with the voice configured under `chat.audio.voices` (`pt` → `pt_PT-tugão`, `en` → `en_GB-alan`) before concatenating the WAV and encoding once to OGG/Opus via PyAV (ffmpeg is not installed on this box). A sentence with no language marker inherits the previous one; a missing voice file falls back to `pt`. Voice replies are sticky per chat (`ChatPreferences`), set through the router's `CMD_AUDIO` / `CMD_TEXT`; `CMD_AUDIO_ONCE` is a one-off delivery hint that does not change the preference.
+Voice replies use Piper on CPU (~28× realtime, so speaking never competes with the GPU). Kokoro, the usual default, only ships Brazilian Portuguese. A Piper voice speaks **one** language, so `synthesize_wav()` splits the reply into sentences, groups consecutive same-language runs (`split_by_language()`, using `language_signal()` from `response_utils.py`), and speaks each with the voice configured under `chat.audio.voices` (`pt` → `pt_PT-tugão`, `en` → `en_GB-alan`) before concatenating the WAV and encoding once to OGG/Opus via PyAV (ffmpeg is not installed on this box). A sentence with no language marker inherits the previous one; a missing voice file falls back to `pt`. Voice replies are sticky per chat (`ChatPreferences`) and, in a group, **per person** (`WhatsAppAdapter._mode_key`, 2026-11-18), set through the router's `CMD_AUDIO` / `CMD_TEXT`; `CMD_AUDIO_ONCE` is a one-off delivery hint that does not change the preference.
+
+**"…, answer in audio" at the end of any message (2026-11-18).** `src/chat/mode_directive.py` finds a
+reply-mode instruction ending a message, typed or spoken, EN or PT, **before** the router (which gives one
+label per message, so a question plus a switch lost one of the two). The instruction alone ("Answer in
+text.", "responde em áudio", "Okay thanks, answer in text, just this message, nothing else") is
+confirmed with a fixed line in its language and **nothing else is answered**; a question in front of it is
+answered, in the new mode; "…, just this one" speaks once. Strict on purpose: talk about audio ("o Rafa
+respondeu em áudio") is not an instruction, and "manda / fala / escreve" count only with "-me"/"comigo".
+Free phrasings still go to the router's `CMD_AUDIO` / `CMD_TEXT`. Tested live (17/17 on the real router and
+Whisper, `tests/test_voice_mode_scenarios.py` for the unit side).
+
+**Whisper picks Portuguese or English per note** (`chat.audio.language: auto`, `languages: [pt, en]`,
+`stt.pick_language`), with `hotwords` for the mode words. Forced to `pt`, an English voice note came out
+translated ("…dinner on Saturday? Answer in audio" → "…o jantar na quinta-feira, responda em áudio") and a
+short "Responde em texto" was heard as "Respondente este"; with both changes all six test clips were right.
 
 ### Images (`src/chat/vision.py`) — read only
 
@@ -742,6 +757,13 @@ four lines) structurally cannot be — and tells it not to open that way again.
 Banter and mixed only, `inference.variety_recent_openers` (**6**), and it runs
 even when nobody is named: a banter reply is usually about nothing, and it is
 banter that repeats itself.
+
+**And the same last word (2026-11-18).** On 2026-11-18, 5 of 13 replies ended a sentence with a tag word
+(", bro.", ", mano.", ", man.", ", honestly."), against about 1 in 50 before: mirroring the group's slang
+(the 2026-10-10 voice) had turned into a tic. `variety.closer_hint_for` names the tags used in the bot's
+last `inference.variety_recent_closers` (**8**) replies, any chat, and asks for none of that kind in this
+one. Open-ended modes only. A 12-message live A/B went 3 → 2 tagged replies and, more to the point, stopped
+them clustering.
 
 ### Arguing, when asked (2026-09-05)
 

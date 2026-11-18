@@ -88,16 +88,43 @@ def _schedule_unload(config: Dict[str, Any]) -> None:
     _unload_timer.start()
 
 
+def pick_language(probabilities: Any, allowed: Any) -> Optional[str]:
+    """The most likely of the ``allowed`` languages, from Whisper's (code, probability) list.
+
+    The group speaks Portuguese and English. Forced to "pt", Whisper turned an English voice
+    note into Portuguese ("…dinner on Saturday? Answer in audio" came out "…o jantar na
+    quinta-feira, responda em áudio", 2026-11-18); left free, a two-second clip can come out
+    as Spanish or Galician. Choosing between the two the group uses fixes both."""
+    allowed = [code for code in (allowed or []) if code]
+    if not allowed:
+        return None
+    probs = dict(probabilities or [])
+    return max(allowed, key=lambda code: probs.get(code, 0.0))
+
+
 def transcribe_file(path: str, config: Dict[str, Any]) -> Optional[str]:
-    """Transcribe a local audio file. None on failure; never raises."""
+    """Transcribe a local audio file. None on failure; never raises.
+
+    ``chat.audio.language``: a code forces it; ``auto`` picks the likelier of
+    ``chat.audio.languages`` per note. ``chat.audio.hotwords`` biases the decoder towards the
+    reply-mode words, so a short "responde em texto" is not heard as "respondente este"."""
     acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
     try:
         model = _load(config)
+        language = acfg.get("language", "pt")
+        source: Any = str(path)
+        if language == "auto":
+            from faster_whisper.audio import decode_audio
+
+            source = decode_audio(str(path))
+            _lang, _prob, probabilities = model.detect_language(source)
+            language = pick_language(probabilities, acfg.get("languages", ["pt", "en"]))
         segments, _info = model.transcribe(
-            str(path),
-            language=acfg.get("language", "pt"),
+            source,
+            language=language,
             vad_filter=True,   # drops the silence that ends most voice notes
             beam_size=1,
+            hotwords=acfg.get("hotwords") or None,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
         _schedule_unload(config)
