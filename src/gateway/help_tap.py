@@ -41,6 +41,7 @@ HELP_TEXT = (
     "- /idea <texto> — ideia para o pipeline (flags: !new !local !uncensored !claude !deepseek !glm)\n"
     "- /idea list · /idea pending · /idea merge all · /idea help · /idea allow <site>\n"
     "- /homelaboff · /homelabon — desligar / ligar o PC\n"
+    "- /gamingoff — desligar o PC de jogos (pede confirmação)\n"
     "- /homelaboff_bruteforce — desligar o PC já, sem esperar por nada (pede um sim)\n"
     "- /homelabrc [home] — sessão Claude Remote Control no PC (/homelabrc stop [home] termina)\n"
     "- /homelabqc [home] — sessão Qwen Code (qcode) no PC (/homelabqc stop [home] termina)\n"

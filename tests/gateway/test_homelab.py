@@ -20,7 +20,8 @@ from src.gateway.homelab import (
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
     RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_NUDGE, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
-)
+    GAMING_ASK, GAMING_STARTED, GAMING_ALREADY_STOPPING, GAMING_ALREADY_OFF,
+    GAMING_FAILED, GAMING_NO_ANSWER, GAMING_DECLINED)
 from src.gateway.monitor import PcMonitor, PcState
 
 BOT = "351900000000@c.us"
@@ -812,3 +813,53 @@ def test_a_normal_homelaboff_ask_clears_a_bruteforce_pending(rig):
     assert _post(gateway, _message("b19", "/homelaboff")) == {"homelab": "off-asked"}
     assert _post(gateway, _message("b20", "yes")) == {"homelab": "off-started"}
     assert pc.calls[2][0] == "POST" and pc.calls[2][1].endswith("/power/off")
+
+
+# ── /gamingoff (2026-11-18): the Pi turns the gaming PC off over SSH ─────────────────────────
+def _pi_answers(homelab, outcome):
+    """Stand in for the Pi's path unit: on the first wait, take the request and write the outcome."""
+    async def pause(_seconds):
+        request = homelab._gaming_request
+        if outcome is not None and request.exists():
+            request.unlink()
+            request.with_name("gaming-off.result").write_text(outcome + "\n")
+    homelab.pause = pause
+
+
+@pytest.mark.parametrize("outcome, line, kind", [
+    ("ok", GAMING_STARTED, "gaming-ok"),
+    ("already", GAMING_ALREADY_STOPPING, "gaming-already"),
+    ("unreachable", GAMING_ALREADY_OFF, "gaming-unreachable"),
+    ("error ssh exit 255", GAMING_FAILED.format(error="ssh exit 255"), "gaming-error"),
+    (None, GAMING_NO_ANSWER, "gaming-no-answer"),
+])
+def test_gamingoff_asks_then_the_pi_turns_it_off(rig, outcome, line, kind):
+    gateway, _, _, sent, pc, homelab = rig
+    _pi_answers(homelab, outcome)
+    assert _post(gateway, _message("g1", "/gamingoff")) == {"homelab": "gaming-asked"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + GAMING_ASK
+    assert _post(gateway, _message("g2", "yes")) == {"homelab": kind}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + line
+    assert pc.calls == [], "the GPU PC is never asked to power off"
+
+
+def test_gamingoff_no_keeps_it_on_and_requests_nothing(rig):
+    gateway, _, _, sent, _, homelab = rig
+    _post(gateway, _message("g3", "/gamingoff"))
+    assert _post(gateway, _message("g4", "no")) == {"homelab": "gaming-declined"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + GAMING_DECLINED
+    assert not homelab._gaming_request.exists()
+
+
+def test_gamingoff_confirmation_expires(rig):
+    gateway, clock, _, sent, _, homelab = rig
+    _post(gateway, _message("g5", "/gamingoff"))
+    clock.value += 301
+    result = _post(gateway, _message("g6", "yes", timestamp=int(clock.value)))
+    assert "seq" in result and not homelab._gaming_request.exists()
+
+
+def test_gamingoff_is_the_owners_only(rig):
+    gateway, _, _, sent, _, _ = rig
+    result = _post(gateway, _message("g7", "/gamingoff", chat="351911111111@c.us"))
+    assert "seq" in result and sent == []
