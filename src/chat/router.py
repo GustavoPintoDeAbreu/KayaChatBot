@@ -244,8 +244,12 @@ recent conversation, naming the people it is about. "eu", "me", "mim", "I" and
 "me" are the person who wrote the message. "tu", "te", "ti", "contigo", "você"
 and "you" are the bot itself, because the message is addressed to it: write
 "a Kaya" for them, never a member's name, even when the conversation above is
-about somebody else. This is used to search the group's memory, so it must stand
-on its own without the conversation:
+about somebody else. "teu", "tua", "teus", "tuas" and "your" are the bot's. The
+bot's chefe, patrão, dono, criador or pai, "quem te fez", "quem te programou" or
+"quem manda em ti" is {maintainer}, who made the bot and runs it on his PC: write
+his name, never "o chefe do {maintainer}". This is used to search the group's
+memory, so it must stand on its own without the conversation:
+  "achas que o teu chefe tem capacidade?" -> Q: o {maintainer}, o criador da Kaya, tem capacidade?
   "e ele?" -> Q: o Bernardo também faz isso?
   "quem fez merda tu ou o fred?" -> Q: quem fez asneira, a Kaya ou o Frederico?
   "e de bater na mãe?" -> Q: quem do grupo tinha maior probabilidade de bater na mãe?
@@ -262,6 +266,18 @@ pure commands other than CMD_POLL. Do not invent a question that was not asked:
   "Ahahhha" -> no Q: line
 
 Reply with the token, and the Q: line when there is one. Nothing else."""
+
+
+def router_system(config: Optional[Dict[str, Any]] = None) -> str:
+    """The router's instructions with the bot's maker filled in (``chat.maintainer``).
+
+    On 2026-11-19 a member asked "achas que o teu chefe tem capacidade?" and the
+    rewrite came back as "o chefe do Gustavo", so the bot said it had no idea who
+    Gustavo's boss was. "Teu" is the bot's, and the bot's boss is the person who
+    built it; the name comes from the config, like the maintainer clause.
+    """
+    name = str(((config or {}).get("chat") or {}).get("maintainer") or "").strip()
+    return _ROUTER_SYSTEM.replace("{maintainer}", name or "the person who made the bot")
 
 
 @dataclass
@@ -411,7 +427,7 @@ def classify(
         context = "Recent conversation:\n" + "\n".join(recent_lines[-window:]) + "\n\n"
 
     messages = [
-        {"role": "system", "content": _ROUTER_SYSTEM},
+        {"role": "system", "content": router_system(config)},
         {"role": "user", "content": (
             f"{context}Message to classify, written by {speaker}:\n{text}"
             if speaker and speaker != "User" else

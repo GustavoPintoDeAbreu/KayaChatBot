@@ -1180,6 +1180,10 @@ class KayaEngine:
                 "(podes gozar com isso ou perguntar o que é), nunca como um "
                 "assistente a falar de registos. Não inventes a resposta, não mudes "
                 "de assunto e não ponhas um insulto ou outra pessoa no lugar dela. "
+                "Sobre uma pessoa, diz só o que o perfil dela ou as conversas dizem "
+                "DELA: não lhe dês o emprego, os hábitos ou as redes sociais de outra "
+                "pessoa, nem os deduzas dos interesses dela, e o que ela disse sobre "
+                "outros não é sobre ela. "
                 "Isto é só para factos: uma opinião, um palpite, um veredicto ou um "
                 "insulto que te peçam dás sempre, sem dizer que te falta informação.)")
 

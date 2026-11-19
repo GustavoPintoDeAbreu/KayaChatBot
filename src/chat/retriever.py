@@ -197,6 +197,8 @@ class ConversationRetriever:
             with open(members_file, 'r', encoding='utf-8') as f:
                 members_data = json.load(f)
             self._members_data = members_data.get('members', [])
+            self._members_path = Path(members_file)
+            self._members_stamp = self._members_path.stat().st_mtime_ns
             self.group_members = set()
             for m in self._members_data:
                 for alias in m.get('aliases', []):
@@ -617,7 +619,11 @@ class ConversationRetriever:
         if not retrieved_chunks:
             return ""
 
-        context_parts = ["=== Conversas relevantes do grupo ==="]
+        # Who said a line is not who it is about. On 2026-11-19 "who is he?" came back
+        # with another member's job: the retrieved lines were his own message about it.
+        context_parts = ["=== Conversas relevantes do grupo === (cada linha é o que essa "
+                         "pessoa disse; uma empresa, um sítio ou outra pessoa que alguém "
+                         "menciona não é um facto sobre quem o disse)"]
 
         for i, chunk in enumerate(retrieved_chunks, 1):
             # Only surface the chunk's date when the user asked about timing.
@@ -833,15 +839,39 @@ class ConversationRetriever:
             return 0
         return int(len(text.split()) / 0.60)
 
+    def _fresh_members(self) -> List[Dict[str, Any]]:
+        """The profiles, re-read when the file changes (bio_gate and review_bios write it)."""
+        path = getattr(self, "_members_path", None)
+        if path is None:
+            return self._members_data
+        try:
+            stamp = path.stat().st_mtime_ns
+            if stamp != self._members_stamp:
+                self._members_data = json.loads(path.read_text(encoding="utf-8")).get("members", [])
+                self._members_stamp = stamp
+        except (OSError, ValueError):
+            pass
+        return self._members_data
+
     def _format_recent_summaries(self, query_persons: List[str]) -> str:
-        """Format recent summaries for members mentioned in the query."""
-        if not query_persons or not self._members_data:
+        """Everything known about the members the question names: all their facts and
+        their recent summary.
+
+        The system prompt shows at most ``rag.max_facts_per_member`` facts per member,
+        to keep any one member from dominating. A question ABOUT someone needs all of
+        his: on 2026-11-19 "who is he?" was answered with another member's job because
+        his card had nothing on it, and a fact added later would sit past the cap."""
+        members = self._fresh_members()
+        if not query_persons or not members:
             return ""
 
         summaries = []
-        for member in self._members_data:
-            aliases = [a.lower() for a in member.get('aliases', [])]
+        for member in members:
+            aliases = [a.lower() for a in member.get('aliases', [])] + [str(member.get('name', '')).lower()]
             if any(p in aliases for p in query_persons):
+                facts = [str(f).rstrip(".") + "." for f in (member.get('key_facts') or []) if str(f).strip()]
+                if facts:
+                    summaries.append(f"[Perfil — {member['name']}] {' '.join(facts)}")
                 summary = member.get('recent_summary', '').strip()
                 if summary:
                     summaries.append(f"[Resumo recente — {member['name']}] {summary}")
@@ -849,7 +879,8 @@ class ConversationRetriever:
         if not summaries:
             return ""
 
-        lines = ["=== Resumos recentes dos membros ==="] + summaries + ["=== Fim dos resumos ==="]
+        lines = (["=== O que sabes sobre quem é mencionado (é tudo; o que não está aqui não sabes) ==="]
+                 + summaries + ["=== Fim ==="])
         return "\n".join(lines)
 
     def retrieve_all(

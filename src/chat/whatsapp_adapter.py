@@ -36,6 +36,18 @@ from src.chat.scope import scope_for_chat
 from src.data.message_log import MessageLog, message_uid
 from src.chat.waha_client import extract_sent_id
 
+# A friend calling a Kaya answer wrong in words, not with a 👎 (2026-11-19: a
+# "holy allucinacao" after a member was given another's job went nowhere). Strong
+# words count within CALLED_WRONG_WINDOW of the bot's last answer in that chat; the
+# weak ones only as a reply to it, or naming the bot, because "mentira!" is also
+# just surprise.
+_CALLED_WRONG_STRONG = re.compile(
+    r"(?i)(h?al+u+c+[ií]na\w*|hallucinat\w*|inventaste|inventou|est[aá]s a inventar|"
+    r"isso n[aã]o [eé] verdade|n[aã]o [eé] nada disso|fake news)")
+_CALLED_WRONG_WEAK = re.compile(
+    r"(?i)\b(mentira|errad[oa]s?|erraste|wrong|n[aã]o [eé] verdade|que treta)\b")
+CALLED_WRONG_WINDOW = 30 * 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -724,6 +736,10 @@ class WhatsAppAdapter:
         # long-running process doesn't grow unbounded; oldest entries drop first.
         self.sent_messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self.sent_messages_max = 500
+        # Answers the owner's quoted reply to Kaya's weekly 👤 list (set by the server):
+        # ``(text) -> reply``. None leaves those replies to the normal path.
+        self.owner_reply_hook: Optional[Callable[[str], str]] = None
+        self.maintainer = str(((config.get("chat", {}) or {}).get("maintainer")) or "")
         # chat_id -> recent message unix times, so we know where the verbatim
         # session window begins (used to stop retrieval duplicating it).
         self._session_times: Dict[str, List[int]] = {}
@@ -1685,6 +1701,11 @@ class WhatsAppAdapter:
             while len(self._processed_ids) > self._answered_max:
                 self._processed_ids.popitem(last=False)
 
+        answered = self._owner_list_reply(msg)
+        if answered is not None:
+            return answered
+        self._log_called_wrong(msg)
+
         # Before anything is written under a scope: the log line and a shared
         # document both take theirs from shared_chats.
         self._register_community_group(msg.chat_id)
@@ -2093,6 +2114,7 @@ class WhatsAppAdapter:
                     "reply": reply,
                     "is_group": msg.is_group,
                     "speaker": speaker,
+                    "sent_at": time.time(),
                 },
             )
 
@@ -2124,6 +2146,71 @@ class WhatsAppAdapter:
         self.sent_messages.move_to_end(message_id)
         while len(self.sent_messages) > self.sent_messages_max:
             self.sent_messages.popitem(last=False)
+
+    def called_wrong(self, msg: "InboundMessage") -> Optional[Dict[str, Any]]:
+        """A group message calling one of the bot's answers wrong, as a 👎 record.
+
+        Never raises; None for everything else. The answer is the one it replies to,
+        or else the bot's last one in that chat within ``CALLED_WRONG_WINDOW``."""
+        try:
+            if not self.feedback_enabled or not msg.is_group or msg.from_me or not msg.text:
+                return None
+            if _normalize_jid(msg.sender_id) in self.bot_jids:
+                return None
+            strong = bool(_CALLED_WRONG_STRONG.search(msg.text))
+            weak = bool(_CALLED_WRONG_WEAK.search(msg.text))
+            if not (strong or weak):
+                return None
+            info = self.sent_messages.get(msg.reply_to_id) if msg.reply_to_id else None
+            if info is None:
+                names_bot = ("kaya" in msg.text.lower()
+                             or any(_normalize_jid(m) in self.bot_jids for m in msg.mentioned_ids))
+                if not (strong or names_bot):
+                    return None
+                info = next((i for i in reversed(self.sent_messages.values())
+                             if i.get("chat_id") == msg.chat_id), None)
+                if info is None or time.time() - float(info.get("sent_at") or 0) > CALLED_WRONG_WINDOW:
+                    return None
+            return {"chat_id": msg.chat_id, "user_text": info.get("user_text", ""),
+                    "reply": info.get("reply", ""), "comment": msg.text[:300],
+                    "speaker": self.resolve_speaker(msg)}
+        except Exception as exc:  # noqa: BLE001 - a signal, never worth a lost message
+            logger.warning("called-wrong check failed: %s", exc)
+            return None
+
+    def _log_called_wrong(self, msg: "InboundMessage") -> None:
+        found = self.called_wrong(msg)
+        if not found:
+            return
+        try:
+            feedback.log_rating(
+                source="whatsapp", rating="down", user_message=found["user_text"],
+                assistant_response=found["reply"], comment=found["comment"],
+                path=feedback.feedback_log_path(self.config), is_group=True,
+                kind="called_wrong", speaker=found["speaker"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("called-wrong not logged: %s", exc)
+
+    def _owner_list_reply(self, msg: "InboundMessage") -> Optional[Dict[str, Any]]:
+        """The owner's answer to the weekly 👤 list, applied in code; None otherwise."""
+        from src.data.bio_gate import BIO_TAG
+
+        if self.owner_reply_hook is None or msg.is_group or msg.from_me:
+            return None
+        if not (msg.quoted_text or "").lstrip().startswith(BIO_TAG):
+            return None
+        if not self.maintainer or self.resolve_speaker(msg) != self.maintainer:
+            return None
+        try:
+            reply = self.owner_reply_hook(msg.text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly list answer failed: %s", exc)
+            reply = f"{BIO_TAG} That didn't work ({type(exc).__name__}); nothing was changed."
+        try:
+            self.waha_client.send_text(msg.chat_id, reply, reply_to=msg.message_id or None)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly list reply not sent: %s", exc)
+        return {"chat_id": msg.chat_id, "reply": reply, "command": "bios", "is_group": False}
 
     def handle_reaction(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Resolve a 👍/👎 reaction on one of the bot's replies into a feedback dict.

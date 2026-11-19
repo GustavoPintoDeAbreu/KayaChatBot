@@ -48,7 +48,12 @@ def make_config(workspace, **over):
         "rag": {"max_facts_per_member": 4},
         "chat": {"concurrency": {"acquire_timeout": 5}},
         "bio_refresh": {"state_file": str(workspace / "state.json"),
-                        "proposals_file": str(workspace / "proposals.json")},
+                        "proposals_file": str(workspace / "proposals.json"),
+                        "queue_file": str(workspace / "queue.json"),
+                        # The proposals-only path these tests were written for; the
+                        # gate (the default since 2026-11-19) is tested below and in
+                        # test_bio_gate.py.
+                        "mode": "propose"},
     }
     config["bio_refresh"].update(over)
     return config
@@ -467,3 +472,29 @@ def test_the_next_cycle_picks_up_where_the_last_one_stopped(workspace):
         max_chunks_per_cycle=1, chunk_size_words=20)
 
     assert bio_refresh.BioRefreshState(str(workspace / "state.json")).watermark > first
+
+
+# ── the gate (default since 2026-11-19) ──────────────────────────────────────
+def test_the_gate_applies_a_fact_once_a_second_quote_backs_it(workspace):
+    """Proposals waited for a review nobody was asked to do; now a grounded fact
+    seen in two different quotes reaches the profile on its own."""
+    members = workspace / "data" / "group_members.json"
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing", ts=1000)])
+    first = json.dumps({"members": {"Rafa": {"facts": [
+        {"fact": "Rafa trains kickboxing.", "quote": "o Rafa anda a treinar kickboxing"}]}}})
+    report = run(workspace, ScriptedBackend(first), mode="gate")
+    assert report["gate"]["candidates"] == 1 and report["gate"]["applied"] == 0
+    assert json.loads(members.read_text())["members"][0]["key_facts"] == ["Rafa hosts the group."]
+
+    write_log(workspace, [msg("m1", "Rafa", "o Rafa anda a treinar kickboxing", ts=1000),
+                          msg("m2", "Rafa", "treino de kickboxing amanhã outra vez", ts=2000)])
+    second = json.dumps({"members": {"Rafa": {"facts": [
+        {"fact": "Rafa trains kickboxing regularly.", "quote": "treino de kickboxing amanhã outra vez"}]}}})
+    backend = ScriptedBackend(second, "YES")
+    report = run(workspace, backend, mode="gate")
+
+    assert report["gate"]["applied"] == 1
+    assert json.loads(members.read_text())["members"][0]["key_facts"] == [
+        "Rafa hosts the group.", "Rafa trains kickboxing."]
+    assert "treino de kickboxing amanhã outra vez" in backend.calls[-1][1]["content"]
+    assert not (workspace / "proposals.json").exists()

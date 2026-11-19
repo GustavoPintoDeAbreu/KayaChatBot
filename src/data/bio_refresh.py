@@ -575,6 +575,16 @@ def run_cycle(config: Dict[str, Any], backend: Any,
         # police. Store generously, inject narrowly.
         limit = int(cfg.get("max_key_facts", 8))
 
+        if cfg.get("mode", "gate") == "gate":
+            report["gate"] = run_gate(config, backend, new_facts, members, messages, members_path,
+                                      limit)
+            state.advance(newest, report["gate"].get("applied", 0))
+            report["seconds"] = round(time.time() - started, 1)
+            logger.info("bio refresh: %d msg, gate %s, %d unsupported dropped, %.0fs",
+                        report["messages_read"], report["gate"], report["unsupported_dropped"],
+                        time.time() - started)
+            return report
+
         for name, entries in new_facts.items():
             member = by_name[name]
             facts = [e["fact"] for e in entries]
@@ -609,6 +619,36 @@ def run_cycle(config: Dict[str, Any], backend: Any,
                 report["messages_read"], len(report["proposals"]),
                 report["unsupported_dropped"], time.time() - started)
     return report
+
+
+def queue_path(config: Dict[str, Any]) -> Path:
+    from src.data.bio_gate import DEFAULT_QUEUE
+
+    path = Path(_config(config).get("queue_file", DEFAULT_QUEUE))
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+def grounding_generator(backend: Any, config: Dict[str, Any]):
+    """The gate's yes/no call: the same model and GPU rules as extraction."""
+    return lambda system, user: _generate(backend, config, system, user, 6)
+
+
+def run_gate(config: Dict[str, Any], backend: Any, new_facts: Dict[str, List[Dict[str, Any]]],
+             members: List[Dict[str, Any]], messages: List[Dict[str, Any]],
+             members_path: Path, limit: int) -> Dict[str, int]:
+    """Sort this cycle's facts through ``bio_gate`` instead of proposing them all.
+
+    Since 2026-11-19: the proposals waited for a review nobody was asked to do."""
+    from src.data.bio_gate import QUEUE_LOCK, BioQueue, gate
+
+    lookup = {m["id"]: {"sender": m["sender"], "text": m["text"]} for m in messages if m.get("id")}
+    with QUEUE_LOCK:
+        queue = BioQueue(queue_path(config))
+        counts = gate(new_facts, members, lookup, queue,
+                      grounding_generator(backend, config) if backend is not None else None,
+                      members_path, limit)
+        queue.save()
+    return counts
 
 
 def proposals_path(config: Dict[str, Any], override: Optional[str] = None) -> Path:
