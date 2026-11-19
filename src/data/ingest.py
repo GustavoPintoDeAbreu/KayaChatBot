@@ -32,6 +32,9 @@ from src.data.message_log import MessageLog, message_uid
 
 logger = logging.getLogger(__name__)
 
+# When the message log started marking quotes of the bot (reply_to_bot).
+BOT_QUOTES_MARKED_FROM = int(datetime(2026, 9, 29, tzinfo=timezone.utc).timestamp())
+
 COLLECTION = "kaya_conversations"
 # How far ahead of now a message timestamp may be before it is treated as bogus.
 # Generous: clock skew between phones is real, deliberate time travel is not.
@@ -342,6 +345,34 @@ class Ingester:
 
         return keep
 
+    def _legacy_bot_quotes(self, scope: str) -> Callable[[Dict[str, Any]], bool]:
+        """Whether an unmarked quote is really the bot's own words.
+
+        Quotes of the bot are marked (``reply_to_bot``) only since 2026-09-29.
+        Before that, a member replying to the bot carried the bot's answer into
+        memory as if the group had said it: on 2026-11-19 "who is he?" came back
+        with the same wrong job the bot had invented in August, read out of the
+        quotes of the replies to it. The bot's messages are never logged, so an
+        unmarked quote from before the marking that matches no logged message of
+        that chat is the bot's.
+        """
+        def norm(text: str) -> str:
+            return re.sub(r"[^\w]", "", (text or "").rstrip("…").lower())
+
+        said: Dict[str, set] = {}
+        for row in self.log.read(scope):
+            said.setdefault(str(row.get("chat_id") or ""), set()).add(norm(row.get("text"))[:60])
+
+        def is_bot(message: Dict[str, Any]) -> bool:
+            quoted = norm(message.get("reply_to_text") or "")
+            if (not quoted or message.get("reply_to_bot") or len(quoted) < 12
+                    or int(message.get("timestamp") or 0) >= BOT_QUOTES_MARKED_FROM):
+                return False
+            texts = said.get(str(message.get("chat_id") or ""), set())
+            return not any(text.startswith(quoted[:40]) for text in texts)
+
+        return is_bot
+
     # ── the work ─────────────────────────────────────────────────────────────
     def ingest_scope(self, scope: str) -> Dict[str, Any]:
         """Ingest everything logged for one scope since its watermarks, chat by chat."""
@@ -353,6 +384,13 @@ class Ingester:
             if int(message.get("timestamp") or 0) > self.state.chat_watermark(scope, chat_id):
                 by_chat.setdefault(chat_id, []).append(message)
         keep_bot_quote = self._bot_quote_filter()
+        if any(int(m.get("timestamp") or 0) < BOT_QUOTES_MARKED_FROM
+               for messages in by_chat.values() for m in messages):
+            legacy = self._legacy_bot_quotes(scope)
+            for messages in by_chat.values():
+                for message in messages:
+                    if legacy(message):
+                        message["reply_to_bot"] = True
         channel_of = self._channel_of()
         chunks, late_ids = self._late_fill_chunks(scope, keep_bot_quote, channel_of)
         if not by_chat and not chunks:
