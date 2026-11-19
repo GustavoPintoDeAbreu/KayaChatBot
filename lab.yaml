@@ -15,6 +15,7 @@ provides:
   - {id: kaya.waha.client, kind: lib, path: src/chat/waha_client.py, summary: "Full WAHA client: sendText, voice, reactions, media; MockWahaClient twin for tests"}
   - {id: kaya.inference.backend, kind: lib, path: src/chat/inference_backend.py, summary: "Generation through the broker (Ollama / llama.cpp) or in-process HF, selected by KAYA_INFERENCE_BACKEND"}
   - {id: kaya.stt, kind: lib, path: src/chat/stt.py, summary: "Speech-to-text (Whisper) for voice notes"}
+  - {id: kaya.bio_gate, kind: lib, path: src/data/bio_gate.py, summary: "Which learned profile facts reach Kaya's member profiles: grounded ones seen in two quotes apply on their own (snapshot, undo), sensitive or unsure ones go to Gustavo in a weekly WhatsApp 👤 list (quoted reply with numbers), noise is dropped; scripts/review_bios.py --queue/--undo/--gate-backlog"}
   - {id: kaya.tts, kind: lib, path: src/chat/tts.py, summary: "Text-to-speech replies as WhatsApp voice notes"}
   - {id: kaya.vision, kind: lib, path: src/chat/vision.py, summary: "Describe images sent in chat with the local vision model"}
   - {id: kaya.web_search, kind: lib, path: src/chat/web_search.py, summary: "Web-search answers via xAI Grok for questions that name no group member (privacy guard)"}

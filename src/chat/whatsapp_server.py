@@ -699,7 +699,7 @@ def _start_bio_scheduler() -> None:
                 print(f"ℹ️  {label} bio refresh skipped: {report['skipped']}")
             else:
                 print(f"✓ {label} bio refresh: {report['messages_read']} message(s), "
-                      f"{len(report['proposals'])} proposal(s) pending review")
+                      f"{report.get('gate') or str(len(report['proposals'])) + ' proposal(s) pending review'}")
         except Exception as exc:  # noqa: BLE001 — must never take the bot down
             print(f"⚠️  {label} bio refresh failed: {exc}")
 
@@ -715,7 +715,7 @@ def _start_bio_scheduler() -> None:
 
     threading.Thread(target=_loop, name="kaya-bio-refresh", daemon=True).start()
     print(f"✓ Biography refresh scheduled (every {bcfg.get('interval_minutes', 0)} min, "
-          f"proposals only — review with scripts/review_bios.py)")
+          f"mode {bcfg.get('mode', 'gate')} — scripts/review_bios.py --queue)")
 
 
 def _bio_paths():
@@ -748,8 +748,8 @@ def _start_bio_digest_scheduler() -> None:
     bcfg = config.get("bio_refresh") or {}
     if not bcfg.get("enabled", False) or os.environ.get("KAYA_ENV") != "prod":
         return
-    if not adapter.report_jid:
-        print("⚠️  Weekly profile list: KAYA_REPORT_JID is unset; not starting.")
+    if not adapter.owner_jid():
+        print("⚠️  Weekly profile list: no KAYA_REPORT_JID and the maintainer's number is unknown; not starting.")
         return
     hour = int(bcfg.get("digest_hour", 18))
     zone = ZoneInfo("Europe/Lisbon")
@@ -764,7 +764,7 @@ def _start_bio_digest_scheduler() -> None:
             if not digest_due(queue, wrong):
                 return
             text, ids = digest_text(queue, wrong)
-            waha_client.send_text(adapter.report_jid, text)
+            waha_client.send_text(adapter.owner_jid(), text)
             queue.data["asked"] = {"sent_at": time.time(), "ids": ids}
             queue.save()
         print(f"✓ Weekly profile list sent ({len(ids)} fact(s), {len(wrong)} called wrong)")
