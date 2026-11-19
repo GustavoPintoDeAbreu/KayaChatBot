@@ -83,3 +83,14 @@ def test_only_the_maintainer_answers_the_list(tmp_path):
     result = adapter.ingest_event(event)
     assert not (isinstance(result, dict) and result.get("command") == "bios")
     assert seen == []
+
+
+def test_the_owner_is_reached_without_kaya_report_jid(tmp_path):
+    adapter, _ = rig(tmp_path)
+    adapter.maintainer = "Alice"
+    adapter.report_jid = ""
+    assert adapter.owner_jid() == ALICE
+    adapter.report_jid = "351900000009@c.us"
+    assert adapter.owner_jid() == "351900000009@c.us"
+    adapter.report_jid, adapter.maintainer = "", "Nobody"
+    assert adapter.owner_jid() == ""

@@ -2147,6 +2147,19 @@ class WhatsAppAdapter:
         while len(self.sent_messages) > self.sent_messages_max:
             self.sent_messages.popitem(last=False)
 
+    def owner_jid(self) -> str:
+        """Where messages for the maintainer go: KAYA_REPORT_JID, else his own contact.
+
+        Prod had no KAYA_REPORT_JID on 2026-11-19, so the weekly 👤 list would never
+        have been sent; his number is already in the contacts, learned from his DMs."""
+        if self.report_jid:
+            return self.report_jid
+        for key, name in self.contacts.items():
+            local = str(key).split("@", 1)[0]
+            if name == self.maintainer and local.isdigit() and not str(key).endswith("@lid"):
+                return _normalize_jid(f"{local}@c.us")
+        return ""
+
     def called_wrong(self, msg: "InboundMessage") -> Optional[Dict[str, Any]]:
         """A group message calling one of the bot's answers wrong, as a 👎 record.
 
