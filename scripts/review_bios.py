@@ -12,6 +12,12 @@ them, so it has to be fast enough to actually happen.
     scripts/review_bios.py --accept all
     scripts/review_bios.py --reject Gil          # drop the proposal, keep the profile
     scripts/review_bios.py --pin "Gil works in sales."
+    scripts/review_bios.py --queue                         # the gate: waiting, applied, dropped
+    scripts/review_bios.py --undo NAME                     # undo the last applied fact about NAME
+    scripts/review_bios.py --gate-backlog [--dry-run]      # sort the old proposals through the gate
+
+Since 2026-11-19 the refresh no longer just proposes: src/data/bio_gate.py applies
+grounded, non-sensitive facts on its own and sends the rest to Gustavo weekly.
 
 Every addition is printed with the messages that produced it. A proposed fact
 with no evidence you recognise is the one to reject.
@@ -130,6 +136,13 @@ def main() -> int:
     parser.add_argument("--reject", default="", metavar="NAME|all")
     parser.add_argument("--pin", default="", metavar="FACT",
                         help="with --member: keep this fact through every future refresh")
+    parser.add_argument("--queue", action="store_true", help="show the gate's queue")
+    parser.add_argument("--undo", default="", metavar="NAME",
+                        help="restore the snapshot from before the last applied fact about NAME")
+    parser.add_argument("--gate-backlog", action="store_true",
+                        help="sort every pending proposal through the gate, then archive the file")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --gate-backlog: work on copies and print what would happen")
     args = parser.parse_args()
 
     directory = data_dir(args.data_dir)
@@ -144,6 +157,9 @@ def main() -> int:
     by_name = {m["name"]: m for m in members_doc.get("members", [])}
     document = load_json(proposals_path, {})
     proposals: Dict[str, Any] = document.get("proposals", {}) if document else {}
+
+    if args.queue or args.undo or args.gate_backlog:
+        return gate_commands(args, directory, members_path, proposals_path)
 
     # ── pin ──────────────────────────────────────────────────────────────────
     if args.pin:
@@ -217,6 +233,97 @@ def main() -> int:
             print(f"  {sender!r}: {count} message(s)")
         print(f"  {DIM}add an alias in group_members.json, or a mapping in "
               f"data/whatsapp_sender_aliases.json{OFF}")
+    return 0
+
+
+def _grounding_generator(config: Dict[str, Any]):
+    """The live Kaya model through the broker, as on the 2026-09-28 replays."""
+    import os
+
+    from src.chat.engine import _load_model
+    from src.chat.inference_backend import build_backend
+
+    os.environ.setdefault("KAYA_INFERENCE_BACKEND", "ollama")
+    os.environ.setdefault("KAYA_OLLAMA_URL", "http://127.0.0.1:8200/upstream/kaya")
+    _model, tokenizer = _load_model(config)
+    backend = build_backend(config, None, tokenizer)
+
+    def generate(system: str, user: str) -> str:
+        return backend.generate([{"role": "system", "content": system},
+                                 {"role": "user", "content": user}], max_new_tokens=6,
+                                sampling={"temperature": 0.0, "top_p": 1.0, "top_k": 0,
+                                          "repetition_penalty": 1.0})
+    return generate
+
+
+def _message_lookup(directory: Path, members_path: Path, config: Dict[str, Any]):
+    from src.data.bio_refresh import resolve_sender
+    from src.data.identity_resolver import SenderResolver
+    from src.data.message_log import MessageLog
+
+    resolver = SenderResolver(members_path, (config.get("data", {}) or {}).get("sender_aliases") or {})
+    lookup = {}
+    for row in MessageLog(base_dir=str(directory / "live_messages")).read("shared"):
+        if row.get("id"):
+            lookup[row["id"]] = {"sender": resolve_sender(row, resolver, config),
+                                 "text": row.get("text") or ""}
+    return lookup
+
+
+def gate_commands(args, directory: Path, members_path: Path, proposals_path: Path) -> int:
+    from src.config_loader import load_config
+    from src.data import bio_gate
+
+    queue_path = directory / "bio_queue.json"
+    config = load_config(str(BASE_DIR / "config.yaml"))
+    limit = int((config.get("bio_refresh") or {}).get("max_key_facts", 8))
+
+    if args.undo:
+        restored = bio_gate.undo(bio_gate.BioQueue(queue_path), members_path, args.undo)
+        print(f"restored {restored}" if restored else f"nothing applied to undo for {args.undo}")
+        return 0 if restored else 1
+
+    if args.queue:
+        queue = bio_gate.BioQueue(queue_path)
+        print(json.dumps(bio_gate.status(queue), indent=2))
+        for item in queue.data["ask"]:
+            print(f"  ? {item['fact']}  ({item.get('reason')})")
+        for item in queue.data["applied"][-10:]:
+            print(f"  {GREEN}+{OFF} {item['fact']}  ({item.get('applied')})")
+        return 0
+
+    document = load_json(proposals_path, {})
+    new_facts = {name: list(p.get("new_facts") or [])
+                 for name, p in (document.get("proposals") or {}).items()}
+    total = sum(len(v) for v in new_facts.values())
+    print(f"{total} pending fact(s) across {len(new_facts)} member(s)")
+    work_members, work_queue = members_path, queue_path
+    if args.dry_run:
+        import tempfile
+        scratch = Path(tempfile.mkdtemp(prefix="bio-gate-"))
+        work_members = scratch / "group_members.json"
+        shutil.copy2(members_path, work_members)
+        work_queue = scratch / "bio_queue.json"
+        if queue_path.exists():
+            shutil.copy2(queue_path, work_queue)
+    members = json.loads(work_members.read_text(encoding="utf-8"))["members"]
+    lookup = _message_lookup(directory, members_path, config)
+    queue = bio_gate.BioQueue(work_queue)
+    counts = bio_gate.gate(new_facts, members, lookup, queue, _grounding_generator(config),
+                           work_members, limit)
+    queue.save()
+    print(json.dumps(counts))
+    for key in ("applied", "ask", "candidates"):
+        print(f"\n{BOLD}{key}{OFF} ({len(queue.data[key])})")
+        for item in queue.data[key][:25]:
+            print(f"  {item['member']}: {item['fact']}  [{item.get('reason') or ''}] "
+                  f"{DIM}«{(item['quotes'][0]['quote'] if item['quotes'] else '')[:80]}»{OFF}")
+    if args.dry_run:
+        print(f"\n(dry run: nothing written outside {work_queue.parent})")
+        return 0
+    archived = proposals_path.with_name(f"bio_proposals.archived-{time.strftime('%Y%m%d')}.json")
+    proposals_path.rename(archived)
+    print(f"\nold proposals archived to {archived.name}")
     return 0
 
 

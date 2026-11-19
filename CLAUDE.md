@@ -1160,6 +1160,37 @@ a generic line. `scripts/audit_interactions.py` wanted *"tens TODA a razão"* an
 scored this morning clean on the very failure it exists to catch; its regex and its
 remediation pointer (which recommended the clause that caused this) are fixed.
 
+### "O teu chefe", and facts that reach the profiles (2026-11-19)
+
+A member asked *"achas que o teu chefe tem capacidade?"*; the router rewrote it as *"o chefe do
+Gustavo"* and the bot had no idea who that was. Asked *"quem é este gajo?"* about another member, it
+gave him a third member's job and a social-network habit: his card had no job, the retrieved lines
+were his own message about the other member's job, and the habit was the bot's old roast material
+(the same mix-up as 2026-08-17).
+
+- **The bot's boss is its maker.** `router.router_system(config)` fills `{maintainer}`: "teu/tua/your"
+  are the bot's, and its chefe / patrão / dono / criador is `chat.maintainer`. Both maintainer clauses
+  open with *"Foste feito pelo {maintainer} e corres no PC dele"*.
+- **Who said a line is not who it is about.** `format_context`'s header, the member-card intro and
+  `_question_hint` say so; no job, habit or social network is inferred from interests.
+- **A question about someone gets all of his facts.** `retriever._format_recent_summaries` now carries
+  every `key_facts` line of each member the query names (the prompt still caps at
+  `rag.max_facts_per_member`), and re-reads the profiles when the file changes; `whatsapp_server`
+  rebuilds the fixed prompt the same way (`_current_prompt`), so an applied fact needs no restart.
+- **Facts reach the profiles** (`src/data/bio_gate.py`, `bio_refresh.mode: gate`). The refresh used to
+  only propose, and nobody was asked: 455 facts piled up and none landed after 10 Oct. Now each fact is
+  dropped (no subject, trivial, an opinion or plan, a media description, or a quote about somebody
+  else), asked (sensitive, or the model unsure), or waits for a second, different quote, after which
+  the local model's YES applies it with a snapshot. Gustavo gets one 👤 DM a week (`KAYA_REPORT_JID`):
+  facts waiting for him, facts added on their own, and answers the group called wrong. His quoted
+  reply ("1 3", "all", "none") is applied by `adapter._owner_list_reply`; the assistant tap already
+  leaves a quoted non-assistant reply to Kaya. `scripts/review_bios.py --queue / --undo NAME /
+  --gate-backlog [--dry-run]`. `max_key_facts` is 12.
+- **"Called wrong" is recorded.** A group message with a call-out ("alucinação", "inventaste", "isso não
+  é verdade"…) right after or replying to a bot answer is logged as a 👎 with `kind: called_wrong`
+  (`adapter.called_wrong`); weak words ("mentira", "errado") count only as a reply to the bot or naming
+  it. labwatch shows these and the waiting facts.
+
 ### Slash commands, and why they must not be remembered (2026-08-13)
 
 `/clear` (`/limpar`), `/bug` (`/erro`) and `/feedback` (`/sugestao`) are matched

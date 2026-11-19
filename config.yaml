@@ -287,9 +287,11 @@ chat:
   # Gustavo". The rule fired exactly as written; the rule had no idea who was
   # talking. `maintainer_self_clause` is the same rule for that case — still no
   # claiming fixes it has not made, which is the half that was always right.
+  # He is also who made the bot and runs it on his PC: "o teu chefe" is him
+  # (2026-11-19: "o teu chefe" got "não faço ideia de quem é o chefe dele").
   maintainer: "Gustavo"
-  maintainer_clause: "Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o {maintainer} tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Também não tens estado próprio nem tarefas agendadas: não prometas manter contadores, listas ou registos actualizados, não digas que vais avisar mais tarde, e nunca digas que enviaste ou afixaste alguma coisa que não esteja nesta mensagem."
-  maintainer_self_clause: "Não controlas o teu próprio código, configuração nem infraestrutura: quem está a escrever agora é o {maintainer}, que é quem trata disso, por isso se ele reportar um problema técnico (encoding, formatação, lentidão, bugs) reconhece o que ele está a ver e não lhe digas que o {maintainer} tem de tratar do assunto. Nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Também não tens estado próprio nem tarefas agendadas: não prometas manter contadores, listas ou registos actualizados, não digas que vais avisar mais tarde, e nunca digas que enviaste ou afixaste alguma coisa que não esteja nesta mensagem."
+  maintainer_clause: "Foste feito pelo {maintainer} e corres no PC dele: quando falam do teu chefe, patrão, dono, criador ou de quem te fez, é do {maintainer} que falam, e respondes sobre ele como sobre qualquer membro, na terceira pessoa e com opinião se ta pedirem. Não controlas o teu próprio código, configuração nem infraestrutura: se alguém reportar um problema técnico (encoding, formatação, lentidão, bugs), reconhece o que estão a ver e diz que o {maintainer} tem de tratar disso, nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Também não tens estado próprio nem tarefas agendadas: não prometas manter contadores, listas ou registos actualizados, não digas que vais avisar mais tarde, e nunca digas que enviaste ou afixaste alguma coisa que não esteja nesta mensagem."
+  maintainer_self_clause: "Foste feito pelo {maintainer} e corres no PC dele: o teu chefe, patrão, dono ou criador é o {maintainer}, e é ele quem te está a escrever agora. Não controlas o teu próprio código, configuração nem infraestrutura: quem está a escrever agora é o {maintainer}, que é quem trata disso, por isso se ele reportar um problema técnico (encoding, formatação, lentidão, bugs) reconhece o que ele está a ver e não lhe digas que o {maintainer} tem de tratar do assunto. Nunca digas que já corrigiste, que vais corrigir, nem que alteraste alguma coisa. Também não tens estado próprio nem tarefas agendadas: não prometas manter contadores, listas ou registos actualizados, não digas que vais avisar mais tarde, e nunca digas que enviaste ou afixaste alguma coisa que não esteja nesta mensagem."
 
   # ── Intent routing ──────────────────────────────────────────────────────────
   # Every inbound message is classified before it is answered, because treating
@@ -1022,9 +1024,12 @@ rag:
 # actually been saying and PROPOSES updates to key_facts — the field the system
 # prompt injects, which until now nothing wrote.
 #
-# It never edits a profile. A cycle writes proposals and scripts/review_bios.py
-# is where a person accepts them: these are statements about real people,
-# produced by a model, and the group reads them back in the bot's answers.
+# Since 2026-11-19 a cycle no longer only proposes: proposals waited for a review
+# nobody was ever asked to do (455 piled up, none applied after 10 Oct, and the bot
+# gave a member another member's job). `mode: gate` sorts each fact (src/data/bio_gate.py):
+# grounded, non-sensitive facts seen in two quotes are applied with a snapshot;
+# sensitive or unsure ones go to Gustavo in a weekly WhatsApp list; noise is
+# dropped. scripts/review_bios.py --queue / --undo / --gate-backlog.
 #
 # Only the shared group is read. A profile reaches every chat, so a fact learned
 # in a DM would become group-readable — see src/chat/scope.py.
@@ -1047,11 +1052,19 @@ bio_refresh:
   # injection. Distilling down to that made every accepted proposal delete
   # history — a member went from six facts to four. Store generously, inject
   # narrowly.
-  max_key_facts: 8
+  # 12 since 2026-11-19: at 8, the busiest profiles were full and the gate
+  # could add nothing (rag.max_facts_per_member still caps what one prompt shows).
+  max_key_facts: 12
   extract_max_new_tokens: 900
   distil_max_new_tokens: 500
   state_file: "data/bio_refresh_state.json"
   proposals_file: "data/bio_proposals.json"
+  # gate (default) | propose (the old proposals-only behaviour)
+  mode: gate
+  queue_file: "data/bio_queue.json"
+  # The weekly list to KAYA_REPORT_JID (prod only): checked hourly, sent at most
+  # every 7 days when something waits, from this hour (Lisbon) on.
+  digest_hour: 18
 
 # Benchmark Settings
 benchmark:

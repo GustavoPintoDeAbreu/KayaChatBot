@@ -449,7 +449,7 @@ class TestFormatRecentSummaries:
         result = retriever_with_members._format_recent_summaries(["peter"])
         assert "Peter" in result
         assert "recently discussed his new speakers" in result
-        assert "Resumos recentes dos membros" in result
+        assert "O que sabes sobre quem é mencionado" in result
 
     def test_member_with_empty_summary_excluded(self, retriever_with_members):
         result = retriever_with_members._format_recent_summaries(["gil"])
@@ -473,8 +473,17 @@ class TestFormatRecentSummaries:
 
     def test_output_format(self, retriever_with_members):
         result = retriever_with_members._format_recent_summaries(["peter"])
-        assert result.startswith("=== Resumos recentes dos membros ===")
-        assert result.endswith("=== Fim dos resumos ===")
+        assert result.startswith("=== O que sabes sobre quem é mencionado")
+        assert result.endswith("=== Fim ===")
+
+    def test_a_named_member_gets_every_fact_past_the_prompt_cap(self, retriever_with_members):
+        """"Who is he?" (2026-11-19): the prompt shows four facts per member; the
+        member a question names gets all of his, a fact added later included."""
+        member = next(m for m in retriever_with_members._members_data if m["name"] == "Peter")
+        member["key_facts"] = [f"Peter fact {n}." for n in range(7)]
+        result = retriever_with_members._format_recent_summaries(["peter"])
+        assert "[Perfil — Peter] Peter fact 0. " in result and "Peter fact 6." in result
+        assert "o que não está aqui não sabes" in result
 
 
 # ---------------------------------------------------------------------------
@@ -500,24 +509,24 @@ class TestRetrieveAllWithSummaries:
     def test_summaries_injected_when_member_mentioned(self, retriever_with_members):
         self._setup_collections(retriever_with_members)
         ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="both")
-        assert "Resumos recentes dos membros" in ctx
+        assert "O que sabes sobre quem é mencionado" in ctx
         assert "recently discussed his new speakers" in ctx
 
     def test_summaries_not_injected_when_toggle_off(self, retriever_with_members):
         retriever_with_members.rag_config["inject_recent_summaries"] = False
         self._setup_collections(retriever_with_members)
         ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="both")
-        assert "Resumos recentes dos membros" not in ctx
+        assert "O que sabes sobre quem é mencionado" not in ctx
 
     def test_summaries_not_injected_when_no_member_mentioned(self, retriever_with_members):
         self._setup_collections(retriever_with_members)
         ctx = retriever_with_members.retrieve_all("How is the weather?", knowledge_approach="both")
-        assert "Resumos recentes dos membros" not in ctx
+        assert "O que sabes sobre quem é mencionado" not in ctx
 
     def test_summaries_appear_before_conversations(self, retriever_with_members):
         self._setup_collections(retriever_with_members)
         ctx = retriever_with_members.retrieve_all("Tell me about Peter", knowledge_approach="json_only")
-        summaries_pos = ctx.find("Resumos recentes dos membros")
+        summaries_pos = ctx.find("O que sabes sobre quem é mencionado")
         conv_pos = ctx.find("Conversas relevantes")
         assert summaries_pos < conv_pos
 

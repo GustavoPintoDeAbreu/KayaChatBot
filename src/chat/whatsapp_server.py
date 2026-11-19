@@ -196,6 +196,36 @@ _system_prompt = build_system_prompt(
 )
 
 
+_prompt_stamp = None
+
+
+def _data_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else Path(config_path).parent / path
+
+
+def _current_prompt() -> str:
+    """The fixed prompt, rebuilt when group_members.json changes.
+
+    Built once at import, an applied profile fact (bio_gate, review_bios) reached
+    factual answers only after a restart. Checking the file's mtime costs nothing."""
+    global _system_prompt, _prompt_stamp
+    try:
+        members = _data_path(config["data"]["group_members_file"])
+        stamp = members.stat().st_mtime_ns
+    except (KeyError, OSError):
+        return _system_prompt
+    if _prompt_stamp is None:
+        _prompt_stamp = stamp
+    elif stamp != _prompt_stamp:
+        _prompt_stamp = stamp
+        _system_prompt = build_system_prompt(
+            config, config_path,
+            include_uncensored=config.get("chat", {}).get("uncensored_mode", False))
+        print("✓ Member profiles changed; system prompt rebuilt")
+    return _system_prompt
+
+
 def _prompt_for_turn(sample_facts: bool = False) -> str:
     """Rebuild the system prompt for one turn. ~0.6ms, so it is not worth caching.
 
@@ -238,7 +268,7 @@ def _responder(message: str, speaker: str, recent_lines, scope=None,
     ``late_note`` marks a message the gateway held while the PC was off.
     """
     return engine.respond(
-        message, speaker, recent_lines, _system_prompt,
+        message, speaker, recent_lines, _current_prompt(),
         scope=scope, exclude_from=exclude_from, summary=summary,
         link_context=link_context, chat_id=chat_id, late_note=late_note,
     )
@@ -606,7 +636,7 @@ def _process(event: dict):
         return
     t0 = time.perf_counter()
     try:
-        result = adapter.handle_event(event, system_prompt=_system_prompt)
+        result = adapter.handle_event(event, system_prompt=_current_prompt())
         _log_interaction_metrics(result, t0)
     except GpuBusyError:
         print("⚠️  GPU busy — dropped a WhatsApp message rather than queueing it.")
@@ -686,6 +716,70 @@ def _start_bio_scheduler() -> None:
     threading.Thread(target=_loop, name="kaya-bio-refresh", daemon=True).start()
     print(f"✓ Biography refresh scheduled (every {bcfg.get('interval_minutes', 0)} min, "
           f"proposals only — review with scripts/review_bios.py)")
+
+
+def _bio_paths():
+    from src.data.bio_refresh import queue_path
+
+    members = _data_path(config["data"]["group_members_file"])
+    limit = int((config.get("bio_refresh") or {}).get("max_key_facts", 8))
+    return queue_path(config), members, limit
+
+
+def _answer_bio_list(text: str) -> str:
+    """The owner's quoted answer to the weekly 👤 list (adapter.owner_reply_hook)."""
+    from src.data.bio_gate import QUEUE_LOCK, BioQueue, apply_answer
+
+    queue_file, members, limit = _bio_paths()
+    with QUEUE_LOCK:
+        return apply_answer(BioQueue(queue_file), members, text, limit)
+
+
+def _start_bio_digest_scheduler() -> None:
+    """Once a week, the facts waiting for his yes and the answers called wrong, by DM.
+
+    Prod only, to KAYA_REPORT_JID. The profile updater proposed for three months
+    and nobody was asked (2026-11-19); this is the asking."""
+    from datetime import datetime as _datetime
+    from zoneinfo import ZoneInfo
+
+    from src.data.bio_gate import QUEUE_LOCK, BioQueue, digest_due, digest_text, recent_called_wrong
+
+    bcfg = config.get("bio_refresh") or {}
+    if not bcfg.get("enabled", False) or os.environ.get("KAYA_ENV") != "prod":
+        return
+    if not adapter.report_jid:
+        print("⚠️  Weekly profile list: KAYA_REPORT_JID is unset; not starting.")
+        return
+    hour = int(bcfg.get("digest_hour", 18))
+    zone = ZoneInfo("Europe/Lisbon")
+
+    def _pass() -> None:
+        if _datetime.now(zone).hour < hour:
+            return
+        queue_file, _members, _limit = _bio_paths()
+        wrong = recent_called_wrong(feedback.feedback_log_path(config))
+        with QUEUE_LOCK:
+            queue = BioQueue(queue_file)
+            if not digest_due(queue, wrong):
+                return
+            text, ids = digest_text(queue, wrong)
+            waha_client.send_text(adapter.report_jid, text)
+            queue.data["asked"] = {"sent_at": time.time(), "ids": ids}
+            queue.save()
+        print(f"✓ Weekly profile list sent ({len(ids)} fact(s), {len(wrong)} called wrong)")
+
+    def _loop() -> None:
+        while True:
+            try:
+                _pass()
+            except Exception as exc:  # noqa: BLE001 — must never take the bot down
+                print(f"⚠️  weekly profile list failed: {exc}")
+            time.sleep(3600)
+
+    adapter.owner_reply_hook = _answer_bio_list
+    threading.Thread(target=_loop, name="kaya-bio-digest", daemon=True).start()
+    print(f"✓ Weekly profile list scheduled (from {hour}:00 Lisbon, every 7 days when something waits)")
 
 
 def _start_birthday_scheduler() -> None:
@@ -896,6 +990,7 @@ if not MOCK_MODE:
         _preload_audio_models()
     _start_ingest_scheduler()
     _start_bio_scheduler()
+    _start_bio_digest_scheduler()
     _start_birthday_scheduler()
     _start_poll_reminder_scheduler()
 
@@ -924,7 +1019,7 @@ async def webhook(
             result = await run_in_threadpool(adapter.handle_poll_vote, event)
             return {"handled": result is not None, **(result or {})}
         t0 = time.perf_counter()
-        result = await run_in_threadpool(adapter.handle_event, event, _system_prompt)
+        result = await run_in_threadpool(adapter.handle_event, event, _current_prompt())
         _log_interaction_metrics(result, t0)
         return {"handled": result is not None, **(result or {})}
     background_tasks.add_task(_process, event)
