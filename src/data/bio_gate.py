@@ -85,7 +85,7 @@ def _comparable(fact: str) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", text).split())
 
 
-_STOP = {"a", "an", "the", "to", "at", "in", "on", "of", "and", "is", "was", "has", "had", "used",
+_STOP = {"a", "an", "the", "to", "at", "in", "on", "of", "and", "is", "was", "has", "had", "used", "named", "called",
          "for", "with", "his", "her", "he", "she", "as", "o", "a", "de", "do", "da", "em", "no", "na"}
 
 
@@ -250,7 +250,7 @@ def write_members(members_path: Path, payload: Dict[str, Any]) -> None:
     tmp.replace(members_path)
 
 
-def apply_items(members_path: Path, items: List[Dict[str, Any]], limit: int,
+def apply_items(members_path: Path, items: List[Dict[str, Any]], limit: Optional[int],
                 how: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Add each item's fact to its member's ``key_facts``. ``(applied, full)``.
 
@@ -266,7 +266,7 @@ def apply_items(members_path: Path, items: List[Dict[str, Any]], limit: int,
             continue
         facts = list(member.get("key_facts") or [])
         if not any(same_fact(f, item["fact"]) for f in facts):
-            if len(facts) >= limit:
+            if limit is not None and len(facts) >= limit:
                 full.append(item)
                 continue
             facts.append(item["fact"])
@@ -547,7 +547,10 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
             elif action == "edit" and _replace_fact(members_path, item["member"], item["fact"], entry["fact"]):
                 item["fact"], item["applied"] = entry["fact"], "his edit"
                 reworded.append(item)
-    applied, full = apply_items(members_path, to_apply, limit, "his yes")
+    # The cap keeps auto-added facts from piling up; it never overrides his yes
+    # (2026-11-19: five facts he approved were left out because his profile was full).
+    applied, full = apply_items(members_path, to_apply, None, "his yes")
+    edited = [i for i in edited if i in applied]
     for item in applied:
         queue.move(item, "ask", "applied")
     queue.data["ask"] = [i for i in queue.data["ask"] if i not in dropped]

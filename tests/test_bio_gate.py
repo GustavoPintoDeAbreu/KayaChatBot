@@ -277,3 +277,22 @@ def test_called_wrong_rows_are_read_back(tmp_path):
     ]), encoding="utf-8")
     rows = bio_gate.recent_called_wrong(log)
     assert [r["comment"] for r in rows] == ["holy allucinacao"]
+
+
+def test_his_yes_is_applied_even_past_the_cap(tmp_path):
+    """The cap is for facts added on their own, never for his yes (2026-11-19)."""
+    path, queue = _two_waiting(tmp_path)
+    doc = json.loads(path.read_text())
+    next(m for m in doc["members"] if m["name"] == "Ana")["key_facts"] = [f"Ana fact {n} here." for n in range(12)]
+    path.write_text(json.dumps(doc))
+    _text, ids, added = digest_text(queue, [])
+    bio_gate.mark_sent(queue, ids, added)
+    reply = apply_answer(queue, path, "1-yes / 2- no she is a centrist", 12, generate=lambda s, u: json.dumps(
+        {"items": [{"n": 1, "action": "keep"}, {"n": 2, "action": "edit", "fact": "Ana is a centrist."}],
+         "rest": "leave"}))
+    assert "applied 2 (1 with your wording)" in reply and "full" not in reply
+    assert facts_of(path, "Ana")[-2:] == ["Ana votes for party X and is left-wing.", "Ana is a centrist."]
+
+
+def test_a_named_girlfriend_is_the_same_fact_as_living_with_her():
+    assert same_fact("Ana has a girlfriend named Rita", "Ana (aninhas) lives with her girlfriend Rita in Lisbon.")
