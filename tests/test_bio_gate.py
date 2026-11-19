@@ -140,25 +140,112 @@ def test_a_full_profile_is_not_trimmed(tmp_path):
     assert queue.data["ask"][0]["reason"] == "his profile is full"
 
 
-def test_weekly_list_and_his_numbered_answer(tmp_path):
+def _two_waiting(tmp_path):
     path = write_members(tmp_path)
     queue = BioQueue(tmp_path / "q.json")
     gate({"Ana": [entry("Ana votes for party X and is left-wing.", "votei no partido X", "m5"),
                   entry("Ana is left-wing and active in politics.", "sou de esquerda desde sempre", "m5")]},
          MEMBERS, LOOKUP, queue, yes, path, 12)
+    return path, queue
+
+
+def _auto_added(queue, path, fact="Carlos owns an old car."):
+    item = {"id": "auto1", "member": "Carlos", "fact": fact, "quotes": [], "first_seen": time.time(),
+            "applied": "auto", "moved_at": time.time()}
+    queue.data["applied"].append(item)
+    doc = json.loads(path.read_text())
+    next(m for m in doc["members"] if m["name"] == "Carlos")["key_facts"] = [fact]
+    path.write_text(json.dumps(doc))
+    return item
+
+
+def test_weekly_list_and_his_numbered_answer(tmp_path):
+    path, queue = _two_waiting(tmp_path)
     assert len(queue.data["ask"]) == 2
     assert bio_gate.digest_due(queue, [])
-    text, ids = digest_text(queue, [{"user_message": "quem é este gajo?",
-                                     "assistant_response": "O Bruno trabalha na Acme",
-                                     "speaker": "Ana", "comment": "holy allucinacao"}])
+    text, ids, added = digest_text(queue, [{"user_message": "quem é este gajo?",
+                                            "assistant_response": "O Bruno trabalha na Acme",
+                                            "speaker": "Ana", "comment": "holy allucinacao"}])
     assert text.startswith(bio_gate.BIO_TAG) and "1. Ana votes" in text and "2. Ana is left-wing" in text
-    assert "holy allucinacao" in text and len(ids) == 2
-    queue.data["asked"] = {"sent_at": time.time(), "ids": ids}
+    assert "holy allucinacao" in text and "by text or voice" in text and len(ids) == 2 and added == []
+    bio_gate.mark_sent(queue, ids, added)
     reply = apply_answer(queue, path, "2", 12)
-    assert "Applied 1" in reply and "dropped 1" in reply
+    assert "applied 1" in reply and "dropped 1" in reply
     assert facts_of(path, "Ana")[-1] == "Ana is left-wing and active in politics."
     assert not queue.data["ask"] and queue.data["asked"]["ids"] == []
     assert "no open list" in apply_answer(queue, path, "1", 12)
+
+
+def test_a_skipped_week_comes_back_first_and_flagged(tmp_path, monkeypatch):
+    path, queue = _two_waiting(tmp_path)
+    _text, ids, added = digest_text(queue, [])
+    bio_gate.mark_sent(queue, ids, added)
+    later = time.time() + 8 * 86400
+    monkeypatch.setattr(bio_gate, "_now", lambda: later)
+    gate({"Ana": [entry("Ana votes for party Y now and is left-wing.", "votei no partido Y", "m5")]},
+         MEMBERS, LOOKUP, queue, yes, path, 12)
+    assert bio_gate.digest_due(queue, [])
+    text, ids2, _ = digest_text(queue, [])
+    assert "You didn't answer last week" in text
+    assert "1. ↩ Ana votes for party X" in text and "2. ↩ Ana is left-wing" in text
+    bio_gate.mark_sent(queue, ids2, [])
+    assert all(i.get("asked_times") == 2 for i in queue.data["ask"] if i["id"] in ids)
+
+
+def test_plain_words_edit_and_drop_through_the_model(tmp_path):
+    path, queue = _two_waiting(tmp_path)
+    _auto_added(queue, path)
+    _text, ids, added = digest_text(queue, [])
+    assert added == ["auto1"]
+    bio_gate.mark_sent(queue, ids, added)
+    seen = {}
+
+    def model(system, user):
+        seen["user"] = user
+        return json.dumps({"items": [
+            {"n": 1, "action": "drop"},
+            {"n": 2, "action": "edit", "fact": "Ana is active in local politics."},
+            {"n": 3, "action": "edit", "fact": "Carlos owns a 20-year-old Fiat."}], "rest": "leave"})
+
+    reply = apply_answer(queue, path, "o primeiro está errado, o segundo é política local, "
+                         "o carro do Carlos é um Fiat com 20 anos", 12, generate=model)
+    assert "3. Carlos owns an old car." in seen["user"] and "His answer" in seen["user"]
+    assert "applied 1 (1 with your wording)" in reply and "dropped 1" in reply and "reworded 1" in reply
+    assert facts_of(path, "Ana")[-1] == "Ana is active in local politics."
+    assert facts_of(path, "Carlos") == ["Carlos owns a 20-year-old Fiat."]
+
+
+def test_everythings_right_keeps_all_without_the_model(tmp_path):
+    path, queue = _two_waiting(tmp_path)
+    _auto_added(queue, path)
+    _text, ids, added = digest_text(queue, [])
+    bio_gate.mark_sent(queue, ids, added)
+
+    def model(system, user):
+        raise AssertionError("not needed")
+
+    reply = apply_answer(queue, path, "All good!", 12, generate=model)
+    assert "applied 2" in reply and facts_of(path, "Carlos") == ["Carlos owns an old car."]
+
+
+def test_an_auto_added_fact_he_calls_wrong_comes_off(tmp_path):
+    path, queue = _two_waiting(tmp_path)
+    _auto_added(queue, path)
+    _text, ids, added = digest_text(queue, [])
+    bio_gate.mark_sent(queue, ids, added)
+    reply = apply_answer(queue, path, "number three is wrong, the rest is fine", 12,
+                         generate=lambda s, u: '{"items": [{"n": 3, "action": "drop"}], "rest": "keep"}')
+    assert "took 1 back" in reply and "applied 2" in reply
+    assert facts_of(path, "Carlos") == []
+
+
+def test_an_unusable_model_answer_changes_nothing(tmp_path):
+    path, queue = _two_waiting(tmp_path)
+    _text, ids, added = digest_text(queue, [])
+    bio_gate.mark_sent(queue, ids, added)
+    reply = apply_answer(queue, path, "hmm talvez", 12, generate=lambda s, u: "não sei")
+    assert "nothing was changed" in reply and len(queue.data["ask"]) == 2
+    assert apply_answer(queue, path, "hmm talvez", 12) .startswith(bio_gate.BIO_TAG + " I couldn't read")
 
 
 def test_answers_that_are_not_answers():

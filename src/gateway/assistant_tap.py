@@ -33,6 +33,9 @@ from src.chat.whatsapp_adapter import InboundMessage, _phone_from_alt
 logger = logging.getLogger(__name__)
 
 TAG = "🤖"
+# Kaya's weekly profile-facts list (src/data/bio_gate.py BIO_TAG); not imported, so
+# the gateway stays free of the chat package's data modules.
+KAYA_LIST_TAG = "👤"
 ASLEEP_TEXT = "🤖 The PC is asleep; I'll answer as soon as it wakes."
 
 Post = Callable[[str, Dict[str, Any], Dict[str, str]], Awaitable[int]]
@@ -80,6 +83,10 @@ class AssistantTap:
         if msg.from_me:
             return "echo" if text.startswith(TAG) else None
         if not self._is_owner(msg):
+            return None
+        quoted = (msg.quoted_text or "").strip()
+        if quoted.startswith(KAYA_LIST_TAG):
+            # His answer (text or voice) to Kaya's weekly 👤 list is Kaya's to read.
             return None
         if self.is_voice(msg):
             return "assistant"

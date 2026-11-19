@@ -134,3 +134,15 @@ def test_off_without_url():
     tap = AssistantTap.from_env({"ASSISTANT_INBOX_URL": "http://x", "ASSISTANT_OWNER_NUMBERS": "351933333333",
                                  "IDEA_OWNER_NUMBERS": "351922222222"})
     assert tap.owner_numbers == {"351933333333"}
+
+
+def test_his_voice_answer_to_kayas_weekly_list_goes_to_kaya(rig):
+    """He answers the 👤 profile-facts list by voice as readily as by text (2026-11-19)."""
+    gateway, _ideas, assistant, _sent, _monitor = rig
+    event = _voice("vlist")
+    event["payload"]["replyTo"] = {"id": "L1", "body": "👤 Kaya's weekly check\n\n1. …"}
+    result = _post(gateway, event)
+    assert not assistant.received and "seq" in result
+    text = _message("tlist", "tudo certo")
+    text["payload"]["replyTo"] = {"id": "L1", "body": "👤 Kaya's weekly check"}
+    assert "seq" in _post(gateway, text) and not assistant.received

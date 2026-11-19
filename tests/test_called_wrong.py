@@ -94,3 +94,17 @@ def test_the_owner_is_reached_without_kaya_report_jid(tmp_path):
     assert adapter.owner_jid() == "351900000009@c.us"
     adapter.report_jid, adapter.maintainer = "", "Nobody"
     assert adapter.owner_jid() == ""
+
+
+def test_his_voice_answer_to_the_list_is_transcribed_first(tmp_path):
+    adapter, client = rig(tmp_path)
+    adapter.maintainer = "Alice"
+    adapter.transcribe = lambda url, mime: "o número dois está errado, o resto está certo"
+    seen = []
+    adapter.owner_reply_hook = lambda text: seen.append(text) or "👤 Done: applied 1, dropped 1."
+    event = dm_event("")
+    event["payload"].update(media={"url": "http://waha/f.oga", "mimetype": "audio/ogg"})
+    event["payload"]["replyTo"] = {"id": "list-1", "body": "👤 Kaya's weekly check"}
+    result = adapter.ingest_event(event)
+    assert seen == ["o número dois está errado, o resto está certo"]
+    assert result["command"] == "bios" and client.sent[-1]["text"].startswith("👤 Done")

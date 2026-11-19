@@ -726,13 +726,24 @@ def _bio_paths():
     return queue_path(config), members, limit
 
 
+def _bio_list_generate(system: str, user: str) -> str:
+    """Kaya's model reading his answer: he is waiting, so it is loaded like a reply."""
+    ensure_model_loaded(config, urgent=True)
+    with gpu_section(config, timeout=60):
+        return engine.backend.generate(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_new_tokens=700,
+            sampling={"temperature": 0.1, "top_p": 0.9, "top_k": 0, "repetition_penalty": 1.0})
+
+
 def _answer_bio_list(text: str) -> str:
-    """The owner's quoted answer to the weekly 👤 list (adapter.owner_reply_hook)."""
+    """The owner's quoted answer to the weekly 👤 list (adapter.owner_reply_hook):
+    text or a transcribed voice note, in his own words."""
     from src.data.bio_gate import QUEUE_LOCK, BioQueue, apply_answer
 
     queue_file, members, limit = _bio_paths()
     with QUEUE_LOCK:
-        return apply_answer(BioQueue(queue_file), members, text, limit)
+        return apply_answer(BioQueue(queue_file), members, text, limit, generate=_bio_list_generate)
 
 
 def _start_bio_digest_scheduler() -> None:
@@ -743,7 +754,8 @@ def _start_bio_digest_scheduler() -> None:
     from datetime import datetime as _datetime
     from zoneinfo import ZoneInfo
 
-    from src.data.bio_gate import QUEUE_LOCK, BioQueue, digest_due, digest_text, recent_called_wrong
+    from src.data.bio_gate import (QUEUE_LOCK, BioQueue, digest_due, digest_text, mark_sent,
+                                   recent_called_wrong)
 
     bcfg = config.get("bio_refresh") or {}
     if not bcfg.get("enabled", False) or os.environ.get("KAYA_ENV") != "prod":
@@ -758,16 +770,19 @@ def _start_bio_digest_scheduler() -> None:
         if _datetime.now(zone).hour < hour:
             return
         queue_file, _members, _limit = _bio_paths()
-        wrong = recent_called_wrong(feedback.feedback_log_path(config))
         with QUEUE_LOCK:
             queue = BioQueue(queue_file)
+            since = float(queue.data["asked"].get("answered_at") or 0)
+            days = max(7.0, (time.time() - since) / 86400) if since else 7.0
+            wrong = recent_called_wrong(feedback.feedback_log_path(config), days=int(days) + 1)
             if not digest_due(queue, wrong):
                 return
-            text, ids = digest_text(queue, wrong)
+            text, ids, added_ids = digest_text(queue, wrong)
             waha_client.send_text(adapter.owner_jid(), text)
-            queue.data["asked"] = {"sent_at": time.time(), "ids": ids}
+            mark_sent(queue, ids, added_ids)
             queue.save()
-        print(f"✓ Weekly profile list sent ({len(ids)} fact(s), {len(wrong)} called wrong)")
+        print(f"✓ Weekly profile list sent ({len(ids)} waiting, {len(added_ids)} added, "
+              f"{len(wrong)} called wrong)")
 
     def _loop() -> None:
         while True:

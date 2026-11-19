@@ -1182,9 +1182,13 @@ were his own message about the other member's job, and the habit was the bot's o
   dropped (no subject, trivial, an opinion or plan, a media description, or a quote about somebody
   else), asked (sensitive, or the model unsure), or waits for a second, different quote, after which
   the local model's YES applies it with a snapshot. Gustavo gets one 👤 DM a week (`KAYA_REPORT_JID`):
-  facts waiting for him, facts added on their own, and answers the group called wrong. His quoted
-  reply ("1 3", "all", "none") is applied by `adapter._owner_list_reply`; the assistant tap already
-  leaves a quoted non-assistant reply to Kaya. `scripts/review_bios.py --queue / --undo NAME /
+  facts waiting for him (numbered first), facts added on their own since his last answer (numbered
+  after, so he can drop or reword them), and answers the group called wrong. He answers by quoting it,
+  **by text or voice, in his own words** ("está tudo certo", "o dois tira, o três trabalha em X"):
+  `adapter._owner_list_reply` transcribes a voice note, `bio_gate.interpret_answer` has the local model
+  turn it into keep/drop/edit per number (bare "1 3"/"all"/"none" need no model), and the assistant tap
+  leaves any reply quoting 👤 to Kaya, voice included. A skipped week is never lost: the unanswered
+  facts come back first next week, marked ↩, with no expiry. `scripts/review_bios.py --queue / --undo NAME /
   --gate-backlog [--dry-run]`. `max_key_facts` is 12.
 - **"Called wrong" is recorded.** A group message with a call-out ("alucinação", "inventaste", "isso não
   é verdade"…) right after or replying to a bot answer is logged as a 👎 with `kind: called_wrong`
