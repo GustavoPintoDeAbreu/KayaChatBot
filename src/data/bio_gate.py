@@ -42,7 +42,6 @@ BIO_TAG = "👤"
 DEFAULT_QUEUE = "data/bio_queue.json"
 SAME_FACT = 0.72             # SequenceMatcher ratio for "the same fact, reworded"
 CANDIDATE_DAYS = 28          # a fact seen once waits this long for a second quote, then is dropped
-ASK_EXPIRE_DAYS = 28         # an asked fact nobody answered is dropped after this
 DIGEST_SIZE = 10
 DIGEST_EVERY_DAYS = 7
 
@@ -345,13 +344,24 @@ def gate(new_facts: Dict[str, List[Dict[str, Any]]], members: List[Dict[str, Any
         for item in full:
             queue.move(item, "candidates", "ask", "his profile is full")
         counts["applied"] = len(applied)
-    queue.data["ask"] = [i for i in queue.data["ask"]
-                         if now - i.get("moved_at", i["first_seen"]) <= ASK_EXPIRE_DAYS * 86400
-                         or i["id"] in (queue.data["asked"].get("ids") or [])]
     return counts
 
 
 # ── the weekly list and his answer ───────────────────────────────────────────
+#
+# The list numbers the facts waiting for his yes first, then the facts added on
+# their own since his last answer (so he can drop or reword those too). Nothing he
+# hasn't answered disappears: a skipped week comes back next week, flagged, until he
+# answers (Gustavo, 2026-11-19: "if I skip a week, tell me what I forgot").
+# He answers by quoting the list, in text or in a voice note, in plain words:
+# "everything's right", or "number two is wrong, drop it; number three: he works
+# at X". ``interpret_answer`` turns that into actions with the local model; the
+# bare forms ("1 3", "all", "none") need no model.
+
+def _since_answer(queue: BioQueue) -> float:
+    asked = queue.data["asked"]
+    return float(asked.get("answered_at") or asked.get("first_sent_at") or 0)
+
 
 def _added_since(queue: BioQueue, since: float) -> List[Dict[str, Any]]:
     return [i for i in queue.data["applied"]
@@ -360,44 +370,67 @@ def _added_since(queue: BioQueue, since: float) -> List[Dict[str, Any]]:
 
 def digest_due(queue: BioQueue, wrong: List[Dict[str, Any]]) -> bool:
     last = float(queue.data["asked"].get("sent_at") or 0)
-    waiting = queue.data["ask"] or wrong or _added_since(queue, last)
+    waiting = queue.data["ask"] or wrong or _added_since(queue, _since_answer(queue))
     return bool(waiting) and _now() - last >= DIGEST_EVERY_DAYS * 86400
 
 
-def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
-    """The weekly DM, and the item ids its numbers stand for."""
-    items = sorted(queue.data["ask"], key=lambda i: i["first_seen"])[:DIGEST_SIZE]
+def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]]) -> Tuple[str, List[str], List[str]]:
+    """The weekly DM, the waiting ids and the added ids its numbers stand for (in order)."""
+    asked = queue.data["asked"]
+    unanswered = set(asked.get("ids") or []) if not asked.get("answered_at") or \
+        float(asked.get("answered_at") or 0) < float(asked.get("sent_at") or 0) else set()
+    waiting = sorted(queue.data["ask"], key=lambda i: (i["id"] not in unanswered, i["first_seen"]))
+    items = waiting[:DIGEST_SIZE]
+    added = _added_since(queue, _since_answer(queue))[:DIGEST_SIZE]
     lines = [f"{BIO_TAG} Kaya's weekly check"]
+    if unanswered:
+        weeks = max(int(i.get("asked_times") or 1) for i in queue.data["ask"] if i["id"] in unanswered) \
+            if any(i["id"] in unanswered for i in queue.data["ask"]) else 1
+        lines.append(f"(You didn't answer last week's list{'s' if weeks > 1 else ''}; "
+                     f"those are first, marked ↩.)")
+    n = 0
     if items:
-        lines += ["", "Facts about the group waiting for your yes (they reach Kaya's profiles "
-                  "only if you say so). Reply to this message with the numbers, \"all\" or "
-                  "\"none\":"]
-        for n, item in enumerate(items, 1):
+        lines += ["", "Waiting for your yes (they reach Kaya's profiles only if you say so):"]
+        for item in items:
+            n += 1
             q = item["quotes"][0] if item["quotes"] else {"quote": "", "speaker": ""}
-            lines.append(f"{n}. {item['fact']} ({item.get('reason') or 'unsure'}) "
+            mark = "↩ " if item["id"] in unanswered else ""
+            lines.append(f"{n}. {mark}{item['fact']} ({item.get('reason') or 'unsure'}) "
                          f"— «{q['quote'][:120]}»{' — ' + q['speaker'] if q.get('speaker') else ''}")
-        if len(queue.data["ask"]) > len(items):
-            lines.append(f"(+{len(queue.data['ask']) - len(items)} more next week)")
-    added = _added_since(queue, float(queue.data["asked"].get("sent_at") or 0))
+        if len(waiting) > len(items):
+            lines.append(f"(+{len(waiting) - len(items)} more next week)")
     if added:
-        lines += ["", "Added to profiles on their own (grounded in two quotes; "
-                  "\"review_bios.py --undo <name>\" takes the last one back):"]
-        for item in added[:10]:
-            lines.append(f"- {item['fact']}")
-        if len(added) > 10:
-            lines.append(f"(+{len(added) - 10} more)")
+        lines += ["", "Added on their own since your last answer (say if one is wrong):"]
+        for item in added:
+            n += 1
+            lines.append(f"{n}. {item['fact']}")
     if wrong:
-        lines += ["", "Answers the group called wrong this week:"]
+        lines += ["", "Answers the group called wrong:"]
         for w in wrong[:5]:
             lines.append(f"- «{(w.get('user_message') or '')[:80]}» → «{(w.get('assistant_response') or '')[:140]}» "
                          f"({w.get('speaker') or 'someone'}: «{(w.get('comment') or '')[:60]}»)")
-    return "\n".join(lines), [i["id"] for i in items]
+    if n:
+        lines += ["", "Reply to this message, by text or voice, in your own words: \"all good\", "
+                  "\"1 and 3 yes, drop the rest\", \"number 2: he works at X\"…"]
+    return "\n".join(lines), [i["id"] for i in items], [i["id"] for i in added]
+
+
+def mark_sent(queue: BioQueue, ids: List[str], added_ids: List[str]) -> None:
+    """Remember what the list's numbers mean and how often each fact was asked."""
+    previous = queue.data["asked"]
+    for item in queue.data["ask"]:
+        if item["id"] in ids:
+            item["asked_times"] = int(item.get("asked_times") or 0) + 1
+    queue.data["asked"] = {"sent_at": _now(), "ids": ids, "added_ids": added_ids,
+                           "answered_at": previous.get("answered_at"),
+                           "first_sent_at": previous.get("first_sent_at") or _now()}
 
 
 def parse_answer(text: str, count: int) -> Optional[List[int]]:
-    """1-based numbers he accepted; [] for none; None when it isn't an answer."""
-    low = (text or "").strip().lower()
-    if low in ("all", "todos", "todas", "tudo", "sim", "yes"):
+    """1-based numbers he accepted; [] for none; None when it isn't a bare answer."""
+    low = (text or "").strip().lower().rstrip(".!")
+    if low in ("all", "todos", "todas", "tudo", "sim", "yes", "ok", "all good", "tudo certo",
+               "everything's right", "everything is right", "está tudo certo", "ta tudo certo"):
         return list(range(1, count + 1))
     if low in ("none", "nenhum", "nenhuma", "nada", "no", "não", "nao"):
         return []
@@ -407,31 +440,139 @@ def parse_answer(text: str, count: int) -> Optional[List[int]]:
     return sorted({n for n in nums if 1 <= n <= count})
 
 
-def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int) -> str:
-    """Apply what he accepted from the last list; the reply to send him."""
-    ids = list(queue.data["asked"].get("ids") or [])
-    if not ids:
+INTERPRET_SYSTEM = (
+    "You turn Gustavo's answer to a numbered list of facts about his friends into actions. "
+    "His answer may be a transcribed voice note, in Portuguese or English, informal. "
+    "Reply with JSON only: {\"items\": [{\"n\": <number>, \"action\": \"keep\"|\"drop\"|\"edit\", "
+    "\"fact\": \"<the corrected fact, only for edit>\"}], \"rest\": \"keep\"|\"drop\"|\"leave\"}. "
+    "keep = the fact is right; drop = it is wrong or should not be kept; edit = he gave a "
+    "correction: write the whole corrected fact in English, in the same style, starting with "
+    "the person's name. \"rest\" is what happens to the numbers he did not mention: keep if he "
+    "said everything else is right, drop if he said to drop the rest, otherwise leave. "
+    "Never invent a correction he did not say.")
+
+
+def interpret_answer(text: str, numbered: List[str], generate: Callable[[str, str], str]
+                     ) -> Optional[Dict[str, Any]]:
+    """His words as ``{"items": [...], "rest": ...}``; None if the model's answer is unusable."""
+    listing = "\n".join(f"{n}. {fact}" for n, fact in enumerate(numbered, 1))
+    raw = generate(INTERPRET_SYSTEM, f"The list:\n{listing}\n\nHis answer:\n{text}")
+    raw = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.M).strip()
+    try:
+        parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("items", []), list):
+        return None
+    clean = []
+    for entry in parsed.get("items") or []:
+        try:
+            n = int(entry.get("n"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        action = str(entry.get("action") or "").lower()
+        fact = str(entry.get("fact") or "").strip()
+        if 1 <= n <= len(numbered) and action in ("keep", "drop", "edit") and (action != "edit" or fact):
+            clean.append({"n": n, "action": action, "fact": fact})
+    rest = str(parsed.get("rest") or "leave").lower()
+    return {"items": clean, "rest": rest if rest in ("keep", "drop", "leave") else "leave"}
+
+
+def _replace_fact(members_path: Path, member: str, old: str, new: Optional[str]) -> bool:
+    """Drop (``new`` None) or reword one fact in a member's ``key_facts``, with a snapshot."""
+    doc = json.loads(members_path.read_text(encoding="utf-8"))
+    for person in doc.get("members", []):
+        if person.get("name") != member:
+            continue
+        facts = list(person.get("key_facts") or [])
+        hit = next((f for f in facts if f == old or same_fact(f, old)), None)
+        if hit is None:
+            return False
+        facts = [f for f in facts if f != hit] if new is None else [new if f == hit else f for f in facts]
+        person["key_facts"] = facts
+        snapshot(members_path)
+        write_members(members_path, doc)
+        return True
+    return False
+
+
+def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
+                 generate: Optional[Callable[[str, str], str]] = None) -> str:
+    """Apply his answer to the last list; the reply to send him."""
+    asked = queue.data["asked"]
+    ids, added_ids = list(asked.get("ids") or []), list(asked.get("added_ids") or [])
+    if not ids and not added_ids:
         return f"{BIO_TAG} There's no open list to answer."
-    picked = parse_answer(text, len(ids))
-    if picked is None:
-        return f"{BIO_TAG} Reply with the numbers (e.g. 1 3), \"all\" or \"none\"."
-    items = {i["id"]: i for i in queue.data["ask"]}
-    chosen = [items[ids[n - 1]] for n in picked if ids[n - 1] in items]
-    applied, full = apply_items(members_path, chosen, limit, "his yes")
+    waiting = {i["id"]: i for i in queue.data["ask"]}
+    added = {i["id"]: i for i in queue.data["applied"]}
+    numbered = [waiting[i] if i in waiting else None for i in ids] + \
+               [added[i] if i in added else None for i in added_ids]
+
+    picked = parse_answer(text, len(ids)) if ids else None
+    if picked is not None:
+        plan = {"items": [{"n": n, "action": "keep", "fact": ""} for n in picked],
+                "rest": "drop" if ids else "leave"}
+        rest_added = "keep"
+    else:
+        if generate is None:
+            return f"{BIO_TAG} I couldn't read that; reply with the numbers (e.g. 1 3), \"all\" or \"none\"."
+        plan = interpret_answer(text, [i["fact"] if i else "(gone)" for i in numbered], generate)
+        if plan is None:
+            return f"{BIO_TAG} I couldn't make that out; nothing was changed. Try again, or numbers (e.g. 1 3)."
+        rest_added = "keep" if plan["rest"] == "leave" else plan["rest"]
+
+    said = {e["n"]: e for e in plan["items"]}
+    to_apply, dropped, edited, removed, reworded, left = [], [], [], [], [], []
+    for n, item in enumerate(numbered, 1):
+        if item is None:
+            continue
+        is_waiting = n <= len(ids)
+        entry = said.get(n) or {"action": plan["rest"] if is_waiting else rest_added, "fact": ""}
+        action = entry["action"]
+        if is_waiting:
+            if action == "keep":
+                to_apply.append(item)
+            elif action == "edit":
+                item["fact"] = entry["fact"]
+                to_apply.append(item)
+                edited.append(item)
+            elif action == "drop":
+                dropped.append(item)
+            else:
+                left.append(item)
+        else:
+            if action == "drop" and _replace_fact(members_path, item["member"], item["fact"], None):
+                queue.data["applied"] = [i for i in queue.data["applied"] if i is not item]
+                removed.append(item)
+            elif action == "edit" and _replace_fact(members_path, item["member"], item["fact"], entry["fact"]):
+                item["fact"], item["applied"] = entry["fact"], "his edit"
+                reworded.append(item)
+    applied, full = apply_items(members_path, to_apply, limit, "his yes")
     for item in applied:
         queue.move(item, "ask", "applied")
-    # Everything else on that list was seen and not chosen: it's dropped.
-    dropped = [items[i] for i in ids if i in items and items[i] not in chosen]
     queue.data["ask"] = [i for i in queue.data["ask"] if i not in dropped]
-    queue.data["dropped"] += len(dropped)
-    queue.data["asked"] = {"sent_at": queue.data["asked"].get("sent_at"), "ids": []}
+    queue.data["dropped"] += len(dropped) + len(removed)
+    queue.data["asked"] = {**asked, "ids": [i["id"] for i in left], "added_ids": [],
+                           "answered_at": _now()}
     queue.save()
-    parts = [f"{BIO_TAG} Applied {len(applied)} fact(s)"]
+
+    parts = [f"{BIO_TAG} Done:"]
+    if applied:
+        parts.append(f"applied {len(applied)}" + (f" ({len(edited)} with your wording)" if edited else ""))
     if dropped:
         parts.append(f"dropped {len(dropped)}")
+    if removed:
+        parts.append(f"took {len(removed)} back off the profiles")
+    if reworded:
+        parts.append(f"reworded {len(reworded)}")
+    if left:
+        parts.append(f"{len(left)} left for next week")
     if full:
-        parts.append(f"{len(full)} not applied: those profiles are full ({', '.join(sorted({i['member'] for i in full}))})")
-    return ", ".join(parts) + "."
+        parts.append(f"{len(full)} not applied, those profiles are full "
+                     f"({', '.join(sorted({i['member'] for i in full}))})")
+    if len(parts) == 1:
+        parts.append("nothing changed")
+    return parts[0] + " " + ", ".join(parts[1:]) + "."
 
 
 def undo(queue: BioQueue, members_path: Path, member: str) -> Optional[str]:

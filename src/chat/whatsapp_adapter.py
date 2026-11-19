@@ -2214,8 +2214,15 @@ class WhatsAppAdapter:
             return None
         if not self.maintainer or self.resolve_speaker(msg) != self.maintainer:
             return None
+        text = msg.text
+        if not text.strip() and msg.media_url and (msg.media_mimetype or "").startswith("audio/") \
+                and self.transcribe is not None:
+            # He answers by voice as readily as by text (2026-11-19).
+            text = self._media("transcribe", msg.media_url, msg.media_mimetype, urgent=True) or ""
+        if not text.strip():
+            return None
         try:
-            reply = self.owner_reply_hook(msg.text)
+            reply = self.owner_reply_hook(text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("weekly list answer failed: %s", exc)
             reply = f"{BIO_TAG} That didn't work ({type(exc).__name__}); nothing was changed."
