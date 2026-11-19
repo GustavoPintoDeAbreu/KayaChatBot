@@ -780,7 +780,10 @@ whatsapp:
     # Live chunks ending on or after this date are rebuilt once, one chat at a
     # time with their channel (src/data/ingest.py rechunk_since): before
     # 2026-10-10 the Community's sub-groups were interleaved in one stream.
-    rechunk_since: "2026-10-01"
+    # 2026-08-01 (set 2026-11-19): every live chunk, once, so the bot's own old
+    # answers quoted in replies before 2026-09-29 leave memory
+    # (Ingester._legacy_bot_quotes).
+    rechunk_since: "2026-08-01"
     # 15, not 120. At two hours there was a blind spot the size of the gap: a
     # message from ten minutes ago had already scrolled past the verbatim window
     # and was not yet embedded, so it existed nowhere the model could reach.
