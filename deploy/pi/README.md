@@ -50,9 +50,11 @@ They are switched on during the cutover and never run in two places at once.
 5. **PC off:** the event waits in the journal. If it is addressed to the bot, the
    PC has been unreachable for more than 90 s (or announced its shutdown), and
    this chat has not had one yet this offline period, the gateway replies once:
-   *"Estou desligado agora. Volto às 07:00 e respondo-te nessa altura."*
+   *"Estou desligado agora. Volto quando o Gustavo me ligar e respondo-te nessa altura."*
+   (the PC's power is manual only since 2026-11-06; with a wake time in lab-infra
+   `power.yaml` the line would name it)
 6. **PC back:** the backlog replays in order, and the PC's memory reads as if it
-   had been listening all night.
+   had been listening the whole time.
    - The newest addressed message per sender per chat is flagged `deferred_reply`.
      The PC answers it, quoting it, if it is younger than
      `whatsapp.deferred_reply.max_age_hours` (12).
