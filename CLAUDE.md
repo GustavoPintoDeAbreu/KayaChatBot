@@ -153,7 +153,7 @@ docker compose --profile test run --rm kaya-test  # run the pytest suite in-cont
 # Deployment (see DEPLOYMENT.md)
 scripts/deploy_prod.sh [ref]    # make a commit LIVE: updates ~/kaya-prod + restarts prod (CI's Deploy (prod) calls this)
 scripts/deploy_pi.sh [--init-env]   # the always-on front door on the Pi: gateway + WAHA + tunnel (deploy/pi/README.md)
-# the PC's power units (shutdown when idle, poweroff notice, boot check, /homelaboff listener, sudo approval) and the Pi's Wake-on-LAN + firewall: ~/Desktop/lab-infra (since 2026-10-22)
+# the PC's power units (/homelaboff shutdown once idle, poweroff notice, crash recovery, boot check, /homelaboff listener, sudo approval) and the Pi's Wake-on-LAN + firewall: ~/Desktop/lab-infra (since 2026-10-22)
 pi5 gateway | pi5 wake-pc       # Pi gateway status (journal, backlog, PC state) / wake the PC now
 ~/llm-broker/bin/llm-status     # what the GPU broker has loaded; llm-unload / llm-use-g1 / llm-use-big / claude-local
 scripts/app_up.sh dev|prod      # manually power up an env + Cloudflare Tunnel (one env at a time — a model may claim both GPUs)
@@ -248,9 +248,9 @@ that chat instead of handing the note to Kaya, which is what it did before (Kaya
 Read-only, groups only (never a DM file), LAN only, `X-Kaya-Token` = `KAYA_MCP_TOKEN` or 503. Hand-rolled
 JSON-RPC rather than the MCP SDK, which would pull httpx2/opentelemetry/pyjwt into this image and clash
 with gradio's `mcp<2` extra. lab-infra's `lab-power-going-down.service` tells the Pi at
-every poweroff, which keeps the offline reply on "volto às 07:00" rather than
-"estou em baixo" (lab-infra `power.yaml`, the one source for the Pi's
-Wake-on-LAN timer, the offline reply and the shutdown timer; the gateway mounts it at
+every poweroff, which keeps the offline reply on "volto quando o Gustavo me ligar" rather than
+"estou em baixo" (lab-infra `power.yaml`, the one source for the offline reply and for any wake or
+shutdown schedule, all empty now; the gateway mounts it at
 `/lab-infra/power.yaml`). The power code lived here in `deploy/power` until 2026-10-22. Two things follow.
 
 **WhatsApp enters through the Pi** (`src/gateway/`, `deploy/pi/`). WAHA and the
@@ -258,7 +258,8 @@ Cloudflare tunnel run there; the gateway journals every event in SQLite, downloa
 media at once (WAHA deletes it after 180 s), and forwards events to the PC's
 `POST /whatsapp/relay` strictly in order, retrying until acked. While the PC is
 off it buffers, and a message addressed to the bot gets one fixed line per chat
-per outage, *"Estou desligado agora. Volto às 07:00 e respondo-te nessa altura."*
+per outage, *"Estou desligado agora. Volto quando o Gustavo me ligar e respondo-te nessa altura."*
+(with a wake time in `power.yaml` it would name it; manual-only since 2026-11-06)
 On return the backlog replays, so the log, the session window and ChromaDB read as
 if the bot had listened all night. Four things make that true and are easy to
 undo by accident:

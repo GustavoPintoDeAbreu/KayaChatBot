@@ -80,7 +80,7 @@ loads through one broker instead of holding a GPU permanently.
    │                    │ forwarder, in order, retried                  │
    └────────────────────┼───────────────────────────────────────────────┘
                         ▼ POST /whatsapp/relay
-   ┌──────────── GPU PC (192.168.1.149, 07:00 to idle after 23:00) ─────┐
+   ┌──────────── GPU PC (192.168.1.149, on when turned on: manual) ─────┐
    │ kaya-prod :7860 ─ KAYA_OLLAMA_URL ──▶ llm-broker (llama-swap) :8200 │
    │   replies ──▶ WAHA on the Pi         ├─ kaya (Ollama) GPU1, priority│
    │                                      ├─ qwen-impl   GPU0            │
