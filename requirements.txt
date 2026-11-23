@@ -20,11 +20,11 @@ bitsandbytes==0.50.2
 # pyarrow: only datasets needed it, and datasets is gone (2026-11-01, nothing
 # imports it since fine-tuning was removed). Kept at its pin here; dropping it is
 # a separate change.
-pyarrow==25.0.1
+pyarrow==26.0.1
 
 # --- RAG / vector database ---
 chromadb==1.5.9
-sentence-transformers==5.6.0  # PYSEC-2026-4164, CVE-2026-68770 fixed in 5.6.0
+sentence-transformers==6.3.0  # PYSEC-2026-4164, CVE-2026-68770 fixed in 5.6.0
 
 # --- Data science ---
 numpy==2.5.5
@@ -35,11 +35,11 @@ PyYAML==6.0.3
 
 # --- Tokenization ---
 sentencepiece==0.2.3
-protobuf==5.29.6
+protobuf==7.36.2
 tiktoken==0.14.0
 
 # --- LLM providers ---
-openai==1.109.1
+openai==3.51.0
 xai-sdk==1.21.0  # >=1.7 needed for xai_sdk.tools.web_search (web-search Agent Tool)
 
 # --- WhatsApp bridge (src/chat/whatsapp_server.py) ---
@@ -70,7 +70,7 @@ urllib3>=2.8.0  # CVE-2026-44431 (requests, trafilatura, kubernetes)
 # --- Documents ---
 # PDF text extraction for documents shared in the chat (src/chat/documents.py).
 # pypdf is pure Python with no system dependencies; PyMuPDF is AGPL and heavy.
-pypdf==6.21.4  # PYSEC-2026-4153, CVE-2026-102994 fixed in 6.18.0
+pypdf==7.1.0  # PYSEC-2026-4153, CVE-2026-102994 fixed in 6.18.0
 
 # --- Links ---
 # Main-text extraction for news links shared in the chat (src/chat/links.py).
@@ -81,11 +81,11 @@ psutil==7.2.2
 tqdm==4.70.1
 python-dotenv==1.2.4
 colorama==0.4.6
-ipython==8.30.0
+ipython==9.18.1
 
 # --- Testing (used by the kaya-test container / CI) ---
 pytest==9.2.0
-av==18.0.0
+av==19.0.2  # decoded in src/chat/stt.py: faster-whisper 1.2.1 passes metadata_errors, gone in PyAV 19
 ctranslate2==4.9.0
 faster-whisper==1.2.1
 piper-tts==1.8.0
