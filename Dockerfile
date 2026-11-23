@@ -40,15 +40,12 @@ RUN uv pip install --python /usr/bin/python3.12 --no-cache \
     "packaging==24.2" \
     "ninja==1.11.1.1"
 
-# Install PyTorch with CUDA 12.6 wheels. Kept separate from requirements.txt
-# because torch must come from the CUDA-specific index, not PyPI; the header at
-# the top of requirements.txt names the same version (bump both together).
-# torch 2.15.0 / cu126: bumped from 2.6.0/cu124 on 2026-11-23 with the audit round,
-# whose transformers/accelerate pins resolve torch 2.15.0 in bare venvs; verify the
-# cu126 wheel exists when the image is rebuilt (--no-cache).
+# Install PyTorch with CUDA 12.4 wheels. Kept separate from requirements.txt
+# because torch must come from the CUDA-specific index, not PyPI.
+# torch 2.6.0 / cu124: matches the kaya_chatbot_env venv.
 RUN uv pip install --python /usr/bin/python3.12 --no-cache \
-    torch==2.15.0 \
-    --index-url https://download.pytorch.org/whl/cu126
+    torch==2.6.0 \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Install all remaining dependencies from requirements.txt, the single source
 # of truth for everything except torch.

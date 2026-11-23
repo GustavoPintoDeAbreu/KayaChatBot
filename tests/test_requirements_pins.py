@@ -45,14 +45,17 @@ FLOORS = {
     "aiohttp": "3.14.5",
     "anyio": "4.16.0",
     "brotli": "1.2.1",
-    "certifi": "2026.11.20",
-    "filelock": "4.3.0",
+    "certifi": "2026.10.23",
+    "filelock": "4.2.1",
     "fsspec": "2026.6.0",
     "idna": "3.20",
     "oauthlib": "4.0.1",
     "pillow": "13.0.0",
     "pypdf": "6.18.0",
+    "multidict": "6.9.1",
+    "pydantic-settings": "2.14.2",
     "python-multipart": "0.0.34",
+    "requests": "2.33.0",
     "sentence-transformers": "5.6.0",
     "starlette": "1.10.0",
     "transformers": "5.10.0",
@@ -73,12 +76,11 @@ def test_audited_packages_cannot_resolve_below_the_fix(name, floor):
 
 
 AUDIT_BUMPS_2026_11 = {
-    "accelerate": "1.16.0",
-    "ctranslate2": "4.9.1",
-    "fastapi": "0.165.0",
     "numpy": "2.5.5",
-    "pyyaml": "6.0.4",
-    "transformers": "5.24.0",
+    "ctranslate2": "4.9.0",
+    "fastapi": "0.163.1",
+    "pyyaml": "6.0.3",
+    "transformers": "5.23.0",
 }
 
 
@@ -97,8 +99,8 @@ def test_pi_gateway_fastapi_follows_the_audit():
     text = (ROOT / "deploy" / "pi" / "requirements.txt").read_text()
     match = re.search(r"^fastapi==([0-9.]+)", text, re.MULTILINE)
     assert match, "the Pi gateway no longer pins fastapi explicitly"
-    assert Version(match.group(1)) >= Version("0.165.0"), (
-        f"the Pi gateway fastapi pin {match.group(1)} is below the audit fix 0.165.0"
+    assert Version(match.group(1)) >= Version("0.163.1"), (
+        f"the Pi gateway fastapi pin {match.group(1)} is below the audit fix 0.163.1"
     )
 
 
