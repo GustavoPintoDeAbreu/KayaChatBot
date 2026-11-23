@@ -52,7 +52,10 @@ FLOORS = {
     "oauthlib": "4.0.1",
     "pillow": "13.0.0",
     "pypdf": "6.18.0",
-    "python-multipart": "0.0.33",
+    "multidict": "6.9.1",
+    "pydantic-settings": "2.14.2",
+    "python-multipart": "0.0.34",
+    "requests": "2.33.0",
     "sentence-transformers": "5.6.0",
     "starlette": "1.10.0",
     "transformers": "5.10.0",
@@ -73,6 +76,7 @@ def test_audited_packages_cannot_resolve_below_the_fix(name, floor):
 
 
 AUDIT_BUMPS_2026_11 = {
+    "numpy": "2.5.5",
     "ctranslate2": "4.9.0",
     "fastapi": "0.163.1",
     "pyyaml": "6.0.3",

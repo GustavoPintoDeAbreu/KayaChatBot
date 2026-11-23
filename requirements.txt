@@ -27,7 +27,7 @@ chromadb==1.5.9
 sentence-transformers==6.3.0  # PYSEC-2026-4164, CVE-2026-68770 fixed in 5.6.0
 
 # --- Data science ---
-numpy==2.5.4
+numpy==2.5.5
 pandas==3.1.1
 scipy==1.18.1
 scikit-learn==1.9.1
@@ -60,8 +60,11 @@ fsspec>=2026.6.0  # CVE-2026-104851 (torch, huggingface-hub)
 idna>=3.20  # CVE-2026-45409 (httpx, requests, anyio)
 oauthlib>=4.0.1  # CVE-2026-118669 (requests-oauthlib, via kubernetes, via chromadb)
 pillow>=13.0.0  # CVE-2026-112393 (vision.py, stickers.py)
-python-multipart>=0.0.33  # CVE-2026-53539 (fastapi form parsing)
+python-multipart>=0.0.34  # CVE-2026-53539 (fastapi form parsing)
 starlette>=1.10.0  # CVE-2026-54283 (fastapi)
+multidict>=6.9.1  # CVE-2026-104874 (aiohttp, via xai-sdk)
+pydantic-settings>=2.14.2  # GHSA-4xgf-cpjx-pc3j (chromadb)
+requests>=2.33.0  # CVE-2026-25645 (trafilatura, huggingface-hub, chromadb)
 urllib3>=2.8.0  # CVE-2026-44431 (requests, trafilatura, kubernetes)
 
 # --- Documents ---
