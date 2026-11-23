@@ -2,8 +2,8 @@
 # KayaChatBot Python Dependencies — version-pinned for
 # reproducible Docker builds and local development.
 #
-# Pinned against: torch==2.6.0, CUDA 12.4 (installed by the Dockerfile
-# from the PyTorch index, not from this file).
+# Pinned against: torch==2.14.1, CUDA 12.6 (installed by the Dockerfile
+# from the PyTorch index, not from this file). 2.6.0/cu124 until 2026-11-23.
 #
 # To upgrade: bump the version here AND in Dockerfile, then
 # rebuild the image with --no-cache to test compatibility.
