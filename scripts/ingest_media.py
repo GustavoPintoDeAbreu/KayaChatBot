@@ -162,7 +162,9 @@ def transcribe(path: Path, model_name: str, device: str, compute_type: str,
     try:
         model = get_whisper(model_name, device, compute_type)
         # vad_filter drops silence, which is most of a WhatsApp voice note's tail.
-        segments, _info = model.transcribe(str(path), language=language,
+        from src.chat.stt import decode_audio
+
+        segments, _info = model.transcribe(decode_audio(str(path)), language=language,
                                            vad_filter=True, beam_size=1)
         text = " ".join(seg.text.strip() for seg in segments).strip()
         return text or None

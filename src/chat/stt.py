@@ -36,6 +36,34 @@ _EXT = {
 }
 
 
+def decode_audio(path: str, rate: int = 16000):
+    """The file as 16 kHz mono float32, what Whisper takes. faster-whisper's own ``decode_audio``
+    passes ``metadata_errors`` to ``av.open``, which PyAV 19 removed (2026-11-23); this is the
+    same decode without it, so the PyAV pin can follow releases (lab-assistant has the twin)."""
+    import av
+    import numpy as np
+
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=rate)
+    chunks = []
+    with av.open(path, mode="r") as container:
+        frames = container.decode(audio=0)
+        while True:
+            try:
+                frame = next(frames)
+            except StopIteration:
+                break
+            except av.error.InvalidDataError:   # a broken frame is skipped, as faster-whisper does
+                continue
+            frame.pts = None
+            chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
+        chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]
+    del resampler
+    gc.collect()   # PyAV keeps resampler buffers until a collection (faster-whisper #390)
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
+
+
 def is_available(config: Dict[str, Any]) -> bool:
     acfg = (config.get("chat", {}) or {}).get("audio", {}) or {}
     if not acfg.get("transcribe_enabled", False):
@@ -112,11 +140,8 @@ def transcribe_file(path: str, config: Dict[str, Any]) -> Optional[str]:
     try:
         model = _load(config)
         language = acfg.get("language", "pt")
-        source: Any = str(path)
+        source: Any = decode_audio(str(path))
         if language == "auto":
-            from faster_whisper.audio import decode_audio
-
-            source = decode_audio(str(path))
             _lang, _prob, probabilities = model.detect_language(source)
             language = pick_language(probabilities, acfg.get("languages", ["pt", "en"]))
         segments, _info = model.transcribe(
