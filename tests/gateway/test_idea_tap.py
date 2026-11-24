@@ -156,3 +156,49 @@ def test_the_tap_is_off_without_an_inbox_url():
     assert IdeaTap.from_env({}) is None
     tap = IdeaTap.from_env({"IDEA_INBOX_URL": "http://x", "IDEA_OWNER_NUMBERS": "351922222222@c.us, 351933333333"})
     assert tap.owner_numbers == {"351922222222", "351933333333"}
+
+
+def _photo(message_id, caption, *, quoted_id=None):
+    event = _message(message_id, caption)
+    p = event["payload"]
+    p.update({"hasMedia": True, "media": {"url": "http://waha:3000/api/files/x.jpeg", "mimetype": "image/jpeg"}})
+    if quoted_id:
+        p["replyTo"] = {"id": quoted_id, "body": ""}
+    return event
+
+
+def test_a_photo_with_an_idea_caption_goes_along(rig):
+    import base64
+    gateway, inbox, _ = rig
+    async def fetch(url):
+        return b"\xff\xd8jpeg-bytes", "image/jpeg"
+    gateway._fetch_media = fetch
+    assert _post(gateway, _photo("p1", "/idea make this screen")) == {"idea": "forwarded"}
+    body = inbox.received[0][1]
+    assert body["images"] == [{"b64": base64.b64encode(b"\xff\xd8jpeg-bytes").decode(), "mime": "image/jpeg"}]
+    assert "images_missing" not in body
+
+
+def test_a_photo_that_cannot_be_fetched_is_counted_not_fatal(rig):
+    gateway, inbox, _ = rig
+    async def fetch(url):
+        raise OSError("gone")
+    gateway._fetch_media = fetch
+    assert _post(gateway, _photo("p2", "/idea look at this")) == {"idea": "forwarded"}
+    body = inbox.received[0][1]
+    assert "images" not in body and body["images_missing"] == 1
+
+
+def test_idea_replying_to_an_earlier_photo_brings_it_from_the_journal(rig):
+    gateway, inbox, _ = rig
+    seq = gateway.journal.append({"event": "message", "payload": {"id": "false_351922222222@c.us_3EB0ABC"}},
+                                 dedup_key="k1", event_type="message", chat_id=OWNER, sender_id=OWNER,
+                                 message_id="false_351922222222@c.us_3EB0ABC", wa_ts=None,
+                                 received_at=1_790_000_000.0, addressed=False, backlog=False)
+    gateway.journal.attach_media(seq, b"PNGDATA", "shot.png", "image/png")
+    assert gateway.journal.media_for_message("3EB0ABC")[1] == "image/png"
+    event = _message("i9", "/idea build what this screenshot shows")
+    event["payload"]["replyTo"] = {"id": "3EB0ABC", "body": ""}
+    assert _post(gateway, event) == {"idea": "forwarded"}
+    import base64
+    assert inbox.received[0][1]["images"] == [{"b64": base64.b64encode(b"PNGDATA").decode(), "mime": "image/png"}]

@@ -27,7 +27,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -373,11 +373,34 @@ class Gateway:
             return None
         if kind == "echo":
             return {"idea": "echo"}
-        if await self.idea_tap.forward(msg):
+        images, missing = await self._idea_images(msg)
+        if await self.idea_tap.forward(msg, images, missing):
             return {"idea": "forwarded"}
         if self.idea_tap.should_warn(msg):
             await asyncio.to_thread(self._send_text, msg.chat_id, IDEA_OFFLINE_TEXT, msg.message_id)
         return {"idea": "inbox-offline"}
+
+    async def _idea_images(self, msg: InboundMessage) -> Tuple[List[Tuple[bytes, str]], int]:
+        """The photos an /idea message brings: its own (a photo with an /idea caption, fetched now,
+        before WAHA deletes it) and the one it replies to (from the journal). ``missing`` counts
+        a photo that was there but could not be fetched."""
+        images: List[Tuple[bytes, str]] = []
+        missing = 0
+        if msg.media_url and (msg.media_mimetype or "").lower().startswith("image/"):
+            try:
+                data, mime = await self._fetch_media(msg.media_url)
+                images.append((data, mime or msg.media_mimetype))
+            except Exception as exc:  # noqa: BLE001 - the idea still goes, the pipeline says a photo is missing
+                logger.warning("idea: photo %s not fetched: %s", msg.message_id, exc)
+                missing += 1
+        found = self.journal.media_for_message(msg.reply_to_id) if msg.reply_to_id else None
+        if found and found[1].lower().startswith("image/"):
+            try:
+                images.append((Path(found[0]).read_bytes(), found[1]))
+            except OSError as exc:
+                logger.warning("idea: quoted photo %s unreadable: %s", msg.reply_to_id, exc)
+                missing += 1
+        return images, missing
 
     async def _route_assistant(self, msg: InboundMessage, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Hand the owner's DM to the lab assistant's inbox; None leaves it to Kaya
