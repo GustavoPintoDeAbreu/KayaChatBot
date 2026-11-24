@@ -197,6 +197,19 @@ class Journal:
             )
             self._conn.commit()
 
+    def media_for_message(self, message_id: str) -> Optional[tuple]:
+        """``(path, mime)`` of the stored media of the message with this id, or None. A reply carries
+        the quoted message's short id (Baileys' ``stanzaId``), while WAHA's full id ends with it
+        (``false_<chat>_<id>``), so either matches. Used by the idea tap: /idea replying to a photo."""
+        if not message_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT media_path, media_mime FROM events WHERE media_status = 'stored' AND media_path != '' "
+                "AND (message_id = ? OR substr(message_id, -length(?) - 1) = '_' || ?) ORDER BY seq DESC LIMIT 1",
+                (message_id, message_id, message_id)).fetchone()
+        return (row[0], row[1]) if row else None
+
     def get(self, seq: int) -> Optional[JournalEvent]:
         """Return the ``JournalEvent`` for *seq*, or ``None``."""
         with self._lock:

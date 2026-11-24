@@ -17,12 +17,18 @@ It claims, in DMs only:
 
 The quoted body is not always in WAHA's payload, which is why the ``/idea N
 <answer>`` form exists as well.
+
+Photos (2026-11-24): a photo sent with a ``/idea`` caption, or an earlier photo the ``/idea`` message
+replies to (found in the journal, where Kaya's messages keep their media for a week), goes along
+as ``images`` (base64, at most ``MAX_IMAGES``). The pipeline shows them to Claude, or has the local
+vision model describe them for a planner that cannot see.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Sequence, Set, Tuple
 
 import httpx
 
@@ -35,6 +41,7 @@ OFFLINE_TEXT = ("💡 A caixa de ideias está desligada agora; a ideia não foi 
                 "Manda outra vez mais tarde.")
 # `/ideas` was dropped on 2026-10-18 (the listing is `/idea list`); it is Kaya's again.
 _COMMANDS = ("/idea",)
+MAX_IMAGES = 4
 
 Post = Callable[[str, Dict[str, Any], Dict[str, str]], Awaitable[int]]
 
@@ -80,19 +87,27 @@ class IdeaTap:
             return "idea"
         return None
 
-    def payload(self, msg: InboundMessage) -> Dict[str, Any]:
-        """What the inbox stores: enough to answer, nothing else."""
-        return {"message_id": msg.message_id, "chat_id": msg.chat_id,
+    def payload(self, msg: InboundMessage, images: Sequence[Tuple[bytes, str]] = (),
+                missing: int = 0) -> Dict[str, Any]:
+        """What the inbox stores: enough to answer, plus the idea's photos."""
+        body = {"message_id": msg.message_id, "chat_id": msg.chat_id,
                 "sender": _phone_from_alt(msg.sender_phone) or _phone_from_alt(msg.sender_id),
                 "text": msg.text, "quoted_text": msg.quoted_text,
                 "reply_to_id": msg.reply_to_id, "timestamp": msg.timestamp}
+        if images:
+            body["images"] = [{"b64": base64.b64encode(data).decode("ascii"), "mime": mime}
+                              for data, mime in list(images)[:MAX_IMAGES]]
+        if missing:
+            body["images_missing"] = missing
+        return body
 
-    async def forward(self, msg: InboundMessage) -> bool:
+    async def forward(self, msg: InboundMessage, images: Sequence[Tuple[bytes, str]] = (),
+                      missing: int = 0) -> bool:
         """POST the message to the inbox. False when the inbox did not take it."""
         headers = {"X-Idea-Token": self.token} if self.token else {}
         try:
             status = await (self.post or _http_post)(f"{self.inbox_url}/ingest",
-                                                     self.payload(msg), headers)
+                                                     self.payload(msg, images, missing), headers)
         except (httpx.HTTPError, OSError) as exc:
             logger.warning("idea inbox unreachable for %s: %s", msg.message_id, exc)
             return False
