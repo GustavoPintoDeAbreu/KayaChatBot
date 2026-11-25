@@ -95,6 +95,9 @@ These are handled by the Pi gateway, so they work even while the PC is off:
 - `/homelaboff_bruteforce` — shut the PC down at once, skipping every wait (asks for a yes).
 - `/homelabon` — wake the PC (Wake-on-LAN) and send its Claude session link.
 - `/gamingoff` — turn the Windows gaming PC off (asks for a yes).
+- `/homelabcycle` — when the PC is stuck (frozen, or hung on the BIOS screen after a crash): its
+  Shelly plug goes off for 10 s and comes back on by itself (asks for a yes, shows the plug's watts).
+  The PC then starts by itself only if the BIOS AC BACK is set to Always On.
 - `/homelabrc [home]` / `/homelabrc stop [home]` — start/end a Claude Remote
   Control session on the PC.
 - `/homelabqc [home]` / `/homelabqc stop [home]` — start/end a Qwen Code

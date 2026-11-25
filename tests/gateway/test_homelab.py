@@ -20,6 +20,7 @@ from src.gateway.homelab import (
     RC_ALREADY, RC_FAILED, RC_NOT_RUNNING, RC_PC_OFF, RC_STARTED, RC_STARTED_NO_LINK, RC_STOPPED,
     RC_USAGE, SESSION_FAILED, SESSION_LINK, SESSION_STARTING, STARTED, SUDO_ALLOWED, SUDO_ASK, SUDO_REFUSED, SUDO_TTL_SECONDS, TOO_LATE, UNREACHABLE, WAKE_FAILED, WAKE_NUDGE, WAKE_SENT, WAKE_TIMEOUT,
     HomelabPower,
+    CYCLE_NOT_SET, CYCLE_NUDGE, CYCLE_OFF_SECONDS, CYCLE_ONLINE_WARNING, CYCLE_STARTED, WAKE_NUDGE_SECONDS,
     GAMING_ASK, GAMING_STARTED, GAMING_ALREADY_STOPPING, GAMING_ALREADY_OFF,
     GAMING_FAILED, GAMING_NO_ANSWER, GAMING_DECLINED)
 from src.gateway.monitor import PcMonitor, PcState
@@ -863,3 +864,81 @@ def test_gamingoff_is_the_owners_only(rig):
     gateway, _, _, sent, _, _ = rig
     result = _post(gateway, _message("g7", "/gamingoff", chat="351911111111@c.us"))
     assert "seq" in result and sent == []
+
+
+# ── /homelabcycle (2026-11-25): power-cycle a stuck PC through its Shelly plug ────────────────
+class FakePlug:
+    """The GPU PC's Shelly plug RPC: what was asked, and its status."""
+
+    def __init__(self, apower=118.4):
+        self.calls = []
+        self.apower = apower
+
+    async def __call__(self, method, url, headers):
+        self.calls.append(url)
+        if "Switch.GetStatus" in url:
+            return 200, {"id": 0, "output": True, "apower": self.apower}
+        return 200, {"was_on": True}
+
+
+def _with_plug(homelab, plug=None):
+    plug = plug or FakePlug()
+    pc = homelab.call
+    homelab.plug_url = "http://plug.test"
+
+    async def call(method, url, headers):
+        return await (plug if url.startswith("http://plug.test") else pc)(method, url, headers)
+    homelab.call = call
+    return plug
+
+
+def test_cycle_asks_with_the_state_then_cuts_with_the_plugs_own_timer(rig):
+    gateway, clock, monitor, sent, pc, homelab = rig
+    plug = _with_plug(homelab)
+    monitor.observe(PcState.OFFLINE)
+    assert _post(gateway, _message("c1", "/homelabcycle")) == {"homelab": "cycle-asked"}
+    ask = sent[-1][1]
+    assert "the PC doesn't answer" in ask and "118 W" in ask and "⚠️" not in ask
+    assert plug.calls == ["http://plug.test/rpc/Switch.GetStatus?id=0"]
+    assert _post(gateway, _message("c2", "yes")) == {"homelab": "cycled"}
+    assert plug.calls[-1] == f"http://plug.test/rpc/Switch.Set?id=0&on=false&toggle_after={CYCLE_OFF_SECONDS}"
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + CYCLE_STARTED.format(secs=CYCLE_OFF_SECONDS)
+    assert pc.calls == [], "the PC itself is never asked anything"
+    clock.value += WAKE_NUDGE_SECONDS + 1
+    homelab.tick()
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + CYCLE_NUDGE
+    monitor.observe(PcState.ONLINE)
+    assert homelab.tick() == [OWNER], "announced like /homelabon when it comes up"
+
+
+def test_cycle_warns_when_the_pc_answers_and_no_cuts_nothing(rig):
+    gateway, _, _, sent, _, homelab = rig
+    plug = _with_plug(homelab)
+    _post(gateway, _message("c3", "/homelabcycle"))
+    assert CYCLE_ONLINE_WARNING.strip() in sent[-1][1]
+    assert _post(gateway, _message("c4", "no")) == {"homelab": "cycle-declined"}
+    assert all("Switch.Set" not in url for url in plug.calls)
+
+
+def test_cycle_confirmation_expires(rig):
+    gateway, clock, _, _, _, homelab = rig
+    plug = _with_plug(homelab)
+    _post(gateway, _message("c5", "/homelabcycle"))
+    clock.value += 301
+    homelab.tick()
+    _post(gateway, _message("c6", "yes", timestamp=int(clock.value)))
+    assert all("Switch.Set" not in url for url in plug.calls)
+
+
+def test_cycle_without_a_plug_cuts_nothing(rig):
+    gateway, _, _, sent, _, _ = rig
+    assert _post(gateway, _message("c7", "/homelabcycle")) == {"homelab": "cycle-not-set"}
+    assert sent[-1][1] == f"{HOMELAB_TAG} " + CYCLE_NOT_SET
+
+
+def test_cycle_is_owner_dm_only(rig):
+    gateway, _, _, sent, _, homelab = rig
+    plug = _with_plug(homelab)
+    assert "seq" in _post(gateway, _message("c8", "/homelabcycle", chat=ALICE))
+    assert "seq" in _post(gateway, _message("c9", "/homelabcycle", chat=GROUP, sender=OWNER))
+    assert plug.calls == []
