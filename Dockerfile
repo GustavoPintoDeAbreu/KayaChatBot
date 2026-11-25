@@ -78,6 +78,8 @@ COPY conftest.py /app/conftest.py
 COPY config.yaml /app/config.yaml
 # The command registry (src/chat/commands.py reads it for /help and a wrong /command).
 COPY lab.yaml /app/lab.yaml
+# The user guide, so tests/test_command_registry.py can check it lists every command.
+COPY docs/how-to-use-kaya.md /app/docs/how-to-use-kaya.md
 COPY run_full_pipeline.py /app/
 
 # Create necessary directories
