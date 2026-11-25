@@ -22,7 +22,9 @@ def test_the_pi_image_copies_every_module_the_gateway_imports():
     Pi: src.chat.enrichment did exactly that on 2026-10-26 (KayaChatBot#137)."""
     import re
 
-    code = ("import sys, json, src.gateway.app; "
+    # src.data.bio_gate is imported lazily (the adapter's BIO_TAG), so it is imported
+    # here by name: its own fact_meta import was missing from the image (2026-11-25).
+    code = ("import sys, json, src.gateway.app, src.data.bio_gate; "
             "print(json.dumps(sorted(m.__file__ for n, m in sys.modules.items() "
             "if n.startswith('src.') and getattr(m, '__file__', None))))")
     result = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True)
