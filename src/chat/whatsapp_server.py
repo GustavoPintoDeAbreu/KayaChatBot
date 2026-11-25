@@ -746,6 +746,18 @@ def _answer_bio_list(text: str) -> str:
         return apply_answer(BioQueue(queue_file), members, text, limit, generate=_bio_list_generate)
 
 
+def _stale_profile_facts(members_file) -> list:
+    """Up to three old job/home/relationship facts for the weekly "Still true?" block."""
+    from src.data import fact_meta
+
+    try:
+        doc = _json.loads(Path(members_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"⚠️  could not read the profiles for the re-check: {exc}")
+        return []
+    return fact_meta.stale_facts(doc.get("members", []))
+
+
 def _start_bio_digest_scheduler() -> None:
     """Once a week, the facts waiting for his yes and the answers called wrong, by DM.
 
@@ -769,20 +781,21 @@ def _start_bio_digest_scheduler() -> None:
     def _pass() -> None:
         if _datetime.now(zone).hour < hour:
             return
-        queue_file, _members, _limit = _bio_paths()
+        queue_file, members_file, _limit = _bio_paths()
         with QUEUE_LOCK:
             queue = BioQueue(queue_file)
             since = float(queue.data["asked"].get("answered_at") or 0)
             days = max(7.0, (time.time() - since) / 86400) if since else 7.0
             wrong = recent_called_wrong(feedback.feedback_log_path(config), days=int(days) + 1)
-            if not digest_due(queue, wrong):
+            stale = _stale_profile_facts(members_file)
+            if not digest_due(queue, wrong, stale):
                 return
-            text, ids, added_ids = digest_text(queue, wrong)
+            text, ids, added_ids = digest_text(queue, wrong, stale)
             waha_client.send_text(adapter.owner_jid(), text)
-            mark_sent(queue, ids, added_ids)
+            mark_sent(queue, ids, added_ids, recheck=stale)
             queue.save()
         print(f"✓ Weekly profile list sent ({len(ids)} waiting, {len(added_ids)} added, "
-              f"{len(wrong)} called wrong)")
+              f"{len(stale)} to re-check, {len(wrong)} called wrong)")
 
     def _loop() -> None:
         while True:

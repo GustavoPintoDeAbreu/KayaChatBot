@@ -21,6 +21,9 @@ A fact now goes one of three ways (Gustavo's choice, 2026-11-19):
   snapshot, and logged with its quotes, so it can be undone.
 
 Every state lives in ``data/bio_queue.json``. Nothing here raises into the bot.
+
+Since 2026-11-25 every fact written here is dated (``fact_meta``), and the weekly list
+also asks whether up to three old job/home/relationship facts are still true.
 """
 from __future__ import annotations
 
@@ -35,6 +38,8 @@ import time
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+from src.data import fact_meta
 
 logger = logging.getLogger(__name__)
 
@@ -265,12 +270,18 @@ def apply_items(members_path: Path, items: List[Dict[str, Any]], limit: Optional
         if member is None:
             continue
         facts = list(member.get("key_facts") or [])
-        if not any(same_fact(f, item["fact"]) for f in facts):
+        existing = next((f for f in facts if same_fact(f, item["fact"])), None)
+        if existing is None:
             if limit is not None and len(facts) >= limit:
                 full.append(item)
                 continue
             facts.append(item["fact"])
             member["key_facts"] = facts
+            fact_meta.stamp(member, item["fact"], "gate" if how == "auto" else how)
+            changed = True
+        elif how != "auto":
+            # His yes to a fact already there confirms it: it is no longer old.
+            fact_meta.stamp(member, existing, how)
             changed = True
         item["applied"] = how
         applied.append(item)
@@ -368,14 +379,19 @@ def _added_since(queue: BioQueue, since: float) -> List[Dict[str, Any]]:
             if i.get("applied") == "auto" and float(i.get("moved_at") or 0) > since]
 
 
-def digest_due(queue: BioQueue, wrong: List[Dict[str, Any]]) -> bool:
+def digest_due(queue: BioQueue, wrong: List[Dict[str, Any]],
+               stale: Optional[List[Dict[str, Any]]] = None) -> bool:
     last = float(queue.data["asked"].get("sent_at") or 0)
-    waiting = queue.data["ask"] or wrong or _added_since(queue, _since_answer(queue))
+    waiting = queue.data["ask"] or wrong or _added_since(queue, _since_answer(queue)) or stale
     return bool(waiting) and _now() - last >= DIGEST_EVERY_DAYS * 86400
 
 
-def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]]) -> Tuple[str, List[str], List[str]]:
-    """The weekly DM, the waiting ids and the added ids its numbers stand for (in order)."""
+def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]],
+                stale: Optional[List[Dict[str, Any]]] = None) -> Tuple[str, List[str], List[str]]:
+    """The weekly DM, the waiting ids and the added ids its numbers stand for (in order).
+
+    ``stale`` (``fact_meta.stale_facts``) are numbered last, under "Still true?";
+    ``mark_sent(..., recheck=stale)`` remembers them."""
     asked = queue.data["asked"]
     unanswered = set(asked.get("ids") or []) if not asked.get("answered_at") or \
         float(asked.get("answered_at") or 0) < float(asked.get("sent_at") or 0) else set()
@@ -404,6 +420,14 @@ def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]]) -> Tuple[str, List
         for item in added:
             n += 1
             lines.append(f"{n}. {item['fact']}")
+    if stale:
+        lines += ["", "Still true? (old facts about jobs, homes or relationships; say keep, drop "
+                  "or the new version):"]
+        for item in stale:
+            n += 1
+            when = (time.strftime("%b %Y", time.localtime(item["learned_at"]))
+                    if item.get("learned_at") else "no date")
+            lines.append(f"{n}. {item['fact']} ({when})")
     if wrong:
         lines += ["", "Answers the group called wrong:"]
         for w in wrong[:5]:
@@ -415,13 +439,16 @@ def digest_text(queue: BioQueue, wrong: List[Dict[str, Any]]) -> Tuple[str, List
     return "\n".join(lines), [i["id"] for i in items], [i["id"] for i in added]
 
 
-def mark_sent(queue: BioQueue, ids: List[str], added_ids: List[str]) -> None:
+def mark_sent(queue: BioQueue, ids: List[str], added_ids: List[str],
+              recheck: Optional[List[Dict[str, Any]]] = None) -> None:
     """Remember what the list's numbers mean and how often each fact was asked."""
     previous = queue.data["asked"]
     for item in queue.data["ask"]:
         if item["id"] in ids:
             item["asked_times"] = int(item.get("asked_times") or 0) + 1
     queue.data["asked"] = {"sent_at": _now(), "ids": ids, "added_ids": added_ids,
+                           "recheck": [{"id": i["id"], "member": i["member"], "fact": i["fact"]}
+                                       for i in (recheck or [])],
                            "answered_at": previous.get("answered_at"),
                            "first_sent_at": previous.get("first_sent_at") or _now()}
 
@@ -478,8 +505,10 @@ def interpret_answer(text: str, numbered: List[str], generate: Callable[[str, st
     return {"items": clean, "rest": rest if rest in ("keep", "drop", "leave") else "leave"}
 
 
-def _replace_fact(members_path: Path, member: str, old: str, new: Optional[str]) -> bool:
-    """Drop (``new`` None) or reword one fact in a member's ``key_facts``, with a snapshot."""
+def _replace_fact(members_path: Path, member: str, old: str, new: Optional[str],
+                  source: str = "his edit") -> bool:
+    """Drop (``new`` None) or reword one fact in a member's ``key_facts``, with a snapshot.
+    A reworded fact is dated now; ``new == old`` only re-dates it (his "still true")."""
     doc = json.loads(members_path.read_text(encoding="utf-8"))
     for person in doc.get("members", []):
         if person.get("name") != member:
@@ -490,6 +519,9 @@ def _replace_fact(members_path: Path, member: str, old: str, new: Optional[str])
             return False
         facts = [f for f in facts if f != hit] if new is None else [new if f == hit else f for f in facts]
         person["key_facts"] = facts
+        fact_meta.forget(person, hit)
+        if new is not None:
+            fact_meta.stamp(person, new, source)
         snapshot(members_path)
         write_members(members_path, doc)
         return True
@@ -501,18 +533,23 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
     """Apply his answer to the last list; the reply to send him."""
     asked = queue.data["asked"]
     ids, added_ids = list(asked.get("ids") or []), list(asked.get("added_ids") or [])
-    if not ids and not added_ids:
+    recheck = list(asked.get("recheck") or [])
+    if not ids and not added_ids and not recheck:
         return f"{BIO_TAG} There's no open list to answer."
     waiting = {i["id"]: i for i in queue.data["ask"]}
     added = {i["id"]: i for i in queue.data["applied"]}
     numbered = [waiting[i] if i in waiting else None for i in ids] + \
-               [added[i] if i in added else None for i in added_ids]
+               [added[i] if i in added else None for i in added_ids] + recheck
+    first_recheck = len(ids) + len(added_ids) + 1
 
-    picked = parse_answer(text, len(ids)) if ids else None
+    picked = parse_answer(text, len(numbered)) if (ids or recheck) else None
     if picked is not None:
         plan = {"items": [{"n": n, "action": "keep", "fact": ""} for n in picked],
                 "rest": "drop" if ids else "leave"}
         rest_added = "keep"
+        # A bare "1 3" says nothing about the old facts he did not name: they are
+        # asked again, never dropped.
+        rest_recheck = "leave"
     else:
         if generate is None:
             return f"{BIO_TAG} I couldn't read that; reply with the numbers (e.g. 1 3), \"all\" or \"none\"."
@@ -520,11 +557,25 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
         if plan is None:
             return f"{BIO_TAG} I couldn't make that out; nothing was changed. Try again, or numbers (e.g. 1 3)."
         rest_added = "keep" if plan["rest"] == "leave" else plan["rest"]
+        rest_recheck = plan["rest"]
 
     said = {e["n"]: e for e in plan["items"]}
     to_apply, dropped, edited, removed, reworded, left = [], [], [], [], [], []
+    confirmed = []
     for n, item in enumerate(numbered, 1):
         if item is None:
+            continue
+        if n >= first_recheck:
+            entry = said.get(n) or {"action": rest_recheck, "fact": ""}
+            if entry["action"] == "keep" and _replace_fact(
+                    members_path, item["member"], item["fact"], item["fact"], "his yes"):
+                confirmed.append(item)
+            elif entry["action"] == "drop" and _replace_fact(
+                    members_path, item["member"], item["fact"], None):
+                removed.append(item)
+            elif entry["action"] == "edit" and _replace_fact(
+                    members_path, item["member"], item["fact"], entry["fact"]):
+                reworded.append(item)
             continue
         is_waiting = n <= len(ids)
         entry = said.get(n) or {"action": plan["rest"] if is_waiting else rest_added, "fact": ""}
@@ -556,7 +607,7 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
     queue.data["ask"] = [i for i in queue.data["ask"] if i not in dropped]
     queue.data["dropped"] += len(dropped) + len(removed)
     queue.data["asked"] = {**asked, "ids": [i["id"] for i in left], "added_ids": [],
-                           "answered_at": _now()}
+                           "recheck": [], "answered_at": _now()}
     queue.save()
 
     parts = [f"{BIO_TAG} Done:"]
@@ -568,6 +619,8 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
         parts.append(f"took {len(removed)} back off the profiles")
     if reworded:
         parts.append(f"reworded {len(reworded)}")
+    if confirmed:
+        parts.append(f"{len(confirmed)} old fact{'s' if len(confirmed) > 1 else ''} still true")
     if left:
         parts.append(f"{len(left)} left for next week")
     if full:
@@ -579,8 +632,10 @@ def apply_answer(queue: BioQueue, members_path: Path, text: str, limit: int,
 
 
 def undo(queue: BioQueue, members_path: Path, member: str) -> Optional[str]:
-    """Restore the snapshot taken before the last applied fact about ``member``."""
-    items = [i for i in queue.data["applied"] if i["member"] == member and i.get("snapshot")]
+    """Restore the snapshot taken before the last change about ``member``: a fact the
+    gate or his yes applied, or a hand edit from ``review_bios.py`` (``manual``)."""
+    items = [i for key in ("applied", "manual") for i in queue.data.get(key, [])
+             if i["member"] == member and i.get("snapshot")]
     if not items:
         return None
     last = max(items, key=lambda i: i.get("moved_at", 0))
@@ -588,8 +643,9 @@ def undo(queue: BioQueue, members_path: Path, member: str) -> Optional[str]:
     if not snap.exists():
         return None
     shutil.copy2(snap, members_path)
-    queue.data["applied"] = [i for i in queue.data["applied"]
-                             if i.get("snapshot") != last["snapshot"]]
+    for key in ("applied", "manual"):
+        if key in queue.data:
+            queue.data[key] = [i for i in queue.data[key] if i.get("snapshot") != last["snapshot"]]
     queue.save()
     return str(snap)
 
@@ -601,7 +657,8 @@ def status(queue: BioQueue) -> Dict[str, Any]:
     return {"waiting": len(ask), "candidates": len(queue.data["candidates"]),
             "applied": len(queue.data["applied"]), "dropped": queue.data["dropped"],
             "oldest_waiting_days": round((_now() - oldest) / 86400, 1) if oldest else None,
-            "digest_sent_at": queue.data["asked"].get("sent_at")}
+            "digest_sent_at": queue.data["asked"].get("sent_at"),
+            "recheck_open": len(queue.data["asked"].get("recheck") or [])}
 
 
 def recent_called_wrong(feedback_path: Path, days: int = DIGEST_EVERY_DAYS) -> List[Dict[str, Any]]:

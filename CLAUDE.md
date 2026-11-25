@@ -1191,6 +1191,22 @@ were his own message about the other member's job, and the habit was the bot's o
   leaves any reply quoting 👤 to Kaya, voice included. A skipped week is never lost: the unanswered
   facts come back first next week, marked ↩, with no expiry. `scripts/review_bios.py --queue / --undo NAME /
   --gate-backlog [--dry-run]`. `max_key_facts` is 12.
+- **Facts carry a date, and old ones are re-checked (2026-11-25).** A roast built a paragraph on a
+  member's job from years ago: facts were plain strings, so an old one read as today's.
+  `src/data/fact_meta.py` (stdlib only) keeps `fact_meta: {<fact>: {learned_at, source}}` on each
+  member, written by `bio_gate.apply_items` (`gate` / `his yes`), `_replace_fact` (a rewording moves
+  the date to the new text) and `review_bios.py` (`manual`). Only a job, home or relationship fact
+  (`fact_meta.kind`, keywords) goes stale. **Asked** (`is_stale`): undated or older than a year, up to
+  3 a week under *"Still true?"* in the 👤 list, undated first, numbered last. A bare "1 3" never drops
+  one he did not name; his words keep (re-dated), drop or reword it (`asked.recheck` in the queue).
+  **Marked** (`is_old`): only a known date older than a year gets *"(info antiga, pode já não ser
+  verdade)"* on the card, and the member-card intro says to use it in the past tense and never as
+  someone's current job, home or relationship, nor in a roast. Undated facts are deliberately not
+  marked: most legacy facts are still true, and marking them would put every job in the past tense
+  until the re-check got through them (18 undated ones at the switch, about 6 weeks).
+  `review_bios.py --date-backfill` dates what the gate applied, from the queue's `moved_at`.
+  Hand edits: `--member NAME --add/--drop "FACT" --alias A --clear-summary`, each with a snapshot that
+  `--undo NAME` restores (`bio_queue.json` `manual`).
 - **"Called wrong" is recorded.** A group message with a call-out ("alucinação", "inventaste", "isso não
   é verdade"…) right after or replying to a bot answer is logged as a 👎 with `kind: called_wrong`
   (`adapter.called_wrong`); weak words ("mentira", "errado") count only as a reply to the bot or naming
