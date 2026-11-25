@@ -3,7 +3,13 @@
 Kaya is the group's assistant: it remembers the group's history and answers in
 European Portuguese or English. This is the owner's reference for everything it
 can do, so the commands are not lost as the lab grows. The same list, shorter,
-comes back on WhatsApp with `/help`.
+comes back on WhatsApp with `/help`, in the group too: each chat gets only what
+works there (the group never sees the owner's commands).
+
+Since 2026-11-25 that list is not hand-written: every repo declares its commands
+in its `lab.yaml` (`commands:`, with `where: [group, dm]` and `who: everyone|owner`),
+labwatch collects them (`/api/commands`, the Help page), and a test in each repo
+fails if its parser and its `lab.yaml` disagree. A new command is one line there.
 
 ## In the group
 
@@ -18,9 +24,12 @@ says otherwise).
   starts fresh.
 - `/aniversario <dia/mês>` (`/birthday`, `/anos`) — state your own birthday;
   the most trusted source there is.
+- `/help` (`/ajuda`) — the commands this chat can use.
 
 These are matched literally and never reach the model; a bare `/bug` or
-`/feedback` explains itself and stores nothing.
+`/feedback` explains itself and stores nothing. A `/word` nobody handles gets
+*"Não conheço /word. Querias dizer /X? Manda /help…"*, the guess taken only from
+what that chat can use.
 
 ### Voice and text
 
@@ -76,7 +85,8 @@ gets a fixed refusal, not a promise.
 
 These are handled by the Pi gateway, so they work even while the PC is off:
 
-- `/help` — this command list, with a link to the Help page.
+- `/help` — everything, your commands included, with a link to the Help page.
+  A wrong `/word` here is answered by the Pi with the closest command.
 - `/idea <texto>` — send an idea to the idea pipeline (turns it into a planned,
   implemented draft PR); flags `!new !local !uncensored !claude !deepseek !glm`.
 - `/idea list` · `/idea pending` · `/idea merge all` · `/idea help` ·
@@ -84,6 +94,7 @@ These are handled by the Pi gateway, so they work even while the PC is off:
 - `/homelaboff` — ask what is running on the PC and shut it down once free.
 - `/homelaboff_bruteforce` — shut the PC down at once, skipping every wait (asks for a yes).
 - `/homelabon` — wake the PC (Wake-on-LAN) and send its Claude session link.
+- `/gamingoff` — turn the Windows gaming PC off (asks for a yes).
 - `/homelabrc [home]` / `/homelabrc stop [home]` — start/end a Claude Remote
   Control session on the PC.
 - `/homelabqc [home]` / `/homelabqc stop [home]` — start/end a Qwen Code

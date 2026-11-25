@@ -1218,7 +1218,8 @@ def test_an_unknown_command_is_not_answered_by_the_model(tmp_path):
     assert result["command"] == "unknown"
     # the stub responder echoes "reply["; the model must never have run
     assert not result["reply"].startswith("reply[")
-    assert "/bug" in result["reply"] and "/feedback" in result["reply"]
+    # Since 2026-11-25 it guesses from the registry and points at /help.
+    assert "/feature" in result["reply"] and "/help" in result["reply"]
 
 
 def test_an_unknown_command_never_promises_anything(tmp_path):
@@ -2228,3 +2229,31 @@ def test_late_note_names_the_day_and_minutes(tmp_path):
     assert adapter.late_note(msg, now).startswith("Esta mensagem é de ontem às 22:50")
     msg.deferred = False
     assert adapter.late_note(msg, now) == ""
+
+
+# ── /help and a wrong /command, from the registry (2026-11-25) ───────────────
+def test_help_in_a_dm_lists_the_dm_commands_and_no_owner_ones(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    result = adapter.handle_event(dm_event("/help"))
+
+    assert result["command"] == "help"
+    assert "/bug" in result["reply"] and "/homelaboff" not in result["reply"]
+
+
+def test_a_typo_gets_the_closest_command(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    reply = adapter.handle_event(dm_event("/hepl"))["reply"]
+
+    assert "Querias dizer /help?" in reply
+
+
+def test_help_is_kept_out_of_the_memory_log(tmp_path):
+    adapter, _, _ = make_report_adapter(tmp_path)
+
+    adapter.handle_event(dm_event("/help"))
+
+    written = "".join(path.read_text(encoding="utf-8")
+                      for path in (tmp_path / "msglog").rglob("*.jsonl"))
+    assert "/help" not in written

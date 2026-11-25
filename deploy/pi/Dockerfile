@@ -18,11 +18,13 @@ COPY src/chat/whatsapp_adapter.py src/chat/stt.py src/chat/waha_client.py \
      src/chat/documents.py src/chat/feedback.py src/chat/memory.py src/chat/response_utils.py \
      src/chat/scope.py src/chat/channels.py src/chat/birthdays.py \
      src/chat/poll_votes.py src/chat/static_assets.py src/chat/enrichment.py src/chat/showcase_metrics.py \
-     src/chat/mode_directive.py src/chat/
+     src/chat/mode_directive.py src/chat/commands.py src/chat/
 COPY src/chat/static/landing.html src/chat/static/landing.html
 COPY src/chat/static/showcase src/chat/static/showcase
 COPY src/data/message_log.py src/data/bio_gate.py src/data/
 COPY config.yaml config.yaml
+# The command registry's baked copy (src/gateway/help_tap.py), for when the hub is down.
+COPY lab.yaml lab.yaml
 ENV PYTHONUNBUFFERED=1 GATEWAY_CONFIG=/app/config.yaml GATEWAY_LANDING_HTML=/app/src/chat/static/landing.html \
     GATEWAY_ASSETS_DIR=/app/src/chat/static/showcase
 CMD ["python", "-m", "src.gateway.app"]

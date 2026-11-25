@@ -76,6 +76,8 @@ COPY src/ /app/src/
 COPY tests/ /app/tests/
 COPY conftest.py /app/conftest.py
 COPY config.yaml /app/config.yaml
+# The command registry (src/chat/commands.py reads it for /help and a wrong /command).
+COPY lab.yaml /app/lab.yaml
 COPY run_full_pipeline.py /app/
 
 # Create necessary directories

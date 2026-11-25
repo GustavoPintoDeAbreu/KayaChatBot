@@ -1238,6 +1238,21 @@ without `{maintainer_clause}`**, the clause that says the bot has no state and
 must not promise to keep counters or lists updated. All four prompts that carry
 one now do, pinned by a test.
 
+**One registry for every command (2026-11-25).** The list lived in three places that drifted: the
+parsers, the Pi's hand-written `/help` (`HELP_TEXT`, owner DM only) and a fixed wrong-command line
+("Tenho /bug, /feedback, /aniversario e /clear", the same in every chat, never mentioning `/help`).
+Now each repo declares its commands in `lab.yaml` `commands:` (`cmd` + `aliases`/`args`, or `say` for a
+plain-words request; `where: [group, dm]`; `who: everyone|owner`), labwatch collects them
+(`/api/commands`, the Help page), and `src/chat/commands.py` (torch-free) builds `help_text` and
+`unknown_reply` (difflib guess, only over what that chat can use) for the chat asking. A group never sees
+owner commands, whoever asks. The Pi's help tap answers `/help` (`/ajuda`, `@Kaya /help`) in groups and
+the owner's DM, and claims the owner's DM `/word` that no earlier tap took and Kaya does not parse; a
+member's DM goes to the PC, whose adapter answers both from the baked `lab.yaml` (it knows the whitelist).
+The tap's list: the hub (same origin as `GATEWAY_HELP_URL`, or `GATEWAY_COMMANDS_URL`), every 10 min,
+cached in `GATEWAY_DATA_DIR/commands.json`, always merged with the `lab.yaml` baked into both images.
+`tests/test_command_registry.py` fails when a parser and `lab.yaml` disagree, or the user guide misses one
+(it caught `/gamingoff` on day one).
+
 New reports are announced by DM to `KAYA_REPORT_JID` (env, not `config.yaml` — a
 real number), and a report filed *in the group* also DMs its author a private
 copy; from a DM that would be the same message twice, so it is not sent. Sending

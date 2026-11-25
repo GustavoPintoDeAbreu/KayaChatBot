@@ -361,6 +361,8 @@ _UNKNOWN_COMMAND = re.compile(r"^/[a-zA-ZÀ-ÿ][\w\-À-ÿ]*$")
 # number, never the display name — what the group sees as "@Rafa" arrives here as
 # "@257487651496102".
 _MENTION = re.compile(r"@(\d{5,})\b")
+# The lab registry entry for this repo: /help and the "did you mean" line read it.
+_LAB_YAML = Path(__file__).resolve().parent.parent.parent / "lab.yaml"
 
 
 # Thumbs reactions we treat as quality signal. Skin-tone modifiers and variation
@@ -552,13 +554,17 @@ class WhatsAppAdapter:
         # A member stating their own birthday: the most trusted source there is,
         # so it needs no review (see src/chat/birthdays.py).
         self.birthday_commands = {"/aniversario", "/aniversário", "/birthday", "/anos"}
+        # The command list for this chat, from the lab's registry (src/chat/commands.py).
+        # The Pi answers it in groups and the owner's DM; a member's DM lands here.
+        self.help_commands = {"/help", "/ajuda"}
         # Every command token, used to keep these messages OUT of the memory log
         # (see _parse_command — the log is written before the reply gate).
         self.all_commands = (
             self.clear_commands | self.bug_commands | self.feedback_commands
-            | self.birthday_commands
+            | self.birthday_commands | self.help_commands
         )
         self._command_families = {
+            **{token: "help" for token in self.help_commands},
             **{token: "clear" for token in self.clear_commands},
             **{token: "bug" for token in self.bug_commands},
             **{token: "feedback" for token in self.feedback_commands},
@@ -667,8 +673,6 @@ class WhatsAppAdapter:
             # updates in our future interactions" — a promise the bot has no state
             # to keep, from the one mode whose prompt lacked the clause forbidding
             # exactly that.
-            "unknown_command": ("Não conheço esse comando. Tenho /bug, /feedback, "
-                                "/aniversario e /clear."),
             "birthday_usage": ("Escreve /aniversario e o dia em que fazes anos. "
                                "Exemplo: /aniversario 8/9."),
             "birthday_not_member": "Só guardo aniversários de quem é do grupo.",
@@ -1928,11 +1932,18 @@ class WhatsAppAdapter:
         # bot has no state to keep. Nothing is stored — the memory-log guard above
         # already skipped it, and there is deliberately no pending-capture state
         # that a later message could fall into.
-        if parsed and parsed[0] == "unknown":
-            reply = self.command_replies["unknown_command"]
+        if parsed and parsed[0] in ("unknown", "help"):
+            from src.chat import commands as registry
+
+            where = "group" if msg.is_group else "dm"
+            listed = registry.load_lab_yaml(_LAB_YAML)
+            if parsed[0] == "help":
+                reply = registry.help_text(listed, where, is_owner=False)
+            else:
+                reply = registry.unknown_reply(text.strip().split()[0], listed, where, is_owner=False)
             self.waha_client.send_text(msg.chat_id, reply)
             return {"chat_id": msg.chat_id, "speaker": speaker, "reply": reply,
-                    "user_text": text, "command": "unknown"}
+                    "user_text": text, "command": parsed[0]}
 
         # ``/clear`` stays strict — it must be the whole message. The two mistakes
         # are not symmetric: a missed report can be retyped, while a wrongly
