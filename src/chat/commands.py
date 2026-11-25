@@ -77,11 +77,12 @@ def load_lab_yaml(path: Path) -> List[Command]:
 
 
 def merge(*lists: Iterable[Command]) -> List[Command]:
-    """The first list wins for a command (or a ``say``) present in several."""
+    """The first list wins for a row present in several. A row is its command and its
+    arguments (``/idea list`` and ``/idea pending`` are two rows), or its ``say``."""
     seen, out = set(), []
     for commands in lists:
         for command in commands:
-            key = command.cmd.lower() or command.say.lower()
+            key = (command.cmd.lower(), command.args.lower(), command.say.lower())
             if key not in seen:
                 seen.add(key)
                 out.append(command)

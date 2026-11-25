@@ -84,3 +84,13 @@ def test_the_guide_mentions_every_command():
     guide = (ROOT / "docs/how-to-use-kaya.md").read_text()
     missing = [c.cmd for c in LISTED if c.cmd and f"`{c.cmd}" not in guide]
     assert not missing, f"docs/how-to-use-kaya.md does not mention {missing}"
+
+
+def test_one_command_with_several_argument_rows_keeps_every_row():
+    rows = registry.from_entries([
+        {"cmd": "/idea", "args": "<texto>", "where": ["dm"], "who": "owner", "summary": "uma ideia"},
+        {"cmd": "/idea", "args": "list", "where": ["dm"], "who": "owner", "summary": "o estado"},
+    ])
+    merged = registry.merge(rows, rows, LISTED)
+    assert [c.args for c in merged if c.cmd == "/idea"] == ["<texto>", "list"]
+    assert "/idea list" in registry.help_text(merged, "dm", is_owner=True)
