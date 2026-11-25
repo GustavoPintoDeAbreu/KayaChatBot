@@ -22,7 +22,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from src.chat import recap, router, sources, variety
+from src.chat import recap, roast, router, sources, variety
 from src.chat.inference_backend import LlamaCppBackend, OllamaBackend, ensure_model_loaded
 from src.chat.gpu_lock import gpu_section
 from src.chat.response_utils import (
@@ -235,6 +235,7 @@ def build_system_prompt(
     include_uncensored: bool = False,
     max_facts: Optional[int] = None,
     sample_facts: bool = False,
+    only: Optional[List[str]] = None,
 ) -> str:
     """Assemble the runtime system prompt.
 
@@ -266,7 +267,8 @@ def build_system_prompt(
             system_prompt += build_member_prompt_suffix(
                 members_data, shuffle=True,
                 max_facts=max_facts, sample_facts=sample_facts,
-                birthdays=_birthday_dates(config, Path(config_path).parent))
+                birthdays=_birthday_dates(config, Path(config_path).parent),
+                only=only)
 
     system_prompt += _today(config, Path(config_path).parent)
     return system_prompt
@@ -525,6 +527,16 @@ class KayaEngine:
             # rewrite too, so an elliptical follow-up resolves to a person.
             subject_text = f"{message} {route.query}".strip()
             mcfg = router.mode_config(self.config, route.mode)
+            # "roast me" is about the one asking, whoever else the message names
+            # (2026-11-25: a member naming himself by his full name got a roast
+            # of himself AND of the member sharing his first name). Empty otherwise.
+            self_roast = (self._self_roast_target(message, speaker)
+                          if route.mode == router.ROAST else "")
+            # A long message is not a request for a long roast: 31 words mostly
+            # saying who he was came back as a 240-word reply.
+            # Only an explicit cue ("explica", "detail") lengthens a roast.
+            if route.mode == router.ROAST and wants_long:
+                wants_long = wants_long_answer(message, long_word_threshold=10**6)
 
             # A poll is built from the chat's own log, not from retrieval: the
             # options have to be what was actually said, so the whole thread is
@@ -638,7 +650,9 @@ class KayaEngine:
                 # away. Roast and the null-prompt modes are the ones that actually
                 # read it.
                 try:
-                    system_prompt = self.system_prompt_factory(sample_facts=True)
+                    system_prompt = (
+                        self.system_prompt_factory(sample_facts=True, only=[self_roast])
+                        if self_roast else self.system_prompt_factory(sample_facts=True))
                 except Exception as exc:  # noqa: BLE001 — fall back to the fixed prompt
                     print(f"⚠️  could not rebuild the system prompt: {exc}")
 
@@ -676,7 +690,7 @@ class KayaEngine:
                 # bot's own claims (PR #95); a recap comes only from people's messages.
                 summary="" if (route.mode in (router.BANTER, router.GENERAL)
                                or route.command == router.CMD_RECAP) else summary,
-                retrieval_query=route.query,
+                retrieval_query=f"roast {self_roast}" if self_roast else route.query,
                 chat_id=chat_id,
                 late_note=late_note,
             )
@@ -693,7 +707,8 @@ class KayaEngine:
             if recap_instruction:
                 user_turn += f"\n\n({recap_instruction})"
             if route.mode == router.ROAST:
-                user_turn += self._roast_hint(subject_text, recent_lines)
+                user_turn += (roast.self_roast_hint(self_roast) if self_roast
+                              else self._roast_hint(subject_text, recent_lines))
             user_turn += self._question_hint(route)
             if route.mode == router.DEBATE:
                 user_turn += self._debate_hint(message)
@@ -703,7 +718,7 @@ class KayaEngine:
             # and Five Guys every time — the per-chat repetition guard could not
             # see it, being per-chat and per-session.
             if open_ended:
-                user_turn += self._variety_hint(subject_text, speaker, route.mode)
+                user_turn += self._variety_hint(self_roast or subject_text, speaker, route.mode)
             # A debate plans its own argument and decides, in that same pass,
             # whether it needs facts it does not have. This replaces the generic
             # reasoning pass rather than adding to it: two planning generations
@@ -834,6 +849,9 @@ class KayaEngine:
 
         telemetry = self._telemetry(route, context, subject_text, text,
                                     reasoning=reasoning)
+        if self_roast:
+            telemetry["roast_self"] = self_roast
+            telemetry["query_members"] = [self_roast]
         if recap_stats:
             telemetry.update(recap_stats)
         if stripped:
@@ -1187,6 +1205,20 @@ class KayaEngine:
                 "Isto é só para factos: uma opinião, um palpite, um veredicto ou um "
                 "insulto que te peçam dás sempre, sem dizer que te falta informação.)")
 
+    def _self_roast_target(self, message: str, speaker: str) -> str:
+        """The speaker's member name when the message asks to roast the speaker, else "".
+
+        A speaker who is not a member (an unknown number) gets the ordinary roast path.
+        """
+        if not (self.retriever and speaker and roast.is_self_aimed(message)):
+            return ""
+        try:
+            named = self.retriever.named_members(speaker)
+        except Exception as exc:  # noqa: BLE001 — a hint is never worth a failure
+            print(f"⚠️  could not resolve the self-roast speaker: {exc}")
+            return ""
+        return named[0] if named else ""
+
     def _roast_hint(self, message: str, recent_lines: Optional[List[str]]) -> str:
         """Keep an unaimed roast off the member it just hit.
 
@@ -1214,7 +1246,7 @@ class KayaEngine:
         if not self.retriever:
             return ""
         try:
-            named = self.retriever.named_members(message)
+            named = self.retriever.named_members(roast.strip_negated(message))
             if named:
                 who = ", ".join(named)
                 return (f"\n\n(O roast é sobre {who}. Fala só dess"

@@ -6,7 +6,7 @@ model stack, and reused by every chat entry point (chat.py, web_app.py).
 
 import random
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Cues that a question is asking for an elaborate answer rather than a quick reply.
 # Used to raise the generation length budget only when warranted (see
@@ -384,7 +384,8 @@ def clean_response(text: str, user_name: str, bot_name: str = "Kaya Bot") -> str
 
 def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
                                max_facts: int = 0, sample_facts: bool = False,
-                               birthdays: Optional[Dict[str, str]] = None) -> str:
+                               birthdays: Optional[Dict[str, str]] = None,
+                               only: Optional[List[str]] = None) -> str:
     """Build the group-members system-prompt suffix from a loaded
     group_members.json dict. Returns "" when there are no members.
 
@@ -414,8 +415,14 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
 
     ``birthdays`` maps a member to a confirmed ``MM-DD``. It is added outside the
     facts, so no sampling can drop it: "quando faz anos o Pedro?" is factual.
+
+    ``only`` keeps just those members' cards. A self-roast passes the speaker: with
+    fifteen cards in front of it, a roast of one person found a second one.
     """
     members = list(members_data.get("members", []))
+    if only:
+        wanted = {name.lower() for name in only}
+        members = [member for member in members if member.get("name", "").lower() in wanted]
     if shuffle:
         random.shuffle(members)
     lines = []

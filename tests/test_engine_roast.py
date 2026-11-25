@@ -526,3 +526,87 @@ def test_a_quote_of_the_bot_is_said_to_be_its_own():
     turn = user_turn(backend)
     assert "responde a uma mensagem tua" in turn
     assert "As linhas do Kaya Bot são tuas" in turn
+
+
+# ── a self-roast is about the one who asked, said to them (2026-11-25) ────────
+# A member asked to be roasted, giving his full name and saying which member with
+# the same first name he was not. That first name is another member, so the hint
+# named both and the bot roasted both, in the third person. (Names here are the
+# test stub's; the wording of the real message is paraphrased.)
+PETER_MESSAGE = ("It’s been a while, roast me alive my g, and don’t get it wrong: I’m "
+                 "Pedro Ninguém or Peter, I’m not the engineer abroad, I’m the one "
+                 "who lives here")
+
+
+def _with_peter(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "MEMBERS", [*MEMBERS, "Peter"])
+
+
+def test_a_self_roast_is_only_about_the_speaker(monkeypatch):
+    _with_peter(monkeypatch)
+    backend = ScriptedBackend("ROAST")
+
+    reply = make_engine(backend).respond(PETER_MESSAGE, "Peter", [], "sys")
+
+    turn = user_turn(backend)
+    assert "O roast é sobre o Peter, que to pediu" in turn
+    assert "segunda pessoa" in turn
+    assert "O roast é sobre Peter, Pedro" not in turn
+    assert reply.telemetry["roast_self"] == "Peter"
+    assert reply.telemetry["query_members"] == ["Peter"]
+
+
+def test_a_self_roast_shows_only_the_speakers_card(monkeypatch):
+    _with_peter(monkeypatch)
+    backend = ScriptedBackend("ROAST")
+    engine = make_engine(backend)
+    calls = []
+    engine.system_prompt_factory = lambda **kw: calls.append(kw) or "sys"
+
+    engine.respond("faz-me um roast", "Peter", [], "sys")
+
+    assert calls == [{"sample_facts": True, "only": ["Peter"]}]
+
+
+def test_an_aimed_roast_drops_a_name_that_was_ruled_out():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast the Gil, not Rafa", "Pedro", [], "sys")
+
+    turn = user_turn(backend)
+    assert "O roast é sobre Gil." in turn
+    assert "Rafa" not in turn.split("O roast é sobre")[1]
+
+
+def test_a_stranger_asking_for_a_roast_gets_the_ordinary_path():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast me", "Desconhecido", [], "sys")
+
+    assert "que to pediu" not in user_turn(backend)
+
+
+def test_the_third_person_rule_has_the_self_roast_exception():
+    from src.config_loader import load_config
+
+    prompt = load_config(str(Path(__file__).parent.parent / "config.yaml"))["data"]["system_prompt"]
+    assert "terceira pessoa" in prompt
+    assert "A única exceção é um roast que a própria pessoa te pediu" in prompt
+
+
+def test_a_long_self_roast_request_keeps_the_roast_budget(monkeypatch):
+    """31 words of "who I am" are not a cue to elaborate."""
+    _with_peter(monkeypatch)
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond(PETER_MESSAGE, "Peter", [], "sys")
+
+    assert backend.answer_calls[0]["max_new_tokens"] == 200
+
+
+def test_an_explicit_cue_still_lengthens_a_roast():
+    backend = ScriptedBackend("ROAST")
+
+    make_engine(backend).respond("roast the Gil e explica bem porquê", "Pedro", [], "sys")
+
+    assert backend.answer_calls[0]["max_new_tokens"] == 768
