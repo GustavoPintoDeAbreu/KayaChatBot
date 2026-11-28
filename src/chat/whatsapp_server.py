@@ -226,7 +226,7 @@ def _current_prompt() -> str:
     return _system_prompt
 
 
-def _prompt_for_turn(sample_facts: bool = False) -> str:
+def _prompt_for_turn(sample_facts: bool = False, only=None) -> str:
     """Rebuild the system prompt for one turn. ~0.6ms, so it is not worth caching.
 
     The prompt above is built ONCE, at import. That was invisible until someone
@@ -245,6 +245,7 @@ def _prompt_for_turn(sample_facts: bool = False) -> str:
         max_facts=int((config.get("rag", {}) or {}).get("max_facts_open_ended", 0))
         if sample_facts else None,
         sample_facts=sample_facts,
+        only=only,
     )
 
 

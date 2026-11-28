@@ -1070,6 +1070,24 @@ against banter's 6–16, and 200 is room for a second paragraph the model will f
 be — so the scoping clause survives *"justifica com tudo o que tens"*. That
 separation is what makes elaboration safe here.
 
+**A self-roast is about the one who asked, and said to them (2026-11-25).** A member asked to be
+roasted, giving his full name and saying which of two members with the same first name he was *not*.
+`named_members` found the other member's first name inside his full name, so the hint said *"O roast é
+sobre X, Y"* and the bot roasted both, in the third person, the second half from the other member's
+stale card. In a self-roast the other names introduce the asker or rule someone out; they are never
+targets. `src/chat/roast.py` (torch-free) decides: `is_self_aimed` ("roast me", "faz-me um roast",
+"goza comigo"…, the object pronoun next to the verb, so "roast the guy who sent me this" is not one)
+makes `engine._self_roast_target` the speaker's member name. That turn then gets
+`roast.self_roast_hint` (second person, only him), **only his card** (`system_prompt_factory(only=[…])`,
+`build_member_prompt_suffix(only=…)`), retrieval on `"roast <him>"` instead of the router's rewrite, and
+the variety guard on him alone; telemetry records `roast_self`. The third-person rule in
+`data.system_prompt` stays for everything else, with that one exception written into it (Gustavo's
+call, 2026-11-25). An aimed roast drops names after a negation (`roast.strip_negated`: "roast the Gil,
+not Rafa" is about Gil). A speaker who is not a member gets the ordinary path. A long message no longer
+lengthens a roast (his 31 words, mostly saying who he was, crossed the 30-word threshold and the reply
+ran 240 words); only an explicit cue does. The probe case `self_roast_second_person` (gitignored probe
+file) replays the real message.
+
 ### Warm by default, sharp on request (2026-10-10)
 
 On 2026-10-09 Rafa greeted the bot (*"@Kaya Bot good morning"*, with an
