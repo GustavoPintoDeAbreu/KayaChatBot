@@ -1,7 +1,6 @@
-"""The owner's /help DM: a fixed command list answered by the Pi, never journaled."""
-import re
+"""/help from the Pi: per chat, from the command registry, never journaled (2026-11-25)."""
+import json
 import sys
-import unicodedata
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.gateway.app import Gateway, GatewaySettings
-from src.gateway.help_tap import HELP_TAG, HELP_TEXT, HelpTap
+from src.chat import commands as registry
+from src.gateway.help_tap import HELP_TAG, CommandSource, HelpTap, _commands_url
 from src.gateway.monitor import PcMonitor, PcState
 
 BOT = "351900000000@c.us"
@@ -40,6 +40,7 @@ def rig(tmp_path):
     sent = []
     tap = HelpTap.from_env({"HELP_OWNER_NUMBERS": "+351922222222",
                             "GATEWAY_HELP_URL": "http://help.example/"})
+    tap.source = CommandSource(url="")   # Kaya's own lab.yaml only, no network
     gateway = Gateway(settings, monitor=monitor, help_tap=tap,
                       send_text=lambda chat, text, reply_to=None: sent.append((chat, text, reply_to)))
     return gateway, sent
@@ -62,11 +63,19 @@ def _post(gateway, event):
                                                  headers={"X-Webhook-Token": "hook"}).json()
 
 
+def _reply(sent):
+    assert len(sent) == 1
+    return sent[0][1]
+
+
 def test_help_is_answered_from_the_pi_and_not_journaled(rig):
     gateway, sent = rig
     assert _post(gateway, _message("m1", "/help")) == {"help": "sent"}
     assert gateway.journal.pending_count() == 0
-    assert sent == [(OWNER, f"{HELP_TAG} {HELP_TEXT}\n\n📖 Página de ajuda: http://help.example", "m1")]
+    text = _reply(sent)
+    assert text.startswith(f"{HELP_TAG} Kaya — o que podes pedir")
+    assert "/homelaboff" in text and "/bug" in text
+    assert text.endswith("📖 Página de ajuda: http://help.example")
 
 
 def test_help_answers_while_the_pc_is_off(rig):
@@ -76,10 +85,40 @@ def test_help_answers_while_the_pc_is_off(rig):
     assert len(sent) == 1
 
 
+def test_help_in_the_group_lists_only_group_commands_even_from_the_owner(rig):
+    gateway, sent = rig
+    assert _post(gateway, _message("g1", "@351900000000 /help", chat=GROUP)) == {"help": "sent"}
+    text = _reply(sent)
+    assert "/bug" in text and "sondagem" in text
+    assert "/homelab" not in text and "/gamingoff" not in text and "Página de ajuda" not in text
+    assert gateway.journal.pending_count() == 0
+
+
+def test_a_members_dm_is_left_to_kaya(rig):
+    gateway, sent = rig
+    assert "seq" in _post(gateway, _message("n1", "/help", chat=ALICE))
+    assert "seq" in _post(gateway, _message("n2", "/hepl", chat=ALICE))
+    assert sent == []
+
+
+def test_the_owners_wrong_command_gets_the_closest_one(rig):
+    gateway, sent = rig
+    assert _post(gateway, _message("u1", "/homelabof")) == {"help": "unknown"}
+    assert "Querias dizer /homelaboff?" in _reply(sent)
+    assert gateway.journal.pending_count() == 0
+
+
+def test_the_owners_kaya_commands_still_reach_kaya(rig):
+    gateway, sent = rig
+    assert "seq" in _post(gateway, _message("k1", "/bug não respondeu"))
+    assert "seq" in _post(gateway, _message("k2", "olá, tudo bem?"))
+    assert sent == []
+
+
 def test_help_omits_the_link_when_no_url_is_set():
-    tap = HelpTap(help_url="", owner_numbers={"351922222222"})
-    assert tap.reply_text() == HELP_TEXT
+    tap = HelpTap(help_url="", owner_numbers={"351922222222"}, source=CommandSource(url=""))
     assert "Página de ajuda" not in tap.reply_text()
+    assert "/homelaboff" in tap.reply_text()
 
 
 def test_help_url_is_stripped_of_a_trailing_slash():
@@ -87,11 +126,36 @@ def test_help_url_is_stripped_of_a_trailing_slash():
     assert tap.help_url == "http://help.example"
 
 
-def test_help_is_owner_only(rig):
-    gateway, sent = rig
-    assert "seq" in _post(gateway, _message("n1", "/help", chat=ALICE))
-    assert "seq" in _post(gateway, _message("g1", "/help", chat=GROUP))
-    assert sent == []
+def test_the_registry_url_comes_from_the_help_page_origin():
+    assert _commands_url({"GATEWAY_HELP_URL": "http://hub.example:8095/help"}) == \
+        "http://hub.example:8095/api/commands"
+    assert _commands_url({"GATEWAY_COMMANDS_URL": "http://x/api/commands",
+                          "GATEWAY_HELP_URL": "http://hub/help"}) == "http://x/api/commands"
+    assert _commands_url({}) == ""
+
+
+def test_the_hub_list_is_used_cached_and_survives_the_hub_going_down(tmp_path):
+    clock = [1000.0]
+    rows = [{"product": "idea-pipeline", "cmd": "/idea", "args": "<texto>", "where": ["dm"],
+             "who": "owner", "summary": "uma ideia para o pipeline"}]
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        if len(calls) > 1:
+            raise OSError("hub down")
+        return rows
+
+    source = CommandSource(url="http://hub/api/commands", cache_path=tmp_path / "commands.json",
+                           fetch=fetch, now=lambda: clock[0])
+    assert "/idea" in registry.tokens(source.commands())
+    assert json.loads((tmp_path / "commands.json").read_text()) == rows
+    assert "/bug" in registry.tokens(source.commands())          # Kaya's own, always
+    clock[0] += 3600
+    restarted = CommandSource(url="http://hub/api/commands", cache_path=tmp_path / "commands.json",
+                              fetch=fetch, now=lambda: clock[0])
+    assert "/idea" in registry.tokens(restarted.commands())       # the cached copy
+    assert len(calls) == 2
 
 
 def test_the_owner_is_recognised_behind_a_lid(rig):
@@ -119,18 +183,3 @@ def test_the_tap_is_off_without_an_owner():
     tap = HelpTap.from_env({"HELP_OWNER_NUMBERS": "351922222222@c.us, 351933333333"})
     assert tap.owner_numbers == {"351922222222", "351933333333"}
     assert HelpTap.from_env({"IDEA_OWNER_NUMBERS": "351922222222"}) is not None
-
-
-def test_help_lists_every_command_the_taps_and_the_adapter_claim():
-    from src.chat.whatsapp_adapter import WhatsAppAdapter
-    root = Path(__file__).parent.parent.parent
-    homelab = (root / "src/gateway/homelab.py").read_text()
-    claimed = set(re.findall(r'first == "(/[a-z_]+)"', homelab))
-    assert {"/homelabrc", "/homelabqc", "/homelaboff", "/homelabon"} <= claimed
-    adapter = (root / "src/chat/whatsapp_adapter.py").read_text()
-    for name in ("clear_commands", "bug_commands", "feedback_commands", "birthday_commands"):
-        claimed |= set(re.findall(r'"(/[^"]+)"', re.search(rf"self\.{name} = \{{([^}}]*)\}}", adapter).group(1)))
-    claimed |= {"/idea", "/help"}
-    plain = lambda text: unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode()
-    missing = sorted(command for command in claimed if plain(command) not in plain(HELP_TEXT))
-    assert not missing, f"/help does not list {missing}"

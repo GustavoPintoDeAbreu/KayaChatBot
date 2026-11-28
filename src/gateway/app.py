@@ -431,15 +431,16 @@ class Gateway:
         return await self.homelab.handle(msg, kind)
 
     async def _route_help(self, msg: InboundMessage) -> Optional[Dict[str, Any]]:
-        """The owner's /help: a fixed command list answered by the Pi (no PC needed)."""
-        kind = self.help_tap.classify(msg) if self.help_tap else None
+        """/help in a group or the owner's DM, and the owner's unknown /word: answered by
+        the Pi from the command registry (no PC needed)."""
+        kind = (await asyncio.to_thread(self.help_tap.classify, msg)) if self.help_tap else None
         if kind is None:
             return None
         if kind == "echo":
             return {"help": "echo"}
-        await asyncio.to_thread(self._send_text, msg.chat_id,
-                                f"{HELP_TAG} {self.help_tap.reply_text()}", msg.message_id)
-        return {"help": "sent"}
+        text = await asyncio.to_thread(self.help_tap.reply_text, msg, kind)
+        await asyncio.to_thread(self._send_text, msg.chat_id, f"{HELP_TAG} {text}", msg.message_id)
+        return {"help": "sent" if kind == "help" else "unknown"}
 
     def status(self) -> Dict[str, Any]:
         """PC state, the schedule, and the journal's size."""
