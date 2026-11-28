@@ -15,6 +15,11 @@ them, so it has to be fast enough to actually happen.
     scripts/review_bios.py --queue                         # the gate: waiting, applied, dropped
     scripts/review_bios.py --undo NAME                     # undo the last applied fact about NAME
     scripts/review_bios.py --gate-backlog [--dry-run]      # sort the old proposals through the gate
+    scripts/review_bios.py --member NAME --add "FACT"      # add a fact he gave, dated now
+    scripts/review_bios.py --member NAME --drop "FACT"     # take a fact off (close wording is enough)
+    scripts/review_bios.py --member NAME --alias "ALIAS"   # another name for the same person
+    scripts/review_bios.py --member NAME --clear-summary   # empty a stale recent_summary
+    scripts/review_bios.py --date-backfill                 # date the facts the gate applied
 
 Since 2026-11-19 the refresh no longer just proposes: src/data/bio_gate.py applies
 grounded, non-sensitive facts on its own and sends the rest to Gustavo weekly.
@@ -143,6 +148,13 @@ def main() -> int:
                         help="sort every pending proposal through the gate, then archive the file")
     parser.add_argument("--dry-run", action="store_true",
                         help="with --gate-backlog: work on copies and print what would happen")
+    parser.add_argument("--add", default="", metavar="FACT", help="with --member: add a fact, dated now")
+    parser.add_argument("--drop", default="", metavar="FACT", help="with --member: take a fact off")
+    parser.add_argument("--alias", default="", metavar="ALIAS", help="with --member: add an alias")
+    parser.add_argument("--clear-summary", action="store_true",
+                        help="with --member: empty recent_summary")
+    parser.add_argument("--date-backfill", action="store_true",
+                        help="date the facts bio_queue.json says the gate applied")
     args = parser.parse_args()
 
     directory = data_dir(args.data_dir)
@@ -160,6 +172,8 @@ def main() -> int:
 
     if args.queue or args.undo or args.gate_backlog:
         return gate_commands(args, directory, members_path, proposals_path)
+    if args.add or args.drop or args.alias or args.clear_summary or args.date_backfill:
+        return edit_commands(args, directory, members_path, members_doc, by_name)
 
     # ── pin ──────────────────────────────────────────────────────────────────
     if args.pin:
@@ -233,6 +247,61 @@ def main() -> int:
             print(f"  {sender!r}: {count} message(s)")
         print(f"  {DIM}add an alias in group_members.json, or a mapping in "
               f"data/whatsapp_sender_aliases.json{OFF}")
+    return 0
+
+
+def edit_commands(args, directory: Path, members_path: Path, members_doc: Dict[str, Any],
+                  by_name: Dict[str, Dict[str, Any]]) -> int:
+    """Hand edits Gustavo asked for, each with a snapshot that --undo NAME restores."""
+    from src.data import bio_gate, fact_meta
+
+    queue = bio_gate.BioQueue(directory / "bio_queue.json")
+    if args.date_backfill:
+        dated = fact_meta.backfill(members_doc.get("members", []), queue.data["applied"])
+        if dated:
+            print(f"snapshot: {bio_gate.snapshot(members_path)}")
+            bio_gate.write_members(members_path, members_doc)
+        print(f"dated {dated} fact(s) from the gate's log; the rest stay undated")
+        return 0
+    member = by_name.get(args.member)
+    if member is None:
+        print("--add/--drop/--alias/--clear-summary need --member <name> of an existing member")
+        return 1
+    done = []
+    facts = list(member.get("key_facts") or [])
+    if args.drop:
+        hit = next((f for f in facts if f == args.drop or bio_gate.same_fact(f, args.drop)), None)
+        if hit is None:
+            print(f"no fact like {args.drop!r} on {args.member}")
+            return 1
+        facts.remove(hit)
+        fact_meta.forget(member, hit)
+        done.append(f"dropped: {hit}")
+    if args.add:
+        if not any(bio_gate.same_fact(f, args.add) for f in facts):
+            facts.append(args.add.strip())
+        fact_meta.stamp(member, args.add.strip(), "manual")
+        done.append(f"added: {args.add.strip()}")
+    member["key_facts"] = facts
+    if args.alias:
+        aliases = list(member.get("aliases") or [])
+        if args.alias.lower() not in (a.lower() for a in aliases):
+            aliases.append(args.alias.lower())
+        member["aliases"] = aliases
+        done.append(f"alias: {args.alias.lower()}")
+    if args.clear_summary:
+        member["recent_summary"] = ""
+        done.append("recent_summary cleared")
+    snap = bio_gate.snapshot(members_path)
+    bio_gate.write_members(members_path, members_doc)
+    queue.data.setdefault("manual", []).append(
+        {"member": args.member, "changes": done, "snapshot": str(snap), "moved_at": time.time()})
+    queue.save()
+    print(f"snapshot: {snap}")
+    for line in done:
+        print(f"  {args.member} {line}")
+    print("  the bot reads it on the next turn (the prompt is rebuilt when the file changes); "
+          f"--undo {args.member} puts it back")
     return 0
 
 

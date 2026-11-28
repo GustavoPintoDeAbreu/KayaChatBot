@@ -21,7 +21,7 @@ COPY src/chat/whatsapp_adapter.py src/chat/stt.py src/chat/waha_client.py \
      src/chat/mode_directive.py src/chat/
 COPY src/chat/static/landing.html src/chat/static/landing.html
 COPY src/chat/static/showcase src/chat/static/showcase
-COPY src/data/message_log.py src/data/bio_gate.py src/data/
+COPY src/data/message_log.py src/data/bio_gate.py src/data/fact_meta.py src/data/
 COPY config.yaml config.yaml
 ENV PYTHONUNBUFFERED=1 GATEWAY_CONFIG=/app/config.yaml GATEWAY_LANDING_HTML=/app/src/chat/static/landing.html \
     GATEWAY_ASSETS_DIR=/app/src/chat/static/showcase

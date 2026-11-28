@@ -869,7 +869,9 @@ class ConversationRetriever:
         for member in members:
             aliases = [a.lower() for a in member.get('aliases', [])] + [str(member.get('name', '')).lower()]
             if any(p in aliases for p in query_persons):
-                facts = [str(f).rstrip(".") + "." for f in (member.get('key_facts') or []) if str(f).strip()]
+                from src.data import fact_meta
+
+                facts = [fact_meta.mark(member, f) for f in (member.get('key_facts') or []) if str(f).strip()]
                 if facts:
                     summaries.append(f"[Perfil — {member['name']}] {' '.join(facts)}")
                 summary = member.get('recent_summary', '').strip()

@@ -446,8 +446,10 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
                          if sample_facts else key_facts[:max_facts])
         notes = member.get("notes", "")
         if key_facts:
+            from src.data import fact_meta
+
             line += ": " + " ".join(
-                fact.rstrip(".") + "." for fact in key_facts if fact.strip()
+                fact_meta.mark(member, fact) for fact in key_facts if fact.strip()
             )
         elif notes:
             sentences = [s.strip() for s in notes.split(".") if s.strip()]
@@ -474,7 +476,9 @@ def build_member_prompt_suffix(members_data: dict, shuffle: bool = False,
         "de usares o que sabes de outro membro. Os nomes entre parênteses ('também "
         "lhe chamam …') são a MESMA pessoa: trata-os como um só membro e, se "
         "alguém insistir que são duas pessoas diferentes, corrige-o em vez de "
-        "concordares:\n"
+        "concordares. Um facto marcado '(info antiga, pode já não ser verdade)' pode "
+        "estar desatualizado: se o usares, di-lo no passado ('trabalhava em…'), e nunca "
+        "o apresentes como o emprego, a casa ou a relação atual da pessoa, nem num roast:\n"
     )
     # The roster has to state that it is complete. Asked "a que Kaya-Avenger devo
     # ligar?", the bot answered "liga à Mel" — Mel is not in the group and never
