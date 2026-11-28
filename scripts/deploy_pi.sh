@@ -24,7 +24,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$PI" true || { echo "❌ cannot reach 
 echo "📦 Syncing code to $PI:~/$REMOTE_DIR ..."
 rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' \
   --exclude 'deploy/pi/.env' --exclude 'deploy/pi/data/' \
-  --include 'src/***' --include 'config.yaml' \
+  --include 'src/***' --include 'config.yaml' --include 'lab.yaml' \
   --include 'deploy/' --include 'deploy/pi/***' --exclude '*' \
   ./ "$PI:$REMOTE_DIR/"
 
