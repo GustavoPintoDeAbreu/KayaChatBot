@@ -1,4 +1,4 @@
-"""The owner's ``/homelaboff``, ``/homelaboff_bruteforce``, ``/homelabon``, ``/gamingoff``, ``/homelabrc`` and
+"""The owner's ``/homelaboff``, ``/homelaboff_bruteforce``, ``/homelabon``, ``/homelabcycle``, ``/gamingoff``, ``/homelabrc`` and
 ``/homelabqc`` DMs go to the PC's power listener, not to Kaya.
 
 The GPU PC has no automatic shutdown; Gustavo turns it off by hand, and this
@@ -98,6 +98,23 @@ GAMING_ALREADY_OFF = "The gaming PC isn't answering: it's probably already off."
 GAMING_FAILED = "Couldn't turn off the gaming PC ({error})."
 GAMING_NO_ANSWER = "Asked the Pi to turn off the gaming PC; no answer from it yet."
 GAMING_DECLINED = "OK, the gaming PC stays on."
+# /homelabcycle (2026-11-25, his request: he will be abroad, and a crash can leave the PC hung on the
+# BIOS screen, where nothing in Linux can help). The GPU PC's Shelly plug is switched off with the
+# plug's own toggle_after, so it turns itself back on after CYCLE_OFF_SECONDS even if the Pi loses
+# it halfway. The PC then starts by itself only with the BIOS AC BACK set to Always On. The one
+# switch the lab makes on a plug, always after his yes (the plugs are read-only otherwise).
+CYCLE_OFF_SECONDS = 10
+CYCLE_ASK = ("Power-cycle the GPU PC? Its plug goes off for {secs} s and back on by itself: whatever "
+             "runs is cut like pulling the cord. Use it when the PC is stuck (a frozen screen, the BIOS "
+             "screen). Now: {state}, plug {watts}.\n{warning}Reply yes or no.")
+CYCLE_ONLINE_WARNING = "⚠️ The PC answers right now: /homelaboff is the clean way, unless it's frozen.\n"
+CYCLE_STARTED = ("Plug off; it comes back on by itself in {secs} s. I'll tell you when the PC is up "
+                 "(it starts by itself only with the BIOS AC BACK set to Always On).")
+CYCLE_FAILED = "Couldn't switch the PC's plug ({error}). Nothing was cut."
+CYCLE_NOT_SET = "No plug is set for the PC (HOMELAB_PC_PLUG_URL on the Pi): nothing was cut."
+CYCLE_DECLINED = "OK, the PC's plug stays as it is."
+CYCLE_NUDGE = ("Power is back but the PC isn't answering after 3 min. If the BIOS AC BACK is not "
+               "Always On, it waits for its button; try /homelabcycle once more, or wait.")
 ALREADY_ON = "The PC is already on."
 WAKE_FAILED = "Couldn't ask the Pi to send Wake-on-LAN ({error})."
 PC_ONLINE = "The PC is on and Kaya is answering."
@@ -172,6 +189,9 @@ class HomelabPower:
     _pending: Dict[str, float] = field(default_factory=dict)      # chat_id -> asked at
     _pending_bruteforce: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at
     _pending_gaming: Dict[str, float] = field(default_factory=dict)  # chat_id -> asked at (/gamingoff)
+    plug_url: str = ""                                               # the GPU PC's Shelly plug
+    _pending_cycle: Dict[str, float] = field(default_factory=dict)   # chat_id -> asked at (/homelabcycle)
+    _cycling: Set[str] = field(default_factory=set)                  # chats waiting after a power-cycle
     _waking: Dict[str, float] = field(default_factory=dict)       # chat_id -> requested at
     _nudged: Set[str] = field(default_factory=set)                # chats told to press the button
     _journal: Optional[Journal] = None
@@ -197,7 +217,7 @@ class HomelabPower:
         if not token:
             logger.error("HOMELAB_OWNER_NUMBERS is set but KAYA_RELAY_TOKEN is empty: "
                          "the PC's power listener will refuse every call")
-        return cls(owners, url, token)
+        return cls(owners, url, token, plug_url=environ.get("HOMELAB_PC_PLUG_URL", "").rstrip("/"))
 
     def attach(self, *, journal: Journal, monitor: PcMonitor,
                send_text: Callable[[str, str, Optional[str]], Any],
@@ -241,6 +261,8 @@ class HomelabPower:
             return "on"
         if first == "/gamingoff":
             return "gaming-off"
+        if first == "/homelabcycle":
+            return "cycle"
         if first == "/homelabrc":
             return "rc"
         if first == "/homelabqc":
@@ -254,6 +276,12 @@ class HomelabPower:
                 return "confirm"
             if word in CANCEL_WORDS:
                 return "decline"
+        cycle_asked = self._pending_cycle.get(msg.chat_id)
+        if cycle_asked is not None and self._now() - cycle_asked <= CONFIRM_TTL_SECONDS:
+            if word in CONFIRM_WORDS:
+                return "confirm-cycle"
+            if word in CANCEL_WORDS:
+                return "decline-cycle"
         gaming_asked = self._pending_gaming.get(msg.chat_id)
         if gaming_asked is not None and self._now() - gaming_asked <= CONFIRM_TTL_SECONDS:
             if word in CONFIRM_WORDS:
@@ -292,6 +320,14 @@ class HomelabPower:
             return {"homelab": "gaming-declined"}
         if kind == "confirm-gaming":
             return await self._gaming_off(msg)
+        if kind == "cycle":
+            return await self._cycle_ask(msg)
+        if kind == "decline-cycle":
+            self._pending_cycle.pop(msg.chat_id, None)
+            await asyncio.to_thread(self._say, msg.chat_id, CYCLE_DECLINED, msg.message_id)
+            return {"homelab": "cycle-declined"}
+        if kind == "confirm-cycle":
+            return await self._cycle(msg)
         if kind == "off-bruteforce":
             return await self._off_bruteforce(msg)
         if kind == "confirm":
@@ -477,6 +513,52 @@ class HomelabPower:
         self._nudged.discard(msg.chat_id)
         await asyncio.to_thread(self._say, msg.chat_id, WAKE_SENT, msg.message_id)
         return {"homelab": "on-requested"}
+
+    async def _plug(self, method: str) -> Tuple[int, Dict[str, Any]]:
+        return await (self.call or _http_call)("GET", f"{self.plug_url}/rpc/{method}", {})
+
+    async def _cycle_ask(self, msg: InboundMessage) -> Dict[str, Any]:
+        if not self.plug_url:
+            await asyncio.to_thread(self._say, msg.chat_id, CYCLE_NOT_SET, msg.message_id)
+            return {"homelab": "cycle-not-set"}
+        try:
+            status, body = await self._plug("Switch.GetStatus?id=0")
+            watts = f"{float(body['apower']):.0f} W" if status == 200 else "unreadable"
+            if status == 200 and not body.get("output", True):
+                watts += " (switched off)"
+        except (httpx.HTTPError, OSError, KeyError, TypeError, ValueError):
+            watts = "unreachable"
+        online = self._monitor.state is PcState.ONLINE
+        state = {PcState.ONLINE: "the PC answers", PcState.APP_DOWN: "the PC answers but Kaya doesn't",
+                 PcState.GOING_DOWN: "the PC is shutting down"}.get(self._monitor.state,
+                                                                    "the PC doesn't answer")
+        self._pending_cycle[msg.chat_id] = self._now()
+        await asyncio.to_thread(self._say, msg.chat_id, CYCLE_ASK.format(
+            secs=CYCLE_OFF_SECONDS, state=state, watts=watts,
+            warning=CYCLE_ONLINE_WARNING if online else ""), msg.message_id)
+        return {"homelab": "cycle-asked"}
+
+    async def _cycle(self, msg: InboundMessage) -> Dict[str, Any]:
+        """Off now, back on by the plug itself after CYCLE_OFF_SECONDS; then watch the PC come up."""
+        self._pending_cycle.pop(msg.chat_id, None)
+        try:
+            status, body = await self._plug(
+                f"Switch.Set?id=0&on=false&toggle_after={CYCLE_OFF_SECONDS}")
+        except (httpx.HTTPError, OSError) as exc:
+            await asyncio.to_thread(self._say, msg.chat_id, CYCLE_FAILED.format(error=type(exc).__name__),
+                                    msg.message_id)
+            return {"homelab": "cycle-failed"}
+        if status != 200:
+            await asyncio.to_thread(self._say, msg.chat_id, CYCLE_FAILED.format(error=f"HTTP {status}"),
+                                    msg.message_id)
+            return {"homelab": "cycle-failed"}
+        logger.warning("homelab: GPU PC plug power-cycled on the owner's yes")
+        self._waking[msg.chat_id] = self._now()
+        self._nudged.discard(msg.chat_id)
+        self._cycling.add(msg.chat_id)
+        await asyncio.to_thread(self._say, msg.chat_id, CYCLE_STARTED.format(secs=CYCLE_OFF_SECONDS),
+                                msg.message_id)
+        return {"homelab": "cycled"}
 
     async def _gaming_off(self, msg: InboundMessage) -> Dict[str, Any]:
         """Ask the Pi to turn the gaming PC off, then report what its script found."""
@@ -690,14 +772,16 @@ class HomelabPower:
                 online.append(chat)
                 del self._waking[chat]
                 self._nudged.discard(chat)
+                self._cycling.discard(chat)
             elif self._now() - started > WAKE_TIMEOUT_SECONDS:
                 self._say(chat, WAKE_TIMEOUT)
                 del self._waking[chat]
                 self._nudged.discard(chat)
+                self._cycling.discard(chat)
             elif (self._now() - started > WAKE_NUDGE_SECONDS and chat not in self._nudged
                   and self._monitor.state is PcState.OFFLINE):
                 # OFFLINE only: APP_DOWN means it answers and is booting
-                self._say(chat, WAKE_NUDGE)
+                self._say(chat, CYCLE_NUDGE if chat in self._cycling else WAKE_NUDGE)
                 self._nudged.add(chat)
         stale = [chat for chat, asked in self._pending.items()
                  if self._now() - asked > CONFIRM_TTL_SECONDS]
@@ -707,6 +791,8 @@ class HomelabPower:
                        if self._now() - asked > CONFIRM_TTL_SECONDS]
         for chat in brute_stale:
             del self._pending_bruteforce[chat]
+        for chat in [c for c, asked in self._pending_cycle.items() if self._now() - asked > CONFIRM_TTL_SECONDS]:
+            del self._pending_cycle[chat]
         return online
 
     async def watch(self, stop: asyncio.Event, interval: float = 10.0) -> None:

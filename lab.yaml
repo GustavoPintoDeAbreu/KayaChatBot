@@ -48,6 +48,7 @@ commands:
   - {cmd: /homelabon, where: [dm], who: owner, summary: "liga o PC (Wake-on-LAN) e manda o link da sessão Claude"}
   - {cmd: /homelaboff_bruteforce, where: [dm], who: owner, summary: "desliga o PC já, sem esperar por nada (pede um sim)"}
   - {cmd: /gamingoff, where: [dm], who: owner, summary: "desliga o PC de jogos (pede um sim)"}
+  - {cmd: /homelabcycle, where: [dm], who: owner, summary: "corta a corrente do PC 10 s pela tomada Shelly, quando está encravado (pede um sim)"}
   - {cmd: /homelabrc, args: "[home] · stop [home]", where: [dm], who: owner, summary: "sessão Claude Remote Control no PC"}
   - {cmd: /homelabqc, args: "[home] · stop [home]", where: [dm], who: owner, summary: "sessão Qwen Code (qcode) no PC"}
 uses: [svc.llm-broker, svc.kaya-waha, svc.kaya-gateway, svc.cloudflared, svc.pc-wake, lab-infra, host.pc, host.pi]
